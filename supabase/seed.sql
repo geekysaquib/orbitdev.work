@@ -1,0 +1,7 @@
+-- Optional seed for the signed-in user. Replace :uid with your auth uid,
+-- or run after signup from the SQL editor with: select auth.uid();
+-- Example inserts (edit user_id):
+-- insert into public.projects (user_id,name,client,stacks,status,accent,fe_path,sln_path,dev_port,branch,description)
+-- values ('YOUR_UID','monoZTrack','Obayashi','{React,.NET,TS}','active','#37DFA0',
+--   'C:/dev/obayashi/monoztrack-web','C:/dev/obayashi/MonoZTrack.sln',5173,'feature/reservation-rca',
+--   'Road construction project management for Obayashi.');
