@@ -1,4 +1,4 @@
-export type ProjectStatus = "active" | "hold" | "archived" | "released";
+export type ProjectStatus = "active" | "hold" | "archived";
 export type TaskStatus = "todo" | "doing" | "review" | "done";
 export type Priority = "low" | "med" | "high";
 

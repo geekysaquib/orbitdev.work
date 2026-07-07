@@ -5,6 +5,7 @@ import { AgentProvider } from "./context/Agent";
 import { ZohoProvider } from "./context/Zoho";
 import { Layout } from "./components/Layout";
 import Login from "./routes/Login";
+import Landing from "./routes/Landing";
 import Dashboard from "./routes/Dashboard";
 import Projects from "./routes/Projects";
 import ProjectDetail from "./routes/ProjectDetail";
@@ -36,22 +37,23 @@ export default function App() {
           <ZohoProvider>
           <BrowserRouter>
           <Routes>
+            <Route path="/" element={<Landing />} />
             <Route path="/login" element={<Login />} />
             <Route element={<Guard><Layout /></Guard>}>
-              <Route index element={<Dashboard />} />
-              <Route path="projects" element={<Projects />} />
-              <Route path="projects/:id" element={<ProjectDetail />} />
-              <Route path="tickets" element={<Tickets />} />
-              <Route path="sprints" element={<Sprints />} />
-              <Route path="tasks" element={<Tasks />} />
-              <Route path="docker" element={<Docker />} />
-              <Route path="mail" element={<Mail />} />
-              <Route path="calendar" element={<Calendar />} />
-              <Route path="automation" element={<Automation />} />
-              <Route path="time" element={<TimeTracking />} />
-              <Route path="notifications" element={<Notifications />} />
-              <Route path="docs" element={<Docs />} />
-              <Route path="settings" element={<Settings />} />
+              <Route path="/app" element={<Dashboard />} />
+              <Route path="/projects" element={<Projects />} />
+              <Route path="/projects/:id" element={<ProjectDetail />} />
+              <Route path="/tickets" element={<Tickets />} />
+              <Route path="/sprints" element={<Sprints />} />
+              <Route path="/tasks" element={<Tasks />} />
+              <Route path="/docker" element={<Docker />} />
+              <Route path="/mail" element={<Mail />} />
+              <Route path="/calendar" element={<Calendar />} />
+              <Route path="/automation" element={<Automation />} />
+              <Route path="/time" element={<TimeTracking />} />
+              <Route path="/notifications" element={<Notifications />} />
+              <Route path="/docs" element={<Docs />} />
+              <Route path="/settings" element={<Settings />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

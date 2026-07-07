@@ -105,7 +105,7 @@ export default function Dashboard() {
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
                       <span className="nm">{p.name}</span>
-                      {p.status === "hold" || p.status === "released" ? <span className="hold">{p.status === "hold" ? "ON HOLD" : "RELEASED"}</span> : <span className="live-dot" />}
+                      {held ? <span className="hold">ON HOLD</span> : <span className="live-dot" />}
                     </div>
                     <div className="cl">{p.client}</div>
                   </div>

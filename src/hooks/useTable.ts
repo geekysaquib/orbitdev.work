@@ -30,7 +30,6 @@ export function useTable<T extends { id: string }>(
   }, [table]);
 
   const update = useCallback(async (id: string, patch: Partial<T>) => {
-    console.log("Updating", id, patch);
     const { data, error } = await supabase.from(table).update(patch as never).eq("id", id).select().single();
     if (!error && data) setRows((r) => r.map((x) => (x.id === id ? (data as T) : x)));
     return { error: error?.message };

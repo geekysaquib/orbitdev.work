@@ -14,7 +14,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
 
   const go = (to: string) => { nav(to); onClose(); };
   const commands: Cmd[] = useMemo(() => [
-    { group: "Go to", label: "Dashboard", icon: "grid", run: () => go("/") },
+    { group: "Go to", label: "Dashboard", icon: "grid", run: () => go("/app") },
     { group: "Go to", label: "Projects", icon: "boxes", run: () => go("/projects") },
     { group: "Go to", label: "Sprints", icon: "sprint", run: () => go("/sprints") },
     { group: "Go to", label: "Tasks", icon: "layers", run: () => go("/tasks") },

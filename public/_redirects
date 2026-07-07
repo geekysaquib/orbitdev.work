@@ -1,0 +1,5 @@
+# Marketing landing at the root (static, from public/landing.html)
+/                /landing.html   200
+
+# Everything else is the ORBIT single-page app
+/*               /index.html     200

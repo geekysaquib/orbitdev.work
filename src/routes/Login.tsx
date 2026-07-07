@@ -33,7 +33,7 @@ export default function Login() {
     setBusy(false);
     if (res.error) { setErr(res.error); return; }
     if (mode === "up") { setMode("in"); setNote("Account created — confirm via email, then sign in."); return; }
-    nav("/");
+    nav("/app");
   }
 
   return (

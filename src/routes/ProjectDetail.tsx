@@ -53,7 +53,7 @@ export default function ProjectDetail() {
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
             <span className="h1">{p.name}</span>
-            {p.status === "hold" || p.status === "released" ? <span className="hold">{p.status === "hold" ? "ON HOLD" : "RELEASED"}</span> : <span className="live-dot" />}
+            {p.status === "hold" ? <span className="hold">ON HOLD</span> : <span className="live-dot" />}
           </div>
           <div className="sub">{p.client}</div>
         </div>
@@ -164,7 +164,7 @@ function EditProjectModal({ p, onClose, onSave, onDelete }: { p: Project; onClos
         <div style={{ display: "flex", gap: 12 }}>
           <div className="fld" style={{ flex: 1 }}><label>Client</label><input value={f.client} onChange={(e) => set("client", e.target.value)} /></div>
           <div className="fld" style={{ flex: 1 }}><label>Status</label>
-            <select value={f.status} onChange={(e) => set("status", e.target.value)}><option value="active">Active</option><option value="hold">On hold</option><option value="archived">Archived</option><option value="released">Released</option></select></div>
+            <select value={f.status} onChange={(e) => set("status", e.target.value)}><option value="active">Active</option><option value="hold">On hold</option><option value="archived">Archived</option></select></div>
         </div>
         <div className="fld"><label>Frontend path (Open UI)</label><input value={f.fe_path} onChange={(e) => set("fe_path", e.target.value)} placeholder="D:\\projects\\app-web" /></div>
         <div className="fld"><label>Solution / backend path (Backend)</label><input value={f.sln_path} onChange={(e) => set("sln_path", e.target.value)} placeholder="D:\\projects\\app.sln" /></div>

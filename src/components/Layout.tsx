@@ -9,7 +9,7 @@ import { CommandPalette } from "./CommandPalette";
 import { supabase } from "../lib/supabase";
 
 const NAV = [
-  { to: "/", label: "Dashboard", icon: "grid", end: true },
+  { to: "/app", label: "Dashboard", icon: "grid", end: true },
   { to: "/projects", label: "Projects", icon: "boxes" },
   { to: "/sprints", label: "Sprints", icon: "sprint" },
   { to: "/tasks", label: "Tasks", icon: "layers" },
@@ -91,7 +91,7 @@ export function Layout() {
   return (
     <div className="app">
       <nav className="rail">
-        <div className="logo"><Icon name="orbit" size={26} /></div>
+        <NavLink to="/app" className="logo" style={{ display: "grid", placeItems: "center" }}><Icon name="orbit" size={26} /></NavLink>
         {NAV.map((n) => (
           <NavLink key={n.to} to={n.to} end={n.end}
             className={({ isActive }) => "navbtn" + (isActive ? " on" : "")}>
