@@ -42,6 +42,14 @@ const P: Record<string, JSX.Element> = {
   logout: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></>,
   check2: <polyline points="20 6 9 17 4 12"/>,
   bolt: <path d="M11 2 3 14h7l-1 8 10-12h-7z"/>,
+  orbit: <><circle cx="12" cy="12" r="3.1"/><ellipse cx="12" cy="12" rx="10" ry="4.3" transform="rotate(-26 12 12)"/></>,
+  book: <><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></>,
+  mail: <><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 6 10-6"/></>,
+  inbox: <><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.5 5.5 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.5A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.5z"/></>,
+  user: <><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></>,
+  chevD: <polyline points="6 9 12 15 18 9"/>,
+  sprint: <><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="14"/></>,
+  folderOpen: <><path d="M6 14l1.5-2.5A2 2 0 0 1 9.2 10.5H21a1 1 0 0 1 .9 1.45l-2.3 4.6A2 2 0 0 1 17.8 18H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4.9a2 2 0 0 1 1.7.9l.8 1.2a2 2 0 0 0 1.7.9H18a2 2 0 0 1 2 2v2"/></>,
 };
 
 export function Icon({ name, size = 16, fill = false, className = "" }:

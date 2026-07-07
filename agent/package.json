@@ -4,5 +4,5 @@
   "type": "module",
   "description": "ORBIT local companion — launches VS Code / Visual Studio and runs macros.",
   "scripts": { "start": "node server.mjs" },
-  "dependencies": { "express": "^4.19.2", "cors": "^2.8.5" }
+  "dependencies": { "express": "^4.19.2", "cors": "^2.8.5", "imapflow": "^1.0.171", "mailparser": "^3.7.1" }
 }

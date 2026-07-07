@@ -1,4 +1,4 @@
-export type ProjectStatus = "active" | "hold" | "archived";
+export type ProjectStatus = "active" | "hold" | "archived" | "released";
 export type TaskStatus = "todo" | "doing" | "review" | "done";
 export type Priority = "low" | "med" | "high";
 
@@ -6,7 +6,9 @@ export interface Project {
   id: string; user_id: string; name: string; client: string | null;
   stacks: string[]; status: ProjectStatus; accent: string | null;
   fe_path: string | null; sln_path: string | null; dev_port: number | null;
-  branch: string | null; description: string | null; created_at: string;
+  branch: string | null; description: string | null;
+  sprint_project_id: string | null; sprint_project_name: string | null;
+  created_at: string;
 }
 export interface Task {
   id: string; user_id: string; project_id: string | null; title: string;

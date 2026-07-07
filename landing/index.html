@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- ============ PRIMARY SEO ============ -->
+  <title>ORBIT — The developer command center</title>
+  <meta name="description" content="ORBIT is a personal command center for developers: launch projects in one click, run your Zoho Sprints board, track logged and billable hours, manage Docker, and read mail — all from one console." />
+  <meta name="keywords" content="developer command center, project launcher, zoho sprints dashboard, developer productivity, docker manager, time tracking, kanban board, dev tools" />
+  <meta name="author" content="ORBIT" />
+  <meta name="robots" content="index, follow, max-image-preview:large" />
+  <link rel="canonical" href="https://orbit.example.com/" />
+  <meta name="theme-color" content="#0A0B0D" />
+
+  <!-- ============ OPEN GRAPH (Facebook / LinkedIn / Slack) ============ -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="ORBIT" />
+  <meta property="og:title" content="ORBIT — The developer command center" />
+  <meta property="og:description" content="Launch projects in one click, run your Sprints board, track billable hours, manage Docker, and read mail — from a single console." />
+  <meta property="og:url" content="https://orbit.example.com/" />
+  <meta property="og:image" content="https://orbit.example.com/og-image.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+
+  <!-- ============ TWITTER CARD ============ -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="ORBIT — The developer command center" />
+  <meta name="twitter:description" content="Your whole dev universe — projects, sprints, hours, containers, and mail — from one console." />
+  <meta name="twitter:image" content="https://orbit.example.com/og-image.png" />
+
+  <!-- ============ FAVICON (inline orbit mark) ============ -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2337DFA0' stroke-width='1.7'%3E%3Ccircle cx='12' cy='12' r='3.1'/%3E%3Cellipse cx='12' cy='12' rx='10' ry='4.3' transform='rotate(-26 12 12)'/%3E%3C/svg%3E" />
+
+  <!-- ============ STRUCTURED DATA (rich results) ============ -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "ORBIT",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Web, Windows, macOS, Linux",
+    "description": "A developer command center: one-click project launch, Zoho Sprints board, time and billable-hours tracking, Docker management, and mail — in a single console.",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "featureList": ["One-click project launch", "Zoho Sprints kanban board", "Logged and billable hours", "Docker container control", "Gmail inbox", "Command palette"]
+  }
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <style>
+    :root{
+      --base:#0A0B0D; --panel:#0C0E11; --raised:#101216; --border:#20242C;
+      --mint:#37DFA0; --blue:#5B8DEF; --violet:#A98BF5; --amber:#E4A951;
+      --text:#EDEFF2; --muted:#9299A4; --dim:#5A616C;
+      --display:'Space Grotesk',sans-serif; --body:'Instrument Sans',sans-serif; --mono:'JetBrains Mono',monospace;
+    }
+    *{margin:0;padding:0;box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{background:var(--base);color:var(--text);font-family:var(--body);line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+    a{color:inherit;text-decoration:none}
+    .wrap{max-width:1160px;margin:0 auto;padding:0 28px}
+    .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:2px;text-transform:uppercase;color:var(--mint)}
+
+    /* nav */
+    header{position:sticky;top:0;z-index:50;backdrop-filter:blur(12px);background:rgba(10,11,13,.72);border-bottom:1px solid var(--border)}
+    nav{display:flex;align-items:center;justify-content:space-between;height:66px}
+    .logo{display:flex;align-items:center;gap:10px;font-family:var(--display);font-weight:700;letter-spacing:.12em;font-size:18px}
+    .logo svg{color:var(--mint)}
+    .nav-links{display:flex;align-items:center;gap:30px}
+    .nav-links a{font-size:14px;color:var(--muted);transition:.15s}
+    .nav-links a:hover{color:var(--text)}
+    .btn{display:inline-flex;align-items:center;gap:8px;height:42px;padding:0 20px;border-radius:11px;font-family:var(--display);font-weight:600;font-size:14px;transition:.16s;cursor:pointer;border:1px solid transparent}
+    .btn-primary{background:linear-gradient(180deg,#3EE6A8,#2FCB94);color:#06110D;box-shadow:0 10px 30px -10px rgba(55,223,160,.5)}
+    .btn-primary:hover{transform:translateY(-2px);box-shadow:0 16px 38px -10px rgba(55,223,160,.6)}
+    .btn-ghost{border-color:var(--border);color:var(--text);background:var(--raised)}
+    .btn-ghost:hover{border-color:var(--dim)}
+
+    /* hero */
+    .hero{position:relative;padding:96px 0 90px;overflow:hidden}
+    .hero-bg{position:absolute;inset:0;background:radial-gradient(90% 60% at 70% 10%,rgba(55,223,160,.09),transparent 60%),radial-gradient(70% 60% at 10% 90%,rgba(91,141,239,.07),transparent 55%);pointer-events:none}
+    .hero-grid{position:relative;display:grid;grid-template-columns:1.05fr .95fr;gap:40px;align-items:center}
+    h1{font-family:var(--display);font-weight:600;font-size:clamp(38px,5.4vw,64px);line-height:1.03;letter-spacing:-.025em}
+    h1 .grad{background:linear-gradient(120deg,#7CF3C4,#37DFA0 55%,#5B8DEF);-webkit-background-clip:text;background-clip:text;color:transparent}
+    .lede{font-size:19px;color:var(--muted);margin:24px 0 32px;max-width:520px}
+    .hero-cta{display:flex;gap:14px;flex-wrap:wrap}
+    .hero-note{margin-top:20px;font-family:var(--mono);font-size:12.5px;color:var(--dim)}
+
+    /* orbit visual */
+    .orbit-vis{position:relative;display:grid;place-items:center;min-height:420px}
+    .orbit-glow{position:absolute;width:220px;height:220px;border-radius:50%;background:radial-gradient(circle,rgba(55,223,160,.3),transparent 68%);filter:blur(10px);animation:breath 5s ease-in-out infinite}
+    @keyframes breath{0%,100%{opacity:.5;transform:scale(1)}50%{opacity:.9;transform:scale(1.08)}}
+    .orbit-svg{width:100%;max-width:520px;overflow:visible}
+    .ring{transform-box:view-box;transform-origin:50% 50%}
+    .ring.r1{animation:spin 16s linear infinite}
+    .ring.r2{animation:spin 24s linear infinite reverse}
+    .ring.r3{animation:spin 34s linear infinite}
+    .ring.r4{animation:spin 46s linear infinite reverse}
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    /* stat strip */
+    .strip{display:flex;gap:44px;flex-wrap:wrap;padding:30px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin-top:70px}
+    .strip .s .n{font-family:var(--display);font-weight:600;font-size:30px}
+    .strip .s .l{font-size:13px;color:var(--muted);margin-top:2px}
+
+    /* sections */
+    section{padding:88px 0}
+    .sec-head{max-width:640px;margin-bottom:48px}
+    .sec-head h2{font-family:var(--display);font-weight:600;font-size:clamp(28px,3.4vw,40px);line-height:1.1;letter-spacing:-.02em;margin-top:14px}
+    .sec-head p{color:var(--muted);font-size:17px;margin-top:14px}
+
+    /* feature grid */
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+    .card{background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:26px;transition:.18s}
+    .card:hover{transform:translateY(-4px);border-color:color-mix(in srgb,var(--ac,#37DFA0) 40%,var(--border))}
+    .card .ic{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;margin-bottom:18px;border:1px solid}
+    .card h3{font-family:var(--display);font-weight:600;font-size:18px;margin-bottom:8px}
+    .card p{font-size:14px;color:var(--muted)}
+
+    /* steps */
+    .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;counter-reset:step}
+    .step{position:relative;padding:28px;background:var(--panel);border:1px solid var(--border);border-radius:16px}
+    .step::before{counter-increment:step;content:"0" counter(step);font-family:var(--mono);font-size:13px;color:var(--mint);letter-spacing:1px}
+    .step h3{font-family:var(--display);font-weight:600;font-size:19px;margin:12px 0 8px}
+    .step p{font-size:14px;color:var(--muted)}
+
+    /* cta band */
+    .cta{position:relative;overflow:hidden;text-align:center;background:linear-gradient(180deg,var(--panel),#0A140F);border:1px solid rgba(55,223,160,.24);border-radius:24px;padding:64px 30px}
+    .cta h2{font-family:var(--display);font-weight:600;font-size:clamp(28px,3.6vw,42px);letter-spacing:-.02em}
+    .cta p{color:var(--muted);font-size:17px;margin:14px auto 28px;max-width:480px}
+
+    footer{border-top:1px solid var(--border);padding:44px 0}
+    .foot{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:18px}
+    .foot .links{display:flex;gap:26px;font-size:14px;color:var(--muted)}
+    .foot .links a:hover{color:var(--text)}
+    .foot .copy{font-family:var(--mono);font-size:12px;color:var(--dim)}
+
+    @media (max-width:860px){
+      .hero-grid{grid-template-columns:1fr}.orbit-vis{min-height:320px;order:-1}
+      .grid,.steps{grid-template-columns:1fr}.nav-links a:not(.btn){display:none}
+    }
+    @media (prefers-reduced-motion:reduce){.ring,.orbit-glow{animation:none!important}}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <nav>
+        <a class="logo" href="/" aria-label="ORBIT home">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3.1"/><ellipse cx="12" cy="12" rx="10" ry="4.3" transform="rotate(-26 12 12)"/></svg>
+          ORBIT
+        </a>
+        <div class="nav-links">
+          <a href="#features">Features</a>
+          <a href="#how">How it works</a>
+          <a href="#modules">Modules</a>
+          <a class="btn btn-primary" href="/app">Launch console</a>
+        </div>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <!-- HERO -->
+    <section class="hero" style="padding-top:70px">
+      <div class="hero-bg"></div>
+      <div class="wrap hero-grid">
+        <div>
+          <div class="eyebrow">// Developer command center</div>
+          <h1>Every project,<br /><span class="grad">in one orbit.</span></h1>
+          <p class="lede">ORBIT pulls your whole dev universe into a single console — launch projects in one click, run your Sprints board, track logged and billable hours, manage Docker, and read mail without leaving the tab.</p>
+          <div class="hero-cta">
+            <a class="btn btn-primary" href="/app">Launch console →</a>
+            <a class="btn btn-ghost" href="#features">See what it does</a>
+          </div>
+          <div class="hero-note">$ orbit up · all systems nominal</div>
+        </div>
+
+        <div class="orbit-vis" aria-hidden="true">
+          <div class="orbit-glow"></div>
+          <svg class="orbit-svg" viewBox="0 0 600 600">
+            <defs><radialGradient id="core" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#7CF3C4"/><stop offset="55%" stop-color="#37DFA0"/><stop offset="100%" stop-color="#0C3A2A"/></radialGradient></defs>
+            <g class="ring r1"><ellipse cx="300" cy="300" rx="92" ry="40" fill="none" stroke="#37DFA0" stroke-opacity=".3" stroke-width="1.2"/><circle cx="392" cy="300" r="5" fill="#37DFA0"/></g>
+            <g class="ring r2"><ellipse cx="300" cy="300" rx="148" ry="64" fill="none" stroke="#5B8DEF" stroke-opacity=".28" stroke-width="1.2"/><circle cx="448" cy="300" r="5" fill="#5B8DEF"/></g>
+            <g class="ring r3"><ellipse cx="300" cy="300" rx="208" ry="90" fill="none" stroke="#A98BF5" stroke-opacity=".26" stroke-width="1.2"/><circle cx="508" cy="300" r="5" fill="#A98BF5"/></g>
+            <g class="ring r4"><ellipse cx="300" cy="300" rx="268" ry="116" fill="none" stroke="#E4A951" stroke-opacity=".24" stroke-width="1.2"/><circle cx="568" cy="300" r="5" fill="#E4A951"/></g>
+            <circle cx="300" cy="300" r="22" fill="url(#core)"/>
+            <ellipse cx="300" cy="300" rx="42" ry="18" fill="none" stroke="#37DFA0" stroke-opacity=".7" stroke-width="1.7" transform="rotate(-24 300 300)"/>
+          </svg>
+        </div>
+      </div>
+
+      <div class="wrap">
+        <div class="strip">
+          <div class="s"><div class="n">1-click</div><div class="l">launch UI + backend + browser</div></div>
+          <div class="s"><div class="n">6</div><div class="l">modules, one console</div></div>
+          <div class="s"><div class="n">Live</div><div class="l">Sprints board &amp; billable hours</div></div>
+          <div class="s"><div class="n">Local</div><div class="l">agent — your machine, your keys</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FEATURES -->
+    <section id="features">
+      <div class="wrap">
+        <div class="sec-head">
+          <div class="eyebrow">// What it does</div>
+          <h2>One console for the work around the work.</h2>
+          <p>Everything a developer juggles between commits — boards, hours, containers, mail — in a fast, keyboard-driven interface.</p>
+        </div>
+        <div class="grid" id="modules">
+          <article class="card" style="--ac:#37DFA0"><div class="ic" style="color:#37DFA0;background:rgba(55,223,160,.14);border-color:rgba(55,223,160,.3)">▸</div><h3>One-click launch</h3><p>Open a project's editor, backend, terminal, and dev server together — through a local agent that drives your real tools.</p></article>
+          <article class="card" style="--ac:#5B8DEF"><div class="ic" style="color:#5B8DEF;background:rgba(91,141,239,.14);border-color:rgba(91,141,239,.3)">▤</div><h3>Sprints board</h3><p>Your live Zoho Sprints kanban — real status columns, types, assignees, and attachments — without opening Zoho.</p></article>
+          <article class="card" style="--ac:#A98BF5"><div class="ic" style="color:#A98BF5;background:rgba(169,139,245,.14);border-color:rgba(169,139,245,.3)">◷</div><h3>Time &amp; billable hours</h3><p>An Orbit focus timer plus logged and billable hours pulled straight from Sprints, grouped by project and person.</p></article>
+          <article class="card" style="--ac:#5B8DEF"><div class="ic" style="color:#5B8DEF;background:rgba(91,141,239,.14);border-color:rgba(91,141,239,.3)">⬢</div><h3>Docker control</h3><p>See running containers and images, and export any image to a tarball — read live from your machine.</p></article>
+          <article class="card" style="--ac:#37DFA0"><div class="ic" style="color:#37DFA0;background:rgba(55,223,160,.14);border-color:rgba(55,223,160,.3)">✉</div><h3>Mail</h3><p>A read-only Gmail inbox with a clean two-pane reader, categories, and auto-refresh — triage without a context switch.</p></article>
+          <article class="card" style="--ac:#E4A951"><div class="ic" style="color:#E4A951;background:rgba(228,169,81,.14);border-color:rgba(228,169,81,.3)">⌘</div><h3>Command palette</h3><p>Jump to any project or action with ⌘K. The whole console is built to be driven from the keyboard.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <!-- HOW -->
+    <section id="how" style="background:#08090B;border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+      <div class="wrap">
+        <div class="sec-head">
+          <div class="eyebrow">// How it works</div>
+          <h2>Connect once. Command everything.</h2>
+        </div>
+        <div class="steps">
+          <div class="step"><h3>Connect</h3><p>Add your keys in Settings — Zoho, Gmail, Docker. They're stored per-account, and a lightweight local agent bridges to the tools on your machine.</p></div>
+          <div class="step"><h3>Command</h3><p>Launch projects, work your board, log hours, check containers, and read mail — all from one console, without tab-hopping.</p></div>
+          <div class="step"><h3>Ship</h3><p>Stay in flow. ORBIT keeps the periphery one keystroke away so your focus stays on the code.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section>
+      <div class="wrap">
+        <div class="cta">
+          <div class="orbit-glow" style="left:50%;top:-40px;transform:translateX(-50%)"></div>
+          <div class="eyebrow" style="position:relative">// Ready when you are</div>
+          <h2 style="position:relative">Bring your dev universe into orbit.</h2>
+          <p style="position:relative">Set up in minutes with your own keys. Everything runs on your account and your machine.</p>
+          <a class="btn btn-primary" href="/app" style="position:relative">Launch the console →</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap foot">
+      <a class="logo" href="/"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#37DFA0" stroke-width="1.7"><circle cx="12" cy="12" r="3.1"/><ellipse cx="12" cy="12" rx="10" ry="4.3" transform="rotate(-26 12 12)"/></svg>ORBIT</a>
+      <div class="links"><a href="#features">Features</a><a href="#how">How it works</a><a href="/app">Console</a></div>
+      <div class="copy">© 2026 ORBIT · dev command center</div>
+    </div>
+  </footer>
+</body>
+</html>

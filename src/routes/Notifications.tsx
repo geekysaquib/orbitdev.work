@@ -1,5 +1,5 @@
 import { Icon } from "../lib/icons";
-import { ACCENT } from "../components/ui";
+import { ACCENT, Empty } from "../components/ui";
 import { useTable } from "../hooks/useTable";
 import type { Notification } from "../lib/types";
 
@@ -41,7 +41,7 @@ export default function Notifications() {
             </div>
           );
         })}
-        {rows.length === 0 && <div style={{ color: "var(--dim)", padding: 20 }}>You're all caught up.</div>}
+        {rows.length === 0 && <Empty icon="bell" title="You're all caught up" sub="Ticket assignments, deploys, and deadline reminders will show up here." />}
       </div>
     </main>
   );

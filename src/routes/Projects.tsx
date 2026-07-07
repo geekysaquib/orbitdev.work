@@ -1,8 +1,11 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Icon } from "../lib/icons";
-import { Chip, Badge, ACCENT } from "../components/ui";
+import { Chip, Badge, ACCENT, Empty } from "../components/ui";
 import { useTable } from "../hooks/useTable";
+import { useToast } from "../context/Toast";
+import { useAgent } from "../context/Agent";
+import { pickPath } from "../lib/agent";
 import type { Project } from "../lib/types";
 
 const FILTERS: [string, string][] = [["all", "All"], ["work", "Client work"], ["personal", "Personal"], ["active", "Active"], ["hold", "On hold"]];
@@ -10,9 +13,23 @@ const FILTERS: [string, string][] = [["all", "All"], ["work", "Client work"], ["
 export default function Projects() {
   const nav = useNavigate();
   const { rows, insert } = useTable<Project>("projects");
+  const toast = useToast();
+  const { status } = useAgent();
   const [filter, setFilter] = useState("all");
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({ name: "", client: "", fe_path: "", sln_path: "", stack: "React" });
+
+  async function browse(field: "fe_path" | "sln_path", kind: "folder" | "file") {
+    if (status !== "online") {
+      toast(status === "disconnected"
+        ? "Agent disconnected — reconnect it from the top bar to browse."
+        : "Agent is offline — start it (cd agent && npm start), then it connects automatically.");
+      return;
+    }
+    const p = await pickPath(kind);
+    if (p) setForm((f) => ({ ...f, [field]: p }));
+    else toast("No path selected");
+  }
 
   const list = rows.filter((p) => {
     if (filter === "all") return true;
@@ -54,12 +71,12 @@ export default function Projects() {
               <td style={{ textAlign: "right" }}><Icon name="chevR" size={16} /></td>
             </tr>
           ))}
-          {list.length === 0 && <tr><td colSpan={6} style={{ color: "var(--dim)" }}>No projects match this filter.</td></tr>}
+          {list.length === 0 && <tr><td colSpan={6}><Empty icon="boxes" title={rows.length === 0 ? "No projects yet" : "Nothing matches this filter"} sub={rows.length === 0 ? "Add your first project to launch it in one click." : "Try a different filter."} mini /></td></tr>}
         </tbody>
       </table>
 
       {modal && (
-        <div className="modal-bg" onClick={(e) => e.target === e.currentTarget && setModal(false)}>
+        <div className="modal-bg">
           <div className="modal">
             <div style={{ display: "flex", justifyContent: "space-between" }}>
               <h3>New project</h3>
@@ -67,9 +84,19 @@ export default function Projects() {
             </div>
             <div className="fld"><label>Name</label><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="monoZTrack" /></div>
             <div className="fld"><label>Client</label><input value={form.client} onChange={(e) => setForm({ ...form, client: e.target.value })} placeholder="Obayashi" /></div>
-            <div style={{ display: "flex", gap: 12 }}>
-              <div className="fld" style={{ flex: 1 }}><label>Frontend folder</label><input value={form.fe_path} onChange={(e) => setForm({ ...form, fe_path: e.target.value })} placeholder="C:/dev/.../web" /></div>
-              <div className="fld" style={{ flex: 1 }}><label>Backend .sln</label><input value={form.sln_path} onChange={(e) => setForm({ ...form, sln_path: e.target.value })} placeholder="C:/dev/.../App.sln" /></div>
+            <div className="fld">
+              <label>Frontend folder</label>
+              <div className="input-row">
+                <input value={form.fe_path} onChange={(e) => setForm({ ...form, fe_path: e.target.value })} placeholder="C:/dev/.../web" />
+                <button className="btn sm" disabled={status !== "online"} onClick={() => browse("fe_path", "folder")}><Icon name="folderOpen" size={15} />Browse</button>
+              </div>
+            </div>
+            <div className="fld">
+              <label>Backend .sln</label>
+              <div className="input-row">
+                <input value={form.sln_path} onChange={(e) => setForm({ ...form, sln_path: e.target.value })} placeholder="C:/dev/.../App.sln" />
+                <button className="btn sm" disabled={status !== "online"} onClick={() => browse("sln_path", "file")}><Icon name="folderOpen" size={15} />Browse</button>
+              </div>
             </div>
             <div className="fld"><label>Primary stack</label>
               <select value={form.stack} onChange={(e) => setForm({ ...form, stack: e.target.value })}>

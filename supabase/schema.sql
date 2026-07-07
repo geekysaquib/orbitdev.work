@@ -36,6 +36,8 @@ create table if not exists public.projects (
   dev_port int,
   branch text,
   description text,
+  sprint_project_id text,
+  sprint_project_name text,
   created_at timestamptz not null default now()
 );
 
