@@ -222,6 +222,124 @@ app.post("/docker/save", (req, res) => {
   });
 });
 
+// Build an image from a project's context folder (must contain a Dockerfile,
+// or point -f at one). Runs `docker build -t <tag> [-f <dockerfile>] <context>`.
+app.post("/docker/build", (req, res) => {
+  const { tag, context, dockerfile } = req.body || {};
+  if (!tag || !context) return res.status(400).json({ ok: false, error: "tag and context required" });
+  const clean = (p) => String(p).trim().replace(/^["']|["']$/g, "");
+  const ctx = clean(context);
+  const safeTag = String(tag).trim();
+  if (!/^[a-z0-9][a-z0-9._/-]*(:[\w.-]+)?$/i.test(safeTag)) return res.status(400).json({ ok: false, error: "invalid image tag" });
+  const dfArg = dockerfile ? ` -f "${clean(dockerfile)}"` : "";
+  exec(`docker build -t "${safeTag}"${dfArg} "${ctx}"`, { timeout: 900000, maxBuffer: 1024 * 1024 * 16 }, (err, stdout, stderr) => {
+    if (err) return res.status(500).json({ ok: false, error: (stderr || err.message || "build failed").toString().slice(-500) });
+    res.json({ ok: true, tag: safeTag, output: (stdout || "").toString().slice(-500) });
+  });
+});
+
+// ---- PostgreSQL (via the local agent, using the `pg` driver) ----
+const PG_CFG = join(__dir, "pg-config.json");
+function pgServers() {
+  if (existsSync(PG_CFG)) { try { return JSON.parse(readFileSync(PG_CFG, "utf8")); } catch { return []; } }
+  return [];
+}
+function savePgServers(list) { writeFileSync(PG_CFG, JSON.stringify(list, null, 2), "utf8"); }
+const pubServer = (s) => ({ id: s.id, name: s.name, host: s.host, port: s.port, user: s.user, database: s.database || null, ssl: !!s.ssl });
+
+let _pg = null;
+async function getPgModule() {
+  if (_pg) return _pg;
+  try { _pg = (await import("pg")).default; return _pg; } catch { return null; }
+}
+async function pgConnect(server, database) {
+  const Pg = await getPgModule();
+  if (!Pg) throw new Error("pg driver not installed — run `npm install` in the agent folder");
+  const client = new Pg.Client({
+    host: server.host, port: Number(server.port) || 5432,
+    user: server.user, password: server.password,
+    database: database || server.database || "postgres",
+    ssl: server.ssl ? { rejectUnauthorized: false } : undefined,
+    connectionTimeoutMillis: 8000, statement_timeout: 30000, query_timeout: 30000,
+  });
+  await client.connect();
+  return client;
+}
+
+app.get("/pg/servers", (_req, res) => res.json({ ok: true, servers: pgServers().map(pubServer) }));
+
+app.post("/pg/servers", (req, res) => {
+  const { name, host, port, user, password, database, ssl } = req.body || {};
+  if (!host || !user) return res.status(400).json({ ok: false, error: "host and user are required" });
+  const list = pgServers();
+  const server = { id: "pg_" + Date.now().toString(36), name: name || host, host, port: Number(port) || 5432, user, password: password || "", database: database || "", ssl: !!ssl };
+  list.push(server);
+  try { savePgServers(list); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+  res.json({ ok: true, server: pubServer(server) });
+});
+
+app.delete("/pg/servers/:id", (req, res) => {
+  try { savePgServers(pgServers().filter((s) => s.id !== req.params.id)); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+  res.json({ ok: true });
+});
+
+// Test a connection without saving.
+app.post("/pg/test", async (req, res) => {
+  const s = req.body || {};
+  if (!s.host || !s.user) return res.status(400).json({ ok: false, error: "host and user are required" });
+  let client;
+  try { client = await pgConnect(s, s.database); const r = await client.query("SELECT version()"); res.json({ ok: true, version: r.rows[0]?.version || "" }); }
+  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+  finally { try { await client?.end(); } catch { /**/ } }
+});
+
+app.get("/pg/databases", async (req, res) => {
+  const server = pgServers().find((s) => s.id === req.query.server);
+  if (!server) return res.status(404).json({ ok: false, error: "server not found" });
+  let client;
+  try {
+    client = await pgConnect(server, "postgres");
+    const r = await client.query("SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname");
+    res.json({ ok: true, databases: r.rows.map((x) => x.datname) });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+  finally { try { await client?.end(); } catch { /**/ } }
+});
+
+app.get("/pg/tables", async (req, res) => {
+  const server = pgServers().find((s) => s.id === req.query.server);
+  if (!server) return res.status(404).json({ ok: false, error: "server not found" });
+  let client;
+  try {
+    client = await pgConnect(server, req.query.database);
+    const r = await client.query(
+      `SELECT table_schema, table_name, table_type
+       FROM information_schema.tables
+       WHERE table_schema NOT IN ('pg_catalog','information_schema')
+       ORDER BY table_schema, table_name`
+    );
+    res.json({ ok: true, tables: r.rows.map((x) => ({ schema: x.table_schema, name: x.table_name, type: x.table_type })) });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+  finally { try { await client?.end(); } catch { /**/ } }
+});
+
+app.post("/pg/query", async (req, res) => {
+  const { server: sid, database, sql } = req.body || {};
+  const server = pgServers().find((s) => s.id === sid);
+  if (!server) return res.status(404).json({ ok: false, error: "server not found" });
+  if (!sql || !String(sql).trim()) return res.status(400).json({ ok: false, error: "sql required" });
+  let client;
+  const started = Date.now();
+  try {
+    client = await pgConnect(server, database);
+    const r = await client.query(String(sql));
+    const result = Array.isArray(r) ? r[r.length - 1] : r; // multi-statement → report the last result set
+    const allRows = result.rows || [];
+    const fields = (result.fields || []).map((f) => f.name);
+    res.json({ ok: true, command: result.command, fields, rows: allRows.slice(0, 1000), rowCount: result.rowCount ?? allRows.length, truncated: allRows.length > 1000, ms: Date.now() - started });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message, ms: Date.now() - started }); }
+  finally { try { await client?.end(); } catch { /**/ } }
+});
+
 app.post("/launch", (req, res) => {
   const { kind, fe_path, sln_path, dev_port } = req.body || {};
   const opened = [];

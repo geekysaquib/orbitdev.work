@@ -102,6 +102,15 @@ export async function dockerSave(image: string, dir: string): Promise<{ ok: bool
     return { ok: true, path: (j as { path?: string }).path };
   } catch { return { ok: false, error: "agent offline" }; }
 }
+export async function dockerBuild(tag: string, context: string, dockerfile?: string):
+  Promise<{ ok: boolean; tag?: string; output?: string; error?: string }> {
+  try {
+    const r = await call("/docker/build", { tag, context, dockerfile });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: (j as { error?: string }).error || `agent ${r.status}` };
+    return { ok: true, tag: (j as { tag?: string }).tag, output: (j as { output?: string }).output };
+  } catch { return { ok: false, error: "agent offline" }; }
+}
 
 export interface GmailMsg { uid: number; subject: string; from: string; fromAddr: string; date: string; seen: boolean; }
 export interface GmailFull { subject: string; from: string; to: string; date: string; text: string; html: string; }

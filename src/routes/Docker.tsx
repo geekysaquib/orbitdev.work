@@ -1,9 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Icon } from "../lib/icons";
 import { ACCENT, OrbitLoader, Empty, SetupRequired } from "../components/ui";
 import { useToast } from "../context/Toast";
 import { useAgent } from "../context/Agent";
-import { fetchDocker, fetchDockerImages, dockerSave, pickPath, type DockerContainer, type DockerImage } from "../lib/agent";
+import { useTable } from "../hooks/useTable";
+import { fetchDocker, fetchDockerImages, dockerSave, dockerBuild, pickPath, type DockerContainer, type DockerImage } from "../lib/agent";
+import type { Project } from "../lib/types";
+
+const slug = (s: string) => (s || "image").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "image";
 
 export default function Docker() {
   const toast = useToast();
@@ -14,6 +18,52 @@ export default function Docker() {
   const [available, setAvailable] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
+
+  const { rows: projects } = useTable<Project>("projects");
+  const [projId, setProjId] = useState("");
+  const [tag, setTag] = useState("");
+  const [source, setSource] = useState<"backend" | "frontend">("backend");
+  const [context, setContext] = useState("");
+  const [dockerfile, setDockerfile] = useState("");
+  const [building, setBuilding] = useState(false);
+  const selProject = useMemo(() => projects.find((p) => p.id === projId), [projects, projId]);
+
+  // backend build context = the folder that holds the .sln (where the Dockerfile lives)
+  const dirOf = (p?: string | null) => (p ? String(p).replace(/[\\/][^\\/]*$/, "") : "");
+  const ctxFor = (p: Project | undefined, src: "backend" | "frontend") =>
+    src === "backend" ? (dirOf(p?.sln_path) || p?.fe_path || "") : (p?.fe_path || "");
+
+  function onPickProject(id: string) {
+    setProjId(id);
+    const p = projects.find((x) => x.id === id);
+    if (!p) return;
+    const src: "backend" | "frontend" = p.sln_path ? "backend" : "frontend";
+    setSource(src);
+    setTag(`${slug(p.name)}:latest`);
+    setContext(ctxFor(p, src));
+    setDockerfile("");
+  }
+  function onPickSource(src: "backend" | "frontend") {
+    setSource(src);
+    setContext(ctxFor(selProject, src));
+  }
+  async function browseContext() {
+    const dir = await pickPath("folder");
+    if (dir) setContext(dir);
+  }
+  async function browseDockerfile() {
+    const f = await pickPath("file");
+    if (f) setDockerfile(f);
+  }
+  async function buildImage() {
+    if (!tag.trim() || !context.trim()) { toast("Pick a project and a build context first."); return; }
+    setBuilding(true);
+    toast(`Building ${tag}… this can take a while`);
+    const r = await dockerBuild(tag.trim(), context.trim(), dockerfile.trim() || undefined);
+    setBuilding(false);
+    if (r.ok) { toast(`Built ${r.tag || tag}`); load(); }
+    else toast(`Build failed: ${r.error}`);
+  }
 
   async function load() {
     if (agentDown) { setLoading(false); return; }
@@ -51,7 +101,52 @@ export default function Docker() {
         <Empty icon="container" title="Docker not detected" sub="Make sure Docker Desktop is running and `docker` is on your PATH." />
       ) : (
         <>
-          <div className="eyebrow" style={{ marginTop: 8 }}>Running containers · {containers.length}</div>
+          <div className="eyebrow" style={{ marginTop: 8 }}>Create image</div>
+          <div className="dk-build">
+            <div style={{ fontSize: 12.5, color: "var(--muted)" }}>Build a Docker image from a project. The context folder (or the file you point at) must contain a <span className="mono">Dockerfile</span> — for these projects that's usually the <b>backend</b>.</div>
+            <div className="dk-build-grid">
+              <div className="dk-field">
+                <label>Project</label>
+                <select value={projId} onChange={(e) => onPickProject(e.target.value)}>
+                  <option value="">Select a project…</option>
+                  {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+              <div className="dk-field">
+                <label>Image tag</label>
+                <input className="dk-in mono" value={tag} onChange={(e) => setTag(e.target.value)} placeholder="myapp:latest" />
+              </div>
+            </div>
+            <div className="dk-field" style={{ marginTop: 12 }}>
+              <label>Source</label>
+              <div className="dk-seg">
+                <button className={source === "backend" ? "on" : ""} onClick={() => onPickSource("backend")} disabled={!selProject}><Icon name="server" size={13} />Backend</button>
+                <button className={source === "frontend" ? "on" : ""} onClick={() => onPickSource("frontend")} disabled={!selProject}><Icon name="code" size={13} />Frontend</button>
+              </div>
+            </div>
+            <div className="dk-field" style={{ marginTop: 12 }}>
+              <label>Build context {selProject && !context && <span style={{ color: ACCENT.amber }}>· no path on project, browse to pick</span>}</label>
+              <div className="dk-ctx">
+                <input className="dk-in" value={context} onChange={(e) => setContext(e.target.value)} placeholder="C:\path\to\backend" />
+                <button className="btn ghost" onClick={browseContext} title="Pick folder"><Icon name="folderOpen" size={14} />Browse</button>
+              </div>
+            </div>
+            <div className="dk-field" style={{ marginTop: 12 }}>
+              <label>Dockerfile <span style={{ color: "var(--dim)" }}>· optional, only if it isn't named <span className="mono">Dockerfile</span> at the context root</span></label>
+              <div className="dk-ctx">
+                <input className="dk-in" value={dockerfile} onChange={(e) => setDockerfile(e.target.value)} placeholder="(defaults to <context>/Dockerfile)" />
+                <button className="btn ghost" onClick={browseDockerfile} title="Pick Dockerfile"><Icon name="folder" size={14} />Browse</button>
+              </div>
+            </div>
+            <div className="dk-build-foot">
+              <span className="dk-hint">Runs <span className="mono">docker build -t {tag || "<tag>"}{dockerfile ? " -f <dockerfile>" : ""} {context ? "<context>" : "."}</span> on your machine.</span>
+              <button className="btn accent" disabled={building || !tag.trim() || !context.trim()} onClick={buildImage}>
+                {building ? <><Icon name="loader" size={14} className="spin" />Building…</> : <><Icon name="container" size={14} />Build image</>}
+              </button>
+            </div>
+          </div>
+
+          <div className="eyebrow" style={{ marginTop: 30 }}>Running containers · {containers.length}</div>
           {containers.length === 0 ? <div style={{ color: "var(--dim)", fontSize: 13, padding: "10px 0" }}>No containers running.</div> : (
             <table className="tbl"><thead><tr><th>Name</th><th>Image</th><th>Status</th></tr></thead>
               <tbody>{containers.map((c) => (

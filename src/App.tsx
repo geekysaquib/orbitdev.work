@@ -3,6 +3,8 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ToastProvider } from "./context/Toast";
 import { AgentProvider } from "./context/Agent";
 import { ZohoProvider } from "./context/Zoho";
+import { TimezoneProvider } from "./context/Timezone";
+import { BreakProvider } from "./context/Break";
 import { Layout } from "./components/Layout";
 import Login from "./routes/Login";
 import Landing from "./routes/Landing";
@@ -13,6 +15,7 @@ import Tickets from "./routes/Tickets";
 import Sprints from "./routes/Sprints";
 import Tasks from "./routes/Tasks";
 import Docker from "./routes/Docker";
+import Postgres from "./routes/Postgres";
 import Mail from "./routes/Mail";
 import Calendar from "./routes/Calendar";
 import Notifications from "./routes/Notifications";
@@ -35,6 +38,8 @@ export default function App() {
       <ToastProvider>
         <AgentProvider>
           <ZohoProvider>
+          <TimezoneProvider>
+          <BreakProvider>
           <BrowserRouter>
           <Routes>
             <Route path="/" element={<Landing />} />
@@ -47,6 +52,7 @@ export default function App() {
               <Route path="/sprints" element={<Sprints />} />
               <Route path="/tasks" element={<Tasks />} />
               <Route path="/docker" element={<Docker />} />
+              <Route path="/postgres" element={<Postgres />} />
               <Route path="/mail" element={<Mail />} />
               <Route path="/calendar" element={<Calendar />} />
               <Route path="/automation" element={<Automation />} />
@@ -58,6 +64,8 @@ export default function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
           </BrowserRouter>
+          </BreakProvider>
+          </TimezoneProvider>
           </ZohoProvider>
         </AgentProvider>
       </ToastProvider>

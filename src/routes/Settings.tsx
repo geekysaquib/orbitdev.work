@@ -1,12 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Icon } from "../lib/icons";
 import { ACCENT } from "../components/ui";
 import { useAgent } from "../context/Agent";
 import { useZoho } from "../context/Zoho";
 import { useToast } from "../context/Toast";
 import { useAuth } from "../context/AuthContext";
+import { useTimezone, allZones, tzOffset, tzClock, deviceTz } from "../context/Timezone";
 import { fetchIntegrations, saveIntegrations } from "../lib/integrations";
 import { fetchDocker } from "../lib/agent";
+import { pgServers, pgDeleteServer, type PgServer } from "../lib/pg";
+import { PgServerModal } from "../components/PgServerModal";
 
 const CONNS: [string, string, string][] = [["GitHub", "git", "#ECEEF2"], ["Azure DevOps", "server", ACCENT.blue], ["Docker", "container", ACCENT.blue], ["Slack", "bell", ACCENT.violet]];
 
@@ -22,6 +25,16 @@ export default function Settings() {
   const [savingG, setSavingG] = useState(false);
   const [docker, setDocker] = useState<{ available: boolean; count: number } | null>(null);
   const [dockerChecking, setDockerChecking] = useState(false);
+
+  const { tz, setTz } = useTimezone();
+  const zones = useMemo(() => allZones(), []);
+  const [nowTick, setNowTick] = useState(Date.now());
+  useEffect(() => { const t = setInterval(() => setNowTick(Date.now()), 1000); return () => clearInterval(t); }, []);
+
+  const [pgList, setPgList] = useState<PgServer[]>([]);
+  const [pgAddOpen, setPgAddOpen] = useState(false);
+  const loadPg = () => { pgServers().then((r) => setPgList(r.servers)); };
+  useEffect(() => { if (status === "online") loadPg(); else setPgList([]); }, [status]);
 
   async function checkDocker() {
     if (status !== "online") { setDocker(null); return; }
@@ -68,6 +81,26 @@ export default function Settings() {
           <button className="btn ghost" onClick={() => signOut()}><Icon name="logout" size={15} />Sign out</button></div>
       </div>
 
+      <div className="eyebrow" style={{ marginTop: 30 }}>Timezone</div>
+      <div className="card" style={{ marginTop: 12 }}>
+        <div className="setrow">
+          <div className="l"><div className="nm">Display timezone</div><div className="ds">Clocks, greetings and timestamps across ORBIT follow this zone. Defaults to your device{tz === deviceTz() ? " (in use)" : ""}.</div></div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ textAlign: "right" }}>
+              <div className="mono" style={{ fontSize: 18, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>{tzClock(tz, new Date(nowTick))}</div>
+              <div className="mono" style={{ fontSize: 11, color: "var(--dim)" }}>{tzOffset(tz)}</div>
+            </div>
+            <select className="field" value={tz} onChange={(e) => { setTz(e.target.value); toast("Timezone updated"); }} style={{ minWidth: 240 }}>
+              {zones.map((z) => <option key={z} value={z}>{z.replace(/_/g, " ")}</option>)}
+            </select>
+          </div>
+        </div>
+        {tz !== deviceTz() && (
+          <div className="setrow"><div className="l"><div className="nm">Reset to device timezone</div><div className="ds">Follow this machine's zone ({deviceTz().replace(/_/g, " ")}) again.</div></div>
+            <button className="btn ghost" onClick={() => { setTz(deviceTz()); toast("Using device timezone"); }}><Icon name="refresh" size={15} />Use device</button></div>
+        )}
+      </div>
+
       <div className="eyebrow" style={{ marginTop: 30 }}>Local agent</div>
       <div className="card" style={{ marginTop: 12 }}>
         <div className="setrow"><div className="l"><div className="nm">Companion agent</div><div className="ds">Background service that launches IDEs and runs macros on this machine. It polls automatically and connects the moment it's running.</div></div>
@@ -96,6 +129,28 @@ export default function Settings() {
             <button className="btn" disabled={status !== "online"} onClick={checkDocker}><Icon name="refresh" size={15} />Test</button>
           </div>
         </div>
+      </div>
+
+      <div className="eyebrow" style={{ marginTop: 30, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span>PostgreSQL</span>
+        <button className="btn ghost" style={{ height: 28, padding: "0 10px", fontSize: 12 }} disabled={status !== "online"} onClick={() => setPgAddOpen(true)}><Icon name="plus" size={13} />Add server</button>
+      </div>
+      <div className="card" style={{ marginTop: 12 }}>
+        {status !== "online" ? (
+          <div className="setrow"><div className="l"><div className="nm">Postgres servers</div><div className="ds">Connections run through the local agent. Start the agent to manage them.</div></div>
+            <span className="pill warn"><Icon name="plug" size={15} />Agent offline<span className="dotled warn" /></span></div>
+        ) : pgList.length === 0 ? (
+          <div className="setrow"><div className="l"><div className="nm">No servers configured</div><div className="ds">Add a Postgres connection to browse databases and run queries from the Postgres tab.</div></div>
+            <button className="btn accent" onClick={() => setPgAddOpen(true)}><Icon name="plus" size={15} />Add server</button></div>
+        ) : (
+          pgList.map((s) => (
+            <div className="setrow" key={s.id}>
+              <div className="l"><div className="nm" style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ color: "var(--mint)" }}><Icon name="db" size={15} /></span>{s.name}{s.ssl && <span className="mono" style={{ fontSize: 10, color: ACCENT.mint }}>SSL</span>}</div>
+                <div className="ds mono" style={{ fontSize: 11.5 }}>{s.user}@{s.host}:{s.port}{s.database ? ` · ${s.database}` : ""}</div></div>
+              <button className="btn ghost" onClick={async () => { await pgDeleteServer(s.id); loadPg(); toast(`Removed ${s.name}`); }}><Icon name="x" size={15} />Remove</button>
+            </div>
+          ))
+        )}
       </div>
 
       <div className="eyebrow" style={{ marginTop: 30 }}>Zoho Sprints</div>
@@ -158,6 +213,8 @@ export default function Settings() {
         <div className="setrow"><div className="l"><div className="nm">Secrets vault</div><div className="ds">AES-256 encrypted, unlocked per session.</div></div>
           <span className="pill live"><Icon name="shield" size={15} />Encrypted</span></div>
       </div>
+
+      {pgAddOpen && <PgServerModal onClose={() => setPgAddOpen(false)} onAdded={() => { setPgAddOpen(false); loadPg(); }} />}
     </main>
   );
 }

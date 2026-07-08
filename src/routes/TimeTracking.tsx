@@ -4,6 +4,8 @@ import { ACCENT, OrbitLoader, Empty, SetupRequired } from "../components/ui";
 import { useToast } from "../context/Toast";
 import { useZoho } from "../context/Zoho";
 import { useAgent } from "../context/Agent";
+import { useBreak } from "../context/Break";
+import { TIMER_EVENT } from "../context/Break";
 import { fetchTimesheet, type Timesheet } from "../lib/zoho";
 import { logOrbitSession, fetchOrbitHours, type OrbitHours } from "../lib/orbitHours";
 
@@ -11,6 +13,7 @@ export default function TimeTracking() {
   const toast = useToast();
   const zoho = useZoho();
   const { status: agentStatus } = useAgent();
+  const { onBreak } = useBreak();
   const [running, setRunning] = useState(false);
   const [sec, setSec] = useState(0);
   const [ts, setTs] = useState<Timesheet | null>(null);
@@ -22,6 +25,18 @@ export default function TimeTracking() {
   useEffect(() => {
     const saved = localStorage.getItem(TIMER_KEY);
     if (saved && Number(saved) > 0) { setRunning(true); setSec(Math.floor((Date.now() - Number(saved)) / 1000)); }
+  }, []);
+
+  // stay in sync when the timer is paused/resumed elsewhere (e.g. break mode)
+  useEffect(() => {
+    const sync = () => {
+      const saved = localStorage.getItem(TIMER_KEY);
+      if (saved && Number(saved) > 0) { setRunning(true); setSec(Math.floor((Date.now() - Number(saved)) / 1000)); }
+      else { setRunning(false); setSec(0); }
+    };
+    window.addEventListener(TIMER_EVENT, sync);
+    window.addEventListener("storage", sync);
+    return () => { window.removeEventListener(TIMER_EVENT, sync); window.removeEventListener("storage", sync); };
   }, []);
 
   useEffect(() => {
@@ -87,10 +102,11 @@ export default function TimeTracking() {
       <div className="card" style={{ padding: 24, display: "flex", flexDirection: "column", alignItems: "center", gap: 14, maxWidth: 460 }}>
         <div className="eyebrow">Orbit focus timer</div>
         <div className="timerbig" style={{ color: running ? ACCENT.mint : "var(--text)" }}>00:{mm}:{ss}</div>
-        <button className="btn-primary" onClick={toggle} disabled={agentDown && !running}>
+        <button className="btn-primary" onClick={toggle} disabled={(agentDown && !running) || (onBreak && !running)}>
           {running ? <Icon name="bolt" size={16} /> : <Icon name="play" size={14} fill />}{running ? "Stop & log" : "Start"}
         </button>
-        {agentDown && !running && <div style={{ fontSize: 11.5, color: "var(--amber)" }}>Agent required to start the timer.</div>}
+        {onBreak && !running && <div style={{ fontSize: 11.5, color: "var(--amber)", display: "flex", alignItems: "center", gap: 6 }}><Icon name="clock" size={13} />On a break — resume is disabled until you're refreshed.</div>}
+        {agentDown && !running && !onBreak && <div style={{ fontSize: 11.5, color: "var(--amber)" }}>Agent required to start the timer.</div>}
       </div>
 
       {/* Zoho hours by project */}

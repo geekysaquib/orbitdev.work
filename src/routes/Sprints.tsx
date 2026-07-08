@@ -36,6 +36,7 @@ export default function Sprints() {
   const [query, setQuery] = useState("");
   const [fType, setFType] = useState("all");
   const [fPrio, setFPrio] = useState("all");
+  const [fAssignee, setFAssignee] = useState("all");
 
   const [searchParams] = useSearchParams();
   const wantProject = searchParams.get("project");
@@ -69,10 +70,14 @@ export default function Sprints() {
   }, [sel, sprint]);
 
   const types = useMemo(() => Array.from(new Set((sprint?.items ?? []).map((i) => i.type).filter(Boolean))) as string[], [sprint]);
+  const assignees = useMemo(
+    () => Array.from(new Set((sprint?.items ?? []).flatMap((i) => i.assignees ?? []).filter(Boolean))).sort() as string[],
+    [sprint]);
 
   const match = (it: ZohoItem) =>
     (fType === "all" || it.type === fType) &&
     (fPrio === "all" || it.priority === fPrio) &&
+    (fAssignee === "all" || (it.assignees ?? []).includes(fAssignee)) &&
     (!query || `${it.ticketNumber} ${it.subject}`.toLowerCase().includes(query.toLowerCase()));
 
   // group current sprint's items by statusId into columns (after filter)
@@ -85,7 +90,7 @@ export default function Sprints() {
       else extra.push(it);
     }
     return { map, extra };
-  }, [sprint, columns, query, fType, fPrio]);
+  }, [sprint, columns, query, fType, fPrio, fAssignee]);
 
   if (zoho.status === "disconnected") return (
     <main className="page">
@@ -137,7 +142,7 @@ export default function Sprints() {
             </div>
 
             <div className="board-filter">
-              <div className="bf-search"><Icon name="search" size={13} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search items…" /></div>
+              <div className="bf-search"><Icon name="search" size={13} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by ticket ID or title…" /></div>
               <select className="bf-sel" value={fType} onChange={(e) => setFType(e.target.value)}>
                 <option value="all">All types</option>
                 {types.map((t) => <option key={t} value={t}>{t}</option>)}
@@ -146,7 +151,11 @@ export default function Sprints() {
                 <option value="all">All priority</option>
                 <option value="high">High</option><option value="med">Medium</option><option value="low">Low</option>
               </select>
-              {(query || fType !== "all" || fPrio !== "all") && <button className="bf-clear" onClick={() => { setQuery(""); setFType("all"); setFPrio("all"); }}>Clear</button>}
+              <select className="bf-sel" value={fAssignee} onChange={(e) => setFAssignee(e.target.value)} title="Filter by assignee">
+                <option value="all">All assignees</option>
+                {assignees.map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+              {(query || fType !== "all" || fPrio !== "all" || fAssignee !== "all") && <button className="bf-clear" onClick={() => { setQuery(""); setFType("all"); setFPrio("all"); setFAssignee("all"); }}>Clear</button>}
             </div>
 
             {sprint && (
@@ -192,7 +201,7 @@ function Card({ it, thumb, onClick }: { it: ZohoItem; thumb?: Thumb; onClick: ()
     <div className="zcard" style={{ borderLeftColor: ty.color }} onClick={onClick}>
       <div className="zt">
         <span className="ztype" style={{ color: ty.color, background: ty.color + "18" }}><Icon name={ty.icon} size={11} />{it.type || "Item"}</span>
-        <span className="znum" style={{ marginLeft: "auto" }}>{it.ticketNumber}</span>
+        <span className="znum mono" style={{ marginLeft: "auto" }} title="Ticket ID">{it.ticketNumber || `#${it.id}`}</span>
       </div>
       <div className="zsub">{it.subject}</div>
       <div className="zfoot">

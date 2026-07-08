@@ -4,6 +4,7 @@ import { Icon } from "../lib/icons";
 import { OrbitLoader, SetupRequired } from "../components/ui";
 import { useToast } from "../context/Toast";
 import { useAgent } from "../context/Agent";
+import { useTimezone, tzDateTime } from "../context/Timezone";
 import { gmailStatus, gmailConfigure, gmailDisconnect, gmailList, gmailMessage, type GmailMsg, type GmailFull } from "../lib/agent";
 import { fetchIntegrations } from "../lib/integrations";
 
@@ -40,6 +41,7 @@ export default function Mail() {
   const toast = useToast();
   const nav = useNavigate();
   const { status: agentStatus } = useAgent();
+  const { tz } = useTimezone();
   const agentDown = agentStatus !== "online";
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [user, setUser] = useState<string | null>(null);
@@ -113,10 +115,10 @@ export default function Mail() {
   return (
     <main className="page" style={{ padding: 0, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       {/* header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 26px 0" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 24px 0" }}>
         <div>
           <div className="h1" style={{ display: "flex", alignItems: "center", gap: 10 }}>Mail {refreshing && <Icon name="loader" size={15} className="spin" />}</div>
-          <div className="sub">{user} · inbox (read-only)</div>
+          <div className="sub" style={{ marginTop: 2 }}>{user} · inbox (read-only)</div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn ghost" onClick={() => loadInbox(true)}><Icon name="refresh" size={14} />Refresh</button>
@@ -125,7 +127,7 @@ export default function Mail() {
       </div>
 
       {/* tabs + search */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 26px 12px", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 24px 8px", flexWrap: "wrap" }}>
         <div className="mail-tabs">
           <button className={"mail-tab" + (tab === "all" ? " on" : "")} onClick={() => setTab("all")}>All <span>{msgs.length}</span></button>
           <button className={"mail-tab" + (tab === "unread" ? " on" : "")} onClick={() => setTab("unread")}>Unread <span>{unreadCount}</span></button>
@@ -167,7 +169,7 @@ export default function Mail() {
                   <span className="mailava lg">{initials(full.from)}</span>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontWeight: 600, color: "var(--text)", fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{full.from}</div>
-                    <div style={{ fontSize: 11.5, color: "var(--dim)" }}>{full.date ? new Date(full.date).toLocaleString() : ""}</div>
+                    <div style={{ fontSize: 11.5, color: "var(--dim)" }}>{full.date ? tzDateTime(tz, new Date(full.date)) : ""}</div>
                   </div>
                 </div>
               </div>

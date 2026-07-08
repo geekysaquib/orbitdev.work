@@ -16,6 +16,7 @@ export default function Projects() {
   const toast = useToast();
   const { status } = useAgent();
   const [filter, setFilter] = useState("all");
+  const [query, setQuery] = useState("");
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({ name: "", client: "", fe_path: "", sln_path: "", stack: "React" });
 
@@ -32,6 +33,8 @@ export default function Projects() {
   }
 
   const list = rows.filter((p) => {
+    const q = query.trim().toLowerCase();
+    if (q && !`${p.name} ${p.client || ""} ${(p.stacks || []).join(" ")} ${p.branch || ""}`.toLowerCase().includes(q)) return false;
     if (filter === "all") return true;
     if (filter === "work") return /Obayashi|Salon|Japan/i.test(p.client || "");
     if (filter === "personal") return /Personal/i.test(p.client || "");
@@ -52,10 +55,15 @@ export default function Projects() {
         <div><div className="h1">Projects</div><div className="sub">Every workspace you launch from — one registry.</div></div>
         <button className="btn accent" onClick={() => setModal(true)}><Icon name="plus" size={15} />New project</button>
       </div>
-      <div className="filters" style={{ marginTop: 22 }}>
+      <div className="filters" style={{ marginTop: 22, display: "flex", alignItems: "center", gap: 10 }}>
         {FILTERS.map(([k, l]) => (
           <button key={k} className={"fchip" + (filter === k ? " on" : "")} onClick={() => setFilter(k)}>{l}</button>
         ))}
+        <div className="bf-search" style={{ marginLeft: "auto" }}>
+          <Icon name="search" size={13} />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search projects…" />
+          {query && <button className="bf-clear" onClick={() => setQuery("")} style={{ marginLeft: 4 }}>Clear</button>}
+        </div>
       </div>
       <table className="tbl">
         <thead><tr><th>Project</th><th>Stack</th><th>Status</th><th>Branch</th><th>Port</th><th></th></tr></thead>

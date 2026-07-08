@@ -1,0 +1,12 @@
+[
+  {
+    "id": "pg_mrbjkurt",
+    "name": "localhost",
+    "host": "localhost",
+    "port": 5432,
+    "user": "postgres",
+    "password": "meritech",
+    "database": "",
+    "ssl": false
+  }
+]
