@@ -6,7 +6,9 @@ import { useAgent } from "../context/Agent";
 import { useZoho } from "../context/Zoho";
 import { useToast } from "../context/Toast";
 import { useTimezone, tzClock, allZones, tzOffset, zoneMatches } from "../context/Timezone";
+import { useBreak } from "../context/Break";
 import { CommandPalette } from "./CommandPalette";
+import { StartWorkModal } from "./StartWorkModal";
 import { supabase } from "../lib/supabase";
 import { ACCENT } from "./ui";
 import type { Notification } from "../lib/types";
@@ -49,6 +51,7 @@ export function Layout() {
   const zoho = useZoho();
   const toast = useToast();
   const { tz, setTz } = useTimezone();
+  const { onBreak, endBreak } = useBreak();
   const nav = useNavigate();
   const [clock, setClock] = useState("");
   const [unread, setUnread] = useState(0);
@@ -62,6 +65,7 @@ export function Layout() {
   const [agentPop, setAgentPop] = useState(false);
   const [log, setLog] = useState(false);
   const [cmdk, setCmdk] = useState(false);
+  const [startWork, setStartWork] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const agentRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
@@ -195,7 +199,7 @@ export function Layout() {
             )}
           </div>
 
-          <button className="btn-primary" onClick={() => nav("/automation")}>
+          <button className="btn-primary" onClick={() => setStartWork(true)}>
             <Icon name="zap" size={16} fill /> Start Work
           </button>
           <div className="tz-wrap" ref={tzRef}>
@@ -304,7 +308,19 @@ export function Layout() {
               <button className="za-x" onClick={() => reconnect()}><Icon name="refresh" size={14} /></button>
             </div>
           )}
-          <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}><Outlet /></div>
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+            {onBreak && (
+              <div className="break-bar">
+                <span className="bb-ic">☕</span>
+                <span>You're on a break — Orbit timer paused, resume disabled until you're refreshed.</span>
+                <div className="break-bar-actions">
+                  <button onClick={() => nav("/app")}>Back to break</button>
+                  <button className="primary" onClick={endBreak}><Icon name="check" size={13} />I'm refreshed</button>
+                </div>
+              </div>
+            )}
+            <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}><Outlet /></div>
+          </div>
         </div>
       </div>
 
@@ -332,6 +348,7 @@ export function Layout() {
         </div>
       )}
       {cmdk && <CommandPalette onClose={() => setCmdk(false)} />}
+      {startWork && <StartWorkModal onClose={() => setStartWork(false)} />}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { Icon } from "../lib/icons";
 import { Chip, Stat, Eyebrow, ACCENT, prColor, Empty, OrbitLoader } from "../components/ui";
@@ -28,7 +28,7 @@ export default function Dashboard() {
   const { user } = useAuth();
   const zoho = useZoho();
   const { tz } = useTimezone();
-  const { onBreak, timerPaused, startBreak, endBreak } = useBreak();
+  const { onBreak, timerPaused, breakStartedAt, startBreak, endBreak } = useBreak();
   const weather = useWeather();
   const { rows: projects } = useTable<Project>("projects");
   const { rows: tickets } = useTable<Ticket>("tickets");
@@ -116,7 +116,7 @@ export default function Dashboard() {
 
   return (
     <>
-      {onBreak && <BreakView onEnd={endBreak} timerPaused={timerPaused} />}
+      {onBreak && <BreakView onEnd={endBreak} timerPaused={timerPaused} startedAt={breakStartedAt} />}
       <main className="page">
         {flash && (
           <div className="dash-flash">
@@ -236,76 +236,267 @@ export default function Dashboard() {
   );
 }
 
-const BREAK_LINES = [
-  "Step away from the keyboard for a minute.",
-  "Stretch, breathe, let the tests run.",
-  "The bugs will still be here. Sip slowly.",
-  "Rest your eyes — look at something far away.",
-  "You've earned this cup.",
-  "Roll your shoulders back. Unclench your jaw.",
+/* ============================ Coffee / tea break ============================ *
+ * Redesigned break view — "Brew Sync". While you step away the agent keeps
+ * clearing your queue; the cup fills as work ships, a live feed streams what it
+ * did, and a "while you were away" digest sums it up when you come back.        */
+
+type Tone = "add" | "ok" | "info" | "dim";
+interface FeedTask {
+  icon: "commit" | "test" | "deploy" | "pr" | "deps" | "ci" | "docs";
+  title: string; meta: string; delta: string; tone: Tone;
+  add: number; del: number; tests: number; files: number;
+  isPr?: boolean; isDeploy?: boolean; at?: number;
+}
+
+const AGENT_TASKS: FeedTask[] = [
+  { icon: "commit", title: "Guard null session in auth middleware", meta: "core-api · main", delta: "+18 −4", tone: "add", add: 18, del: 4, tests: 0, files: 1 },
+  { icon: "test", title: "Suite green: 104 passed, 0 failed", meta: "api-gateway", delta: "104 ✓", tone: "ok", add: 0, del: 0, tests: 104, files: 0 },
+  { icon: "commit", title: "Extract useBrewTimer hook", meta: "web · feat/brew-sync", delta: "+96 −140", tone: "add", add: 96, del: 140, tests: 0, files: 4 },
+  { icon: "deps", title: "Bumped 3 deps · 0 advisories", meta: "web", delta: "3 ↑", tone: "dim", add: 0, del: 0, tests: 0, files: 1 },
+  { icon: "ci", title: "Pipeline #482 green in 2m14s", meta: "orbit/ci", delta: "2m14s", tone: "ok", add: 0, del: 0, tests: 0, files: 0 },
+  { icon: "pr", title: "Opened PR #219 · ready for review", meta: "feat/brew-sync", delta: "#219", tone: "info", add: 0, del: 0, tests: 0, files: 0, isPr: true },
+  { icon: "deploy", title: "Preview deploy is live", meta: "orbit-pr-219.vercel.app", delta: "↑ live", tone: "info", add: 0, del: 0, tests: 0, files: 0, isDeploy: true },
+  { icon: "docs", title: "Updated brew-sync docs", meta: "docs · main", delta: "+42 −3", tone: "add", add: 42, del: 3, tests: 0, files: 2 },
+  { icon: "test", title: "Snapshot tests refreshed", meta: "web", delta: "12 ✓", tone: "ok", add: 0, del: 0, tests: 12, files: 3 },
+  { icon: "commit", title: "Fix flaky timer test w/ fake clock", meta: "web · main", delta: "+22 −9", tone: "add", add: 22, del: 9, tests: 0, files: 2 },
 ];
 
-function Cup({ variant }: { variant: "coffee" | "tea" }) {
-  const liquid = variant === "coffee" ? "#7b4b28" : "#8bd4a6";
-  const rim = variant === "coffee" ? "#3a2418" : "#3a6b4f";
+const TONE_COLOR: Record<Tone, string> = { add: "var(--mint)", ok: "var(--mint)", info: "var(--blue)", dim: "var(--muted)" };
+const TONE_BG: Record<Tone, string> = { add: "rgba(55,223,160,.10)", ok: "rgba(55,223,160,.10)", info: "rgba(91,141,239,.12)", dim: "rgba(139,146,160,.10)" };
+
+const COFFEE_STEPS = ["First drip", "Brewing", "Getting strong", "Almost full", "Full pour"];
+const TEA_STEPS = ["First steep", "Steeping", "Getting strong", "Almost full", "Full cup"];
+
+function feedIcon(kind: FeedTask["icon"], color: string) {
+  const P = (d: string) => <path d={d} fill="none" stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />;
+  const C = (cx: number, cy: number, r: number) => <circle cx={cx} cy={cy} r={r} fill="none" stroke={color} strokeWidth={1.8} />;
+  const wrap = (kids: ReactNode) => <svg width={15} height={15} viewBox="0 0 24 24">{kids}</svg>;
+  switch (kind) {
+    case "commit": return wrap(<>{C(12, 12, 3)}{P("M3 12h6")}{P("M15 12h6")}</>);
+    case "test": return wrap(P("M20 6 9 17l-5-5"));
+    case "deploy": return wrap(<>{P("M12 20V5")}{P("M6 11l6-6 6 6")}</>);
+    case "pr": return wrap(<>{C(6, 18, 2.4)}{C(6, 6, 2.4)}{C(18, 6, 2.4)}{P("M6 8.5v7")}{P("M18 8.5c0 4-3.5 6-8 6")}</>);
+    case "deps": return wrap(<>{P("M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z")}{P("M3.3 7 12 12l8.7-5")}{P("M12 22V12")}</>);
+    case "ci": return wrap(P("M13 2 3 14h9l-1 8 10-12h-9z"));
+    case "docs": return wrap(<>{P("M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z")}{P("M14 2v6h6")}</>);
+    default: return wrap(C(12, 12, 3));
+  }
+}
+
+function BrewCup({ variant, fill, pourKey }: { variant: "coffee" | "tea"; fill: number; pourKey: number }) {
+  const isTea = variant === "tea";
+  const body = isTea ? "#5f8f39" : "#8a4a24";
+  const crema = isTea ? "#a9d873" : "#c9813f";
+  const liquidY = 244 - fill * 110;            // 244 empty → 134 full
+  const liquidH = 256 - liquidY;
+  const ringC = 2 * Math.PI * 150;
+  const ringOffset = ringC * (1 - fill);
   return (
-    <svg className="break-cup" viewBox="0 0 140 150" width="150" height="160" aria-hidden>
-      <g className="steam">
-        <path d="M55 34 C48 24 62 20 55 8" /><path d="M70 32 C63 22 77 18 70 4" /><path d="M85 34 C78 24 92 20 85 8" />
-      </g>
-      <ellipse cx="70" cy="140" rx="46" ry="7" fill="rgba(0,0,0,.28)" />
-      <path d="M30 62 h72 v34 a36 36 0 0 1 -72 0 z" fill="var(--raised2)" stroke="var(--border2)" strokeWidth="2.5" />
-      <path d="M32 64 h68 v6 a34 34 0 0 1 -68 0 z" fill={liquid} />
-      <ellipse cx="66" cy="64" rx="36" ry="8" fill={liquid} stroke={rim} strokeWidth="2" />
-      <path d="M102 66 q26 2 24 22 q-2 18 -26 16" fill="none" stroke="var(--border2)" strokeWidth="6" strokeLinecap="round" />
-    </svg>
+    <div className="bs-cupwrap">
+      {pourKey > 0 && <span key={pourKey} className="bs-pour" aria-hidden />}
+      <svg viewBox="0 0 360 360" className="bs-cup">
+        <defs>
+          <clipPath id="bsCupClip"><path d="M132 130 L132 236 Q132 256 152 256 L208 256 Q228 256 228 236 L228 130 Z" /></clipPath>
+        </defs>
+        <g className="bs-ring">
+          <circle cx="180" cy="180" r="150" fill="none" stroke="rgba(55,223,160,.12)" strokeWidth="2" />
+          <circle cx="180" cy="180" r="150" fill="none" stroke="var(--mint)" strokeWidth="4" strokeLinecap="round"
+            strokeDasharray={ringC} strokeDashoffset={ringOffset} transform="rotate(-90 180 180)" style={{ transition: "stroke-dashoffset .9s cubic-bezier(.34,.1,.2,1)" }} />
+        </g>
+        <g className="steam" style={{ opacity: 0.9 }}>
+          <path d="M164 112 q-8 -10 0 -20 q8 -10 0 -20" />
+          <path d="M182 108 q-8 -10 0 -20 q8 -10 0 -20" />
+          <path d="M198 112 q-8 -10 0 -20 q8 -10 0 -20" />
+        </g>
+        <ellipse cx="180" cy="266" rx="54" ry="8" fill="rgba(0,0,0,.4)" />
+        <g clipPath="url(#bsCupClip)">
+          <rect x="130" y={liquidY} width="100" height={liquidH} fill={body} style={{ transition: "y .9s cubic-bezier(.34,.1,.2,1),height .9s cubic-bezier(.34,.1,.2,1)" }} />
+          <ellipse cx="180" cy={liquidY} rx="48" ry="7" fill={crema} style={{ transition: "cy .9s cubic-bezier(.34,.1,.2,1)" }} />
+        </g>
+        <path d="M132 130 L132 236 Q132 256 152 256 L208 256 Q228 256 228 236 L228 130" fill="none" stroke="#9fb0b6" strokeWidth="3" strokeLinejoin="round" opacity="0.6" />
+        <path d="M228 148 C266 150 266 200 228 202" fill="none" stroke="#9fb0b6" strokeWidth="9" strokeLinecap="round" opacity="0.55" />
+        <ellipse cx="180" cy="130" rx="48" ry="11" fill="none" stroke="#9fb0b6" strokeWidth="3" opacity="0.7" />
+        <ellipse cx="180" cy="130" rx="42" ry="8" fill="rgba(0,0,0,.35)" />
+      </svg>
+    </div>
   );
 }
 
-function BreakView({ onEnd, timerPaused }: { onEnd: () => void; timerPaused: boolean }) {
+function BreakView({ onEnd, timerPaused, startedAt }: { onEnd: () => void; timerPaused: boolean; startedAt: number | null }) {
   const [variant, setVariant] = useState<"coffee" | "tea">("coffee");
-  const [line, setLine] = useState(() => BREAK_LINES[Math.floor(Math.random() * BREAK_LINES.length)]);
-  const [start] = useState(() => Date.now());
-  const [elapsed, setElapsed] = useState(0);
-  const [phase, setPhase] = useState<"in" | "hold" | "out">("in");
+  const [view, setView] = useState<"break" | "done">("break");
+  const [panel, setPanel] = useState<"live" | "digest">("live");
+  const [log, setLog] = useState<FeedTask[]>([]);
+  const [pourKey, setPourKey] = useState(0);
+  const start = startedAt ?? Date.now();
+  const [elapsed, setElapsed] = useState(Math.max(0, Math.floor((Date.now() - start) / 1000)));
 
   useEffect(() => {
-    const t = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 1000);
-    const l = setInterval(() => setLine(BREAK_LINES[Math.floor(Math.random() * BREAK_LINES.length)]), 9000);
-    return () => { clearInterval(t); clearInterval(l); };
+    const t = setInterval(() => setElapsed(Math.max(0, Math.floor((Date.now() - start) / 1000))), 1000);
+    return () => clearInterval(t);
   }, [start]);
-  // 4s in · 2s hold · 4s out breathing guide
+
+  // Stream the agent's activity in while you're away.
   useEffect(() => {
-    const seq: ["in" | "hold" | "out", number][] = [["in", 4000], ["hold", 2000], ["out", 4000]];
-    let i = 0;
-    let to: ReturnType<typeof setTimeout>;
-    const step = () => { setPhase(seq[i][0]); to = setTimeout(() => { i = (i + 1) % seq.length; step(); }, seq[i][1]); };
-    step();
-    return () => clearTimeout(to);
-  }, []);
+    if (view === "done") return;
+    const push = () => setLog((prev) => {
+      if (prev.length >= AGENT_TASKS.length) return prev;
+      setPourKey((k) => k + 1);
+      const at = Math.max(0, Math.floor((Date.now() - start) / 1000));
+      return [{ ...AGENT_TASKS[prev.length], at }, ...prev];
+    });
+    const first = setTimeout(push, 600);
+    const iv = setInterval(push, 2600);
+    return () => { clearTimeout(first); clearInterval(iv); };
+  }, [view]);
+
+  const shipped = log.length;
+  const fill = Math.min(1, shipped / AGENT_TASKS.length);
+  const fillPct = Math.round(fill * 100);
+  const isTea = variant === "tea";
+  const steps = isTea ? TEA_STEPS : COFFEE_STEPS;
+  const si = fillPct >= 100 ? 4 : fillPct >= 75 ? 3 : fillPct >= 45 ? 2 : fillPct >= 15 ? 1 : 0;
+
+  const sums = log.reduce((a, t) => {
+    a.add += t.add; a.del += t.del; a.tests += t.tests; a.files += t.files;
+    if (t.icon === "commit") a.commits++; if (t.isPr) a.prs++; if (t.isDeploy) a.deploys++;
+    return a;
+  }, { add: 0, del: 0, tests: 0, files: 0, commits: 0, prs: 0, deploys: 0 });
 
   const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
   const ss = String(elapsed % 60).padStart(2, "0");
-  const breatheText = phase === "in" ? "Breathe in…" : phase === "hold" ? "Hold…" : "Breathe out…";
+  const breakStr = `${mm}:${ss}`;
+  const rel = (at: number) => { const d = elapsed - at; return d <= 1 ? "just now" : d < 60 ? `${d}s ago` : `${Math.floor(d / 60)}m ago`; };
+  const highlights = [
+    "Shipped the auth null-guard from your review notes",
+    "PR #219 is green and waiting on you",
+    "Preview is live at orbit-pr-219.vercel.app",
+  ];
 
   return (
-    <div className="break-view">
-      <div className="break-bg" aria-hidden>
-        {Array.from({ length: 9 }).map((_, i) => <span key={i} className="bean" style={{ left: `${8 + i * 10}%`, animationDelay: `${i * 1.3}s`, animationDuration: `${9 + (i % 4) * 2}s` }}>{i % 2 ? "🍃" : "☕"}</span>)}
+    <div className="break-view bs">
+      <div className="bs-amb" aria-hidden>
+        {Array.from({ length: 6 }).map((_, i) => <span key={i} style={{ left: `${10 + i * 15}%`, top: `${70 + (i % 3) * 8}%`, animationDelay: `${i * 1.7}s`, animationDuration: `${11 + (i % 4) * 2}s` }} />)}
       </div>
-      <div className="break-inner">
-        <div className={"breathe-ring " + phase}><Cup variant={variant} /></div>
-        <div className="breathe-text">{breatheText}</div>
-        <h2>Break time · {mm}:{ss}</h2>
-        <p>{line}</p>
-        {timerPaused && <div className="break-paused"><span className="pausedot" />Orbit timer paused — it resumes when you're back</div>}
-        <div className="break-actions">
-          <button className="cup-toggle" onClick={() => setVariant((v) => (v === "coffee" ? "tea" : "coffee"))} title="Switch brew">
-            {variant === "coffee" ? "🍵 Switch to tea" : "☕ Switch to coffee"}
-          </button>
-          <button className="btn accent" onClick={onEnd}><Icon name="check" size={15} />I'm refreshed</button>
+
+      {/* ---- Hero ---- */}
+      <section className="bs-hero">
+        <div className="bs-eyebrow">Brew sync · {isTea ? "tea" : "coffee"} break</div>
+        <BrewCup variant={variant} fill={fill} pourKey={pourKey} />
+        <div className="bs-strength">{steps[si]}</div>
+
+        <div className="bs-timer">
+          <span className="bs-tdot" />
+          <span className="mono">Break · {breakStr}</span>
+          <span className="mono bs-tpct">/ {fillPct}% brewed</span>
         </div>
-      </div>
+
+        {view === "break" ? (
+          <div className="bs-copy">
+            <h2 className="bs-title">{isTea ? "Steep while it ships." : "Sip while it ships."}</h2>
+            <p className="bs-sub">The bugs will still be here. {isTea ? "Steep" : "Sip"} slowly — the agent is clearing your queue while you rest.</p>
+            {timerPaused && (
+              <div className="bs-pause"><span className="bs-pausedot" />Break timer paused — the agent keeps shipping while you sip.</div>
+            )}
+            <div className="bs-actions">
+              <button className="bs-btn" onClick={() => setVariant((v) => (v === "coffee" ? "tea" : "coffee"))}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7}><path d="M17 8h1a4 4 0 1 1 0 8h-1" /><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4z" /><path d="M6 2v2M10 2v2M14 2v2" /></svg>
+                {isTea ? "Switch to coffee" : "Switch to tea"}
+              </button>
+              <button className="bs-btn" onClick={() => setPanel("digest")}>
+                <Icon name="book" size={16} />See what the agent did
+              </button>
+              <button className="bs-btn primary" onClick={() => { setPanel("live"); setView("done"); }}>
+                <Icon name="check" size={16} />I'm refreshed
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="bs-copy">
+            <div className="bs-check"><Icon name="check" size={22} /></div>
+            <h2 className="bs-title">Welcome back.</h2>
+            <p className="bs-sub">Batch merged while you {isTea ? "steeped" : "sipped"} — {shipped} shipped, {sums.tests} tests green.</p>
+            <div className="bs-actions">
+              <button className="bs-btn" onClick={() => setPanel("digest")}>See the digest</button>
+              <button className="bs-btn primary" onClick={onEnd}>Resume work <span aria-hidden style={{ fontSize: 16 }}>→</span></button>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* ---- Right panel: live feed or digest ---- */}
+      <aside className="bs-panel">
+        {panel === "digest" ? (
+          <div className="bs-pcol">
+            <div className="bs-phead">
+              <button className="bs-back" onClick={() => setPanel("live")}>← Back to live</button>
+              <div className="bs-plabel">While you were away</div>
+              <div className="bs-ptitle">{shipped} tasks shipped · {breakStr}</div>
+            </div>
+            <div className="bs-pbody">
+              <div className="bs-grid">
+                <div className="bs-cell"><div className="bs-cnum">{sums.commits}</div><div className="bs-clab">commits pushed</div></div>
+                <div className="bs-cell"><div className="bs-cnum mint">{sums.tests}</div><div className="bs-clab">tests green</div></div>
+                <div className="bs-cell"><div className="bs-cnum">{sums.prs}</div><div className="bs-clab">PRs opened</div></div>
+                <div className="bs-cell"><div className="bs-cnum">{sums.deploys}</div><div className="bs-clab">preview deploys</div></div>
+              </div>
+              <div className="bs-diff">
+                <div><div className="bs-dnum mono mint">+{sums.add}</div><div className="bs-dlab">added</div></div>
+                <span className="bs-dsep" />
+                <div><div className="bs-dnum mono warm">−{sums.del}</div><div className="bs-dlab">removed</div></div>
+                <span className="bs-dsep" />
+                <div><div className="bs-dnum mono">{sums.files}</div><div className="bs-dlab">files touched</div></div>
+              </div>
+              <div className="bs-hlabel">Highlights</div>
+              {highlights.map((h, i) => (
+                <div key={i} className="bs-hl">
+                  <span className="bs-hlmark"><Icon name="check" size={11} /></span>
+                  <span>{h}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="bs-pcol">
+            <div className="bs-fhead">
+              <div className="bs-fbrand">
+                <span className="bs-fic"><Icon name="bolt" size={14} /></span>
+                <div>
+                  <div className="bs-fname mono">AGENT</div>
+                  <div className="bs-fdesc">clearing your queue</div>
+                </div>
+              </div>
+              <div className="bs-flive"><span className="bs-blink" /><span className="mono">LIVE</span></div>
+            </div>
+            <div className="bs-feed">
+              {log.slice(0, 6).map((t, i) => (
+                <div key={`${t.title}-${i}`} className="bs-row">
+                  <span className="bs-ricon">{feedIcon(t.icon, TONE_COLOR[t.tone])}</span>
+                  <div className="bs-rmid">
+                    <div className="bs-rtitle">{t.title}</div>
+                    <div className="bs-rmeta">
+                      <span className="mono bs-rsrc">{t.meta}</span>
+                      <span className="mono bs-rtime">{rel(t.at ?? elapsed)}</span>
+                    </div>
+                  </div>
+                  <span className="mono bs-rdelta" style={{ background: TONE_BG[t.tone], color: TONE_COLOR[t.tone] }}>{t.delta}</span>
+                </div>
+              ))}
+              <div className="bs-spacer" />
+              <div className="bs-typing">
+                <span /><span /><span />
+                <span className="mono bs-tstat">{shipped >= AGENT_TASKS.length ? "queue cleared" : "working on next task…"}</span>
+              </div>
+            </div>
+            <div className="bs-ffoot">
+              <div><div className="mono bs-fnum">{shipped}</div><div className="bs-flab">SHIPPED</div></div>
+              <div><div className="mono bs-fnum mint">{sums.tests}</div><div className="bs-flab">GREEN</div></div>
+              <div><div className="mono bs-fnum">+{sums.add}</div><div className="bs-flab">LINES</div></div>
+            </div>
+          </div>
+        )}
+      </aside>
     </div>
   );
 }

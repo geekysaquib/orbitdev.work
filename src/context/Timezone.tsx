@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { fetchSettings, saveSettings } from "../lib/settings";
 
 const KEY = "orbit.timezone";
 
@@ -100,9 +101,16 @@ export function TimezoneProvider({ children }: { children: ReactNode }) {
   const [tz, setTzState] = useState<string>(() => {
     try { return localStorage.getItem(KEY) || deviceTz(); } catch { return deviceTz(); }
   });
+  // hydrate from durable settings once
+  useEffect(() => {
+    fetchSettings().then((s) => {
+      if (s.timezone) { setTzState(s.timezone); try { localStorage.setItem(KEY, s.timezone); } catch { /* noop */ } }
+    });
+  }, []);
   const setTz = (t: string) => {
     try { localStorage.setItem(KEY, t); } catch { /* ignore */ }
     setTzState(t);
+    saveSettings({ timezone: t });
   };
   const isDefault = tz === deviceTz();
   return <Ctx.Provider value={{ tz, setTz, isDefault }}>{children}</Ctx.Provider>;

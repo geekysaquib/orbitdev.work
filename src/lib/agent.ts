@@ -112,6 +112,41 @@ export async function dockerBuild(tag: string, context: string, dockerfile?: str
   } catch { return { ok: false, error: "agent offline" }; }
 }
 
+// ---- Start Work ----
+export async function gitPull(path: string): Promise<{ ok: boolean; output?: string; error?: string }> {
+  try {
+    const r = await call("/git/pull", { path });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: (j as { error?: string }).error || `agent ${r.status}` };
+    return { ok: true, output: (j as { output?: string }).output };
+  } catch { return { ok: false, error: "agent offline" }; }
+}
+export async function checkPort(port: number): Promise<{ ok: boolean; inUse: boolean; ownedBy: string | null; error?: string }> {
+  try {
+    const r = await fetch(`${getAgentUrl()}/port/check?port=${port}`);
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, inUse: false, ownedBy: null, error: (j as { error?: string }).error };
+    return { ok: true, inUse: !!(j as { inUse?: boolean }).inUse, ownedBy: (j as { ownedBy?: string | null }).ownedBy ?? null };
+  } catch { return { ok: false, inUse: false, ownedBy: null, error: "agent offline" }; }
+}
+export async function devStart(path: string, command: string, port: number | null, project?: string):
+  Promise<{ ok: boolean; pid?: number; port?: number | null; error?: string; ownedBy?: string | null }> {
+  try {
+    const r = await call("/dev/start", { path, command, port, project });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: (j as { error?: string }).error || `agent ${r.status}`, ownedBy: (j as { ownedBy?: string | null }).ownedBy ?? null };
+    return { ok: true, pid: (j as { pid?: number }).pid, port: (j as { port?: number | null }).port ?? null };
+  } catch { return { ok: false, error: "agent offline" }; }
+}
+export interface DevServer { pid: number; port: number | null; path: string; command: string; project: string | null; startedAt: number; }
+export async function devRunning(): Promise<DevServer[]> {
+  try { const r = await call("/dev/running"); const j = await r.json().catch(() => ({})); return (j.servers ?? []) as DevServer[]; }
+  catch { return []; }
+}
+export async function devStop(pid: number): Promise<{ ok: boolean }> {
+  try { const r = await call("/dev/stop", { pid }); return { ok: r.ok }; } catch { return { ok: false }; }
+}
+
 export interface GmailMsg { uid: number; subject: string; from: string; fromAddr: string; date: string; seen: boolean; }
 export interface GmailFull { subject: string; from: string; to: string; date: string; text: string; html: string; }
 

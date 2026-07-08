@@ -7,6 +7,7 @@
 import express from "express";
 import cors from "cors";
 import { spawn, execFile, exec } from "node:child_process";
+import net from "node:net";
 import { platform } from "node:os";
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -45,7 +46,14 @@ const app = express();
 const PORT = process.env.PORT || 47600;
 
 // Restrict to your ORBIT origins.
-app.use(cors({ origin: [/^https?:\/\/localhost(:\d+)?$/, /\.netlify\.app$/], credentials: false }));
+app.use(cors({
+  origin: [
+    /^https?:\/\/localhost(:\d+)?$/,
+    /\.netlify\.app$/,
+    "https://orbitdev.work"
+  ],
+  credentials: false
+}));
 app.use(express.json());
 
 const isWin = platform() === "win32";
@@ -338,6 +346,69 @@ app.post("/pg/query", async (req, res) => {
     res.json({ ok: true, command: result.command, fields, rows: allRows.slice(0, 1000), rowCount: result.rowCount ?? allRows.length, truncated: allRows.length > 1000, ms: Date.now() - started });
   } catch (e) { res.status(500).json({ ok: false, error: e.message, ms: Date.now() - started }); }
   finally { try { await client?.end(); } catch { /**/ } }
+});
+
+// ---- Start Work: git pull, port checks, dev servers ----
+const devServers = new Map(); // pid -> { pid, port, path, command, project, startedAt }
+const clean = (p) => String(p).trim().replace(/^["']|["']$/g, "");
+
+function portInUse(port) {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once("error", (e) => resolve(e.code === "EADDRINUSE"));
+    srv.once("listening", () => srv.close(() => resolve(false)));
+    srv.listen(port, "127.0.0.1");
+  });
+}
+
+app.post("/git/pull", (req, res) => {
+  const { path } = req.body || {};
+  if (!path) return res.status(400).json({ ok: false, error: "path required" });
+  exec(`git -C "${clean(path)}" pull --ff-only`, { timeout: 120000, maxBuffer: 1024 * 1024 * 8 }, (err, stdout, stderr) => {
+    if (err) return res.status(500).json({ ok: false, error: (stderr || err.message || "pull failed").toString().slice(-400) });
+    res.json({ ok: true, output: (stdout || "").toString().trim().slice(-400) || "Already up to date." });
+  });
+});
+
+app.get("/port/check", async (req, res) => {
+  const port = Number(req.query.port);
+  if (!port) return res.status(400).json({ ok: false, error: "port required" });
+  const inUse = await portInUse(port);
+  const owned = [...devServers.values()].find((d) => d.port === port);
+  res.json({ ok: true, inUse, ownedBy: owned ? owned.project : null });
+});
+
+app.post("/dev/start", async (req, res) => {
+  const { path, command, port, project } = req.body || {};
+  if (!path || !command) return res.status(400).json({ ok: false, error: "path and command required" });
+  if (port) {
+    const inUse = await portInUse(Number(port));
+    if (inUse) {
+      const owned = [...devServers.values()].find((d) => d.port === Number(port));
+      return res.status(409).json({ ok: false, error: `port ${port} already in use`, ownedBy: owned ? owned.project : null });
+    }
+  }
+  try {
+    const child = spawn(command, { cwd: clean(path), shell: true, detached: true, stdio: "ignore" });
+    child.unref();
+    const rec = { pid: child.pid, port: port ? Number(port) : null, path: clean(path), command, project: project || null, startedAt: Date.now() };
+    devServers.set(child.pid, rec);
+    child.on("exit", () => devServers.delete(child.pid));
+    res.json({ ok: true, pid: child.pid, port: rec.port });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get("/dev/running", (_req, res) => res.json({ ok: true, servers: [...devServers.values()] }));
+
+app.post("/dev/stop", (req, res) => {
+  const pid = Number(req.body?.pid);
+  if (!pid) return res.status(400).json({ ok: false, error: "pid required" });
+  try {
+    if (isWin) exec(`taskkill /PID ${pid} /T /F`);
+    else { try { process.kill(-pid); } catch { process.kill(pid); } }
+    devServers.delete(pid);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 app.post("/launch", (req, res) => {
