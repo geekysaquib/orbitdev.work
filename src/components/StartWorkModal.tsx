@@ -55,18 +55,21 @@ export function StartWorkModal({ onClose }: { onClose: () => void }) {
 
       setRun(p.id, { stage: "pulling" });
       const pull = await gitPull(path);
-      if (!pull.ok) { setRun(p.id, { stage: "error", message: `git pull: ${pull.error}` }); continue; }
-      setRun(p.id, { stage: "checking", pull: pull.output });
+      if (!pull.ok) { setRun(p.id, { stage: "error", message: `git pull: ${pull.error || pull.reason}` }); continue; }
+      const pullMsg = pull.reason === "updated" ? `pulled ${pull.behind} commit${pull.behind === 1 ? "" : "s"} · ${pull.branch}`
+        : pull.reason === "no_upstream" ? `${pull.branch} has no upstream — skipped pull`
+        : `up to date · ${pull.branch}`;
+      setRun(p.id, { stage: "checking", pull: pullMsg });
 
       const pc = await checkPort(port);
       if (pc.inUse) {
-        setRun(p.id, { stage: "skipped", pull: pull.output, message: `Port ${port} already in use${pc.ownedBy ? ` by ${pc.ownedBy}` : ""} — pulled, but not started.` });
+        setRun(p.id, { stage: "skipped", pull: pullMsg, message: `Port ${port} already in use${pc.ownedBy ? ` by ${pc.ownedBy}` : ""} — pulled, but not started.` });
         continue;
       }
-      setRun(p.id, { stage: "starting", pull: pull.output });
+      setRun(p.id, { stage: "starting", pull: pullMsg });
       const ds = await devStart(path, command, port, p.name);
-      if (ds.ok) setRun(p.id, { stage: "running", pull: pull.output, message: `${command} · http://localhost:${ds.port ?? port} · pid ${ds.pid}` });
-      else setRun(p.id, { stage: "error", pull: pull.output, message: ds.error });
+      if (ds.ok) setRun(p.id, { stage: "running", pull: pullMsg, message: `${command} · http://localhost:${ds.port ?? port} · pid ${ds.pid}` });
+      else setRun(p.id, { stage: "error", pull: pullMsg, message: ds.error });
     }
     setBusy(false);
     toast("Start Work finished");

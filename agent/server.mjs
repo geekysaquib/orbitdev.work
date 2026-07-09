@@ -46,14 +46,7 @@ const app = express();
 const PORT = process.env.PORT || 47600;
 
 // Restrict to your ORBIT origins.
-app.use(cors({
-  origin: [
-    /^https?:\/\/localhost(:\d+)?$/,
-    /\.netlify\.app$/,
-    "https://orbitdev.work"
-  ],
-  credentials: false
-}));
+app.use(cors({ origin: [/^https?:\/\/localhost(:\d+)?$/, /\.netlify\.app$/], credentials: false }));
 app.use(express.json());
 
 const isWin = platform() === "win32";
@@ -242,6 +235,7 @@ app.post("/docker/build", (req, res) => {
   const dfArg = dockerfile ? ` -f "${clean(dockerfile)}"` : "";
   exec(`docker build -t "${safeTag}"${dfArg} "${ctx}"`, { timeout: 900000, maxBuffer: 1024 * 1024 * 16 }, (err, stdout, stderr) => {
     if (err) return res.status(500).json({ ok: false, error: (stderr || err.message || "build failed").toString().slice(-500) });
+    broadcast("docker:changed", { tag: safeTag });
     res.json({ ok: true, tag: safeTag, output: (stdout || "").toString().slice(-500) });
   });
 });
@@ -361,13 +355,50 @@ function portInUse(port) {
   });
 }
 
-app.post("/git/pull", (req, res) => {
+const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "echo", GCM_INTERACTIVE: "never" };
+const git = (cwd, args, timeout = 90000) =>
+  new Promise((resolve) => {
+    exec(`git ${args}`, { cwd, env: GIT_ENV, timeout, maxBuffer: 1024 * 1024 * 8 }, (err, stdout, stderr) =>
+      resolve({ ok: !err, out: String(stdout || "").trim(), err: String(stderr || err?.message || "").trim() })
+    );
+  });
+
+app.post("/git/pull", async (req, res) => {
   const { path } = req.body || {};
   if (!path) return res.status(400).json({ ok: false, error: "path required" });
-  exec(`git -C "${clean(path)}" pull --ff-only`, { timeout: 120000, maxBuffer: 1024 * 1024 * 8 }, (err, stdout, stderr) => {
-    if (err) return res.status(500).json({ ok: false, error: (stderr || err.message || "pull failed").toString().slice(-400) });
-    res.json({ ok: true, output: (stdout || "").toString().trim().slice(-400) || "Already up to date." });
-  });
+  const dir = clean(path);
+
+  // resolve the repo root — project paths often point at a subfolder (frontend/)
+  const top = await git(dir, "rev-parse --show-toplevel");
+  if (!top.ok) return res.status(400).json({ ok: false, reason: "not_a_repo", error: "not a git repository" });
+  const root = top.out || dir;
+
+  const branchR = await git(root, "rev-parse --abbrev-ref HEAD");
+  const branch = branchR.out || "HEAD";
+  const upstream = await git(root, "rev-parse --abbrev-ref --symbolic-full-name @{u}");
+  if (!upstream.ok) return res.json({ ok: true, root, branch, reason: "no_upstream", updated: false, ahead: 0, behind: 0, dirty: 0, output: "no upstream branch" });
+
+  const fetched = await git(root, "fetch --prune", 120000);
+  if (!fetched.ok) {
+    const auth = /authentication|could not read|permission denied|terminal prompts disabled|access denied/i.test(fetched.err);
+    return res.status(200).json({ ok: false, root, branch, reason: auth ? "auth" : "fetch_failed", error: fetched.err.slice(-300) || "fetch failed" });
+  }
+
+  const counts = await git(root, "rev-list --left-right --count HEAD...@{u}");
+  const [aheadS, behindS] = (counts.out || "0\t0").split(/\s+/);
+  const ahead = Number(aheadS) || 0, behind = Number(behindS) || 0;
+  const st = await git(root, "status --porcelain");
+  const dirty = st.out ? st.out.split("\n").filter(Boolean).length : 0;
+
+  if (behind === 0) return res.json({ ok: true, root, branch, upstream: upstream.out, reason: "up_to_date", updated: false, ahead, behind, dirty, output: "Already up to date." });
+
+  const pulled = await git(root, "pull --ff-only", 120000);
+  if (!pulled.ok) {
+    const conflict = /diverge|not possible to fast-forward|unmerged|would be overwritten|local changes/i.test(pulled.err);
+    return res.status(200).json({ ok: false, root, branch, reason: conflict ? "conflict" : "pull_failed", ahead, behind, dirty, error: pulled.err.slice(-300) || "pull failed" });
+  }
+  const files = (pulled.out.match(/(\d+) files? changed/) || [])[1];
+  res.json({ ok: true, root, branch, upstream: upstream.out, reason: "updated", updated: true, ahead, behind, dirty, files: Number(files) || 0, output: pulled.out.slice(-300) });
 });
 
 app.get("/port/check", async (req, res) => {
@@ -393,7 +424,8 @@ app.post("/dev/start", async (req, res) => {
     child.unref();
     const rec = { pid: child.pid, port: port ? Number(port) : null, path: clean(path), command, project: project || null, startedAt: Date.now() };
     devServers.set(child.pid, rec);
-    child.on("exit", () => devServers.delete(child.pid));
+    child.on("exit", () => { devServers.delete(child.pid); broadcast("dev:changed", { pid: child.pid, up: false }); });
+    broadcast("dev:changed", { pid: child.pid, up: true, project: rec.project, port: rec.port });
     res.json({ ok: true, pid: child.pid, port: rec.port });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
@@ -407,6 +439,7 @@ app.post("/dev/stop", (req, res) => {
     if (isWin) exec(`taskkill /PID ${pid} /T /F`);
     else { try { process.kill(-pid); } catch { process.kill(pid); } }
     devServers.delete(pid);
+    broadcast("dev:changed", { pid, up: false });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
@@ -471,4 +504,119 @@ app.post("/macro", (req, res) => {
   res.json({ ok: true, ran: name });
 });
 
-app.listen(PORT, () => console.log(`ORBIT agent listening on http://localhost:${PORT}`));
+// ---- npm chores: dependency drift + advisories (read-only) ----
+const npmRun = (cwd, args, timeout = 120000) =>
+  new Promise((resolve) => {
+    exec(`npm ${args}`, { cwd, timeout, maxBuffer: 1024 * 1024 * 24, env: { ...process.env, NO_UPDATE_NOTIFIER: "1" } },
+      (err, stdout, stderr) => resolve({ err, out: String(stdout || ""), stderr: String(stderr || "") }));
+  });
+
+// `npm outdated` exits 1 when packages are outdated — that's a success for us.
+app.post("/npm/outdated", async (req, res) => {
+  const { path } = req.body || {};
+  if (!path) return res.status(400).json({ ok: false, error: "path required" });
+  const dir = clean(path);
+  if (!existsSync(join(dir, "package.json"))) return res.json({ ok: false, reason: "no_package_json" });
+  const { out } = await npmRun(dir, "outdated --json");
+  let data = {};
+  try { data = JSON.parse(out || "{}"); } catch { return res.json({ ok: false, reason: "parse_failed" }); }
+  const pkgs = Object.entries(data).map(([name, v]) => ({
+    name, current: v.current || "", wanted: v.wanted || "", latest: v.latest || "",
+    major: !!(v.current && v.latest && String(v.current).split(".")[0] !== String(v.latest).split(".")[0]),
+  }));
+  res.json({ ok: true, total: pkgs.length, major: pkgs.filter((p) => p.major).length, packages: pkgs.slice(0, 25) });
+});
+
+app.post("/npm/audit", async (req, res) => {
+  const { path } = req.body || {};
+  if (!path) return res.status(400).json({ ok: false, error: "path required" });
+  const dir = clean(path);
+  if (!existsSync(join(dir, "package.json"))) return res.json({ ok: false, reason: "no_package_json" });
+  const { out } = await npmRun(dir, "audit --json");
+  let data = {};
+  try { data = JSON.parse(out || "{}"); } catch { return res.json({ ok: false, reason: "parse_failed" }); }
+  const v = data?.metadata?.vulnerabilities || {};
+  const total = ["critical", "high", "moderate", "low", "info"].reduce((a, k) => a + (Number(v[k]) || 0), 0);
+  res.json({ ok: true, total, critical: Number(v.critical) || 0, high: Number(v.high) || 0, moderate: Number(v.moderate) || 0, low: Number(v.low) || 0 });
+});
+
+// ---- Docker disk usage (read-only) + gated prune ----
+app.get("/docker/df", (_req, res) => {
+  exec('docker system df --format "{{json .}}"', { timeout: 15000 }, (err, stdout) => {
+    if (err) return res.json({ ok: true, available: false, rows: [] });
+    const rows = String(stdout).trim().split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+    exec("docker images -f dangling=true -q", { timeout: 10000 }, (e2, out2) => {
+      const dangling = e2 ? 0 : String(out2).trim().split("\n").filter(Boolean).length;
+      const reclaimable = rows.map((r) => r.Reclaimable || "").find((x) => /\d/.test(x)) || "0B";
+      res.json({ ok: true, available: true, rows, dangling, reclaimable });
+    });
+  });
+});
+// Destructive — never called automatically; the UI gates this behind a toggle.
+app.post("/docker/prune", (_req, res) => {
+  exec("docker system prune -f", { timeout: 120000, maxBuffer: 1024 * 1024 * 8 }, (err, stdout, stderr) => {
+    if (err) return res.status(500).json({ ok: false, error: (stderr || err.message).slice(-300) });
+    res.json({ ok: true, output: String(stdout).trim().slice(-300) });
+  });
+});
+
+// ---- Postgres health ping ----
+app.get("/pg/health", async (req, res) => {
+  const server = pgServers().find((s) => s.id === req.query.server);
+  if (!server) return res.status(404).json({ ok: false, error: "server not found" });
+  let client;
+  try {
+    client = await pgConnect(server, req.query.database);
+    const conns = await client.query("SELECT count(*)::int AS n FROM pg_stat_activity");
+    const longest = await client.query(
+      "SELECT COALESCE(EXTRACT(EPOCH FROM (now() - min(query_start))), 0)::int AS s FROM pg_stat_activity WHERE state = 'active' AND query NOT ILIKE '%pg_stat_activity%'");
+    const size = await client.query("SELECT pg_size_pretty(pg_database_size(current_database())) AS size");
+    res.json({ ok: true, name: server.name, connections: conns.rows[0]?.n ?? 0, longestSec: longest.rows[0]?.s ?? 0, size: size.rows[0]?.size || "—" });
+  } catch (e) { res.status(200).json({ ok: false, name: server.name, error: e.message.slice(0, 160) }); }
+  finally { try { await client?.end(); } catch { /**/ } }
+});
+
+// ---- What's actually listening on the dev ports ----
+app.get("/ports/map", async (req, res) => {
+  const ports = String(req.query.ports || "").split(",").map((p) => Number(p.trim())).filter(Boolean);
+  const out = [];
+  for (const p of ports) {
+    const inUse = await portInUse(p);
+    const owned = [...devServers.values()].find((d) => d.port === p);
+    out.push({ port: p, inUse, ownedBy: owned ? owned.project : null, orbit: !!owned });
+  }
+  res.json({ ok: true, ports: out });
+});
+
+// ---- Unread mail count ----
+app.get("/gmail/unread", async (_req, res) => {
+  try {
+    const unread = await withImap(async (client) => {
+      const lock = await client.getMailboxLock("INBOX");
+      try { const r = await client.status("INBOX", { unseen: true }); return r.unseen || 0; }
+      finally { lock.release(); }
+    });
+    res.json({ ok: true, unread });
+  } catch (e) { res.status(200).json({ ok: false, error: e.message }); }
+});
+
+// ---- WebSocket push: agent tells the UI when dev servers / docker change ----
+let wss = null;
+function broadcast(event, payload = {}) {
+  if (!wss) return;
+  const msg = JSON.stringify({ event, payload, at: Date.now() });
+  for (const c of wss.clients) { if (c.readyState === 1) { try { c.send(msg); } catch { /**/ } } }
+}
+
+const server = app.listen(PORT, () => console.log(`ORBIT agent listening on http://localhost:${PORT}`));
+
+(async () => {
+  try {
+    const { WebSocketServer } = await import("ws");
+    wss = new WebSocketServer({ server, path: "/events" });
+    wss.on("connection", (c) => { try { c.send(JSON.stringify({ event: "hello", payload: { agent: "orbit" }, at: Date.now() })); } catch { /**/ } });
+    console.log(`[agent] websocket events on ws://localhost:${PORT}/events`);
+  } catch {
+    console.log("[agent] `ws` not installed — run `npm install` in agent/ for live push (polling still works)");
+  }
+})();

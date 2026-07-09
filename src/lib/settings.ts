@@ -19,6 +19,7 @@ export interface OrbitSettings {
   break_started_at?: string | null;
   timer_paused?: boolean;
   timezone?: string;
+  chores?: import("./chores").ChoreSettings;
 }
 
 const TABLE = "user_settings";

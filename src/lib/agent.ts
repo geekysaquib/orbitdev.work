@@ -113,13 +113,18 @@ export async function dockerBuild(tag: string, context: string, dockerfile?: str
 }
 
 // ---- Start Work ----
-export async function gitPull(path: string): Promise<{ ok: boolean; output?: string; error?: string }> {
+export type PullReason = "updated" | "up_to_date" | "no_upstream" | "conflict" | "auth" | "fetch_failed" | "pull_failed" | "not_a_repo" | "offline";
+export interface PullResult {
+  ok: boolean; reason: PullReason; branch?: string; ahead?: number; behind?: number;
+  dirty?: number; files?: number; output?: string; error?: string;
+}
+export async function gitPull(path: string): Promise<PullResult> {
   try {
     const r = await call("/git/pull", { path });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) return { ok: false, error: (j as { error?: string }).error || `agent ${r.status}` };
-    return { ok: true, output: (j as { output?: string }).output };
-  } catch { return { ok: false, error: "agent offline" }; }
+    const j = (await r.json().catch(() => ({}))) as Partial<PullResult>;
+    if (j.reason) return { ok: !!j.ok, ...j } as PullResult;
+    return { ok: false, reason: "pull_failed", error: j.error || `agent ${r.status}` };
+  } catch { return { ok: false, reason: "offline", error: "agent offline" }; }
 }
 export async function checkPort(port: number): Promise<{ ok: boolean; inUse: boolean; ownedBy: string | null; error?: string }> {
   try {
@@ -168,4 +173,63 @@ export async function gmailList(limit = 25): Promise<{ ok: boolean; messages: Gm
 export async function gmailMessage(uid: number): Promise<{ ok: boolean; message?: GmailFull; error?: string }> {
   try { const r = await call(`/gmail/message?uid=${uid}`); const j = await r.json().catch(() => ({})); return r.ok ? { ok: true, message: j.message } : { ok: false, error: (j as { error?: string }).error }; }
   catch { return { ok: false, error: "agent offline" }; }
+}
+
+// ---- Break chores: npm, docker disk, ports, mail ----
+export interface OutdatedPkg { name: string; current: string; wanted: string; latest: string; major: boolean; }
+export async function npmOutdated(path: string): Promise<{ ok: boolean; total: number; major: number; packages: OutdatedPkg[] }> {
+  try {
+    const r = await call("/npm/outdated", { path });
+    const j = await r.json().catch(() => ({}));
+    if (!j.ok) return { ok: false, total: 0, major: 0, packages: [] };
+    return { ok: true, total: j.total ?? 0, major: j.major ?? 0, packages: j.packages ?? [] };
+  } catch { return { ok: false, total: 0, major: 0, packages: [] }; }
+}
+export interface AuditResult { ok: boolean; total: number; critical: number; high: number; moderate: number; low: number; }
+export async function npmAudit(path: string): Promise<AuditResult> {
+  try {
+    const r = await call("/npm/audit", { path });
+    const j = await r.json().catch(() => ({}));
+    if (!j.ok) return { ok: false, total: 0, critical: 0, high: 0, moderate: 0, low: 0 };
+    return { ok: true, total: j.total ?? 0, critical: j.critical ?? 0, high: j.high ?? 0, moderate: j.moderate ?? 0, low: j.low ?? 0 };
+  } catch { return { ok: false, total: 0, critical: 0, high: 0, moderate: 0, low: 0 }; }
+}
+export async function dockerDf(): Promise<{ available: boolean; dangling: number; reclaimable: string }> {
+  try {
+    const r = await call("/docker/df");
+    const j = await r.json().catch(() => ({}));
+    return { available: !!j.available, dangling: j.dangling ?? 0, reclaimable: j.reclaimable ?? "0B" };
+  } catch { return { available: false, dangling: 0, reclaimable: "0B" }; }
+}
+export async function dockerPrune(): Promise<{ ok: boolean; output?: string; error?: string }> {
+  try { const r = await call("/docker/prune", {}); const j = await r.json().catch(() => ({})); return { ok: !!j.ok, output: j.output, error: j.error }; }
+  catch { return { ok: false, error: "agent offline" }; }
+}
+export interface PortInfo { port: number; inUse: boolean; ownedBy: string | null; orbit: boolean; }
+export async function portsMap(ports: number[]): Promise<PortInfo[]> {
+  if (!ports.length) return [];
+  try { const r = await fetch(`${getAgentUrl()}/ports/map?ports=${ports.join(",")}`); const j = await r.json().catch(() => ({})); return (j.ports ?? []) as PortInfo[]; }
+  catch { return []; }
+}
+export async function gmailUnread(): Promise<{ ok: boolean; unread: number }> {
+  try { const r = await call("/gmail/unread"); const j = await r.json().catch(() => ({})); return { ok: !!j.ok, unread: j.unread ?? 0 }; }
+  catch { return { ok: false, unread: 0 }; }
+}
+
+/** Subscribe to agent push events. Returns an unsubscribe fn. Falls back silently. */
+export function agentEvents(onEvent: (event: string) => void): () => void {
+  let ws: WebSocket | null = null;
+  let closed = false;
+  let retry: ReturnType<typeof setTimeout>;
+  const connect = () => {
+    if (closed) return;
+    try {
+      ws = new WebSocket(getAgentUrl().replace(/^http/, "ws") + "/events");
+      ws.onmessage = (m) => { try { const d = JSON.parse(m.data as string); if (d.event) onEvent(d.event); } catch { /* noop */ } };
+      ws.onclose = () => { if (!closed) retry = setTimeout(connect, 5000); };
+      ws.onerror = () => { try { ws?.close(); } catch { /* noop */ } };
+    } catch { retry = setTimeout(connect, 5000); }
+  };
+  connect();
+  return () => { closed = true; clearTimeout(retry); try { ws?.close(); } catch { /* noop */ } };
 }

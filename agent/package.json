@@ -2,7 +2,16 @@
   "name": "orbit-agent",
   "version": "0.1.0",
   "type": "module",
-  "description": "ORBIT local companion — launches VS Code / Visual Studio and runs macros.",
-  "scripts": { "start": "node server.mjs" },
-  "dependencies": { "express": "^4.19.2", "cors": "^2.8.5", "imapflow": "^1.0.171", "mailparser": "^3.7.1", "pg": "^8.13.1" }
+  "description": "ORBIT local companion — launches native apps, runs git/docker/npm chores.",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "imapflow": "^1.0.171",
+    "mailparser": "^3.7.1",
+    "pg": "^8.13.1",
+    "ws": "^8.18.0"
+  }
 }
