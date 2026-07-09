@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
+import { getUser } from "../lib/auth";
 
 /** Generic Supabase table hook scoped to the signed-in user via RLS. */
 export function useTable<T extends { id: string }>(
@@ -22,9 +23,8 @@ export function useTable<T extends { id: string }>(
   useEffect(() => { load(); }, [load]);
 
   const insert = useCallback(async (row: Partial<T>) => {
-    const { data: u } = await supabase.auth.getUser();
     const { data, error } = await supabase.from(table)
-      .insert({ ...row, user_id: u.user?.id } as never).select().single();
+      .insert({ ...row, user_id: getUser()?.id } as never).select().single();
     if (!error && data) setRows((r) => [data as T, ...r]);
     return { error: error?.message };
   }, [table]);

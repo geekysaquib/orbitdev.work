@@ -1,0 +1,3 @@
+{
+  "jwtSecret": "paste the SAME value as SUPABASE_JWT_SECRET in your Netlify/.env — Project Settings -> API -> JWT Settings -> Legacy JWT Secret"
+}

@@ -112,7 +112,7 @@ export default function Dashboard() {
 
   const hh = tzHour(tz);
   const word = hh < 5 ? "Working late" : hh < 12 ? "Good morning" : hh < 17 ? "Good afternoon" : hh < 21 ? "Good evening" : "Working late";
-  const firstName = ((user?.user_metadata?.full_name as string | undefined) || "").split(" ")[0];
+  const firstName = (user?.full_name || "").split(" ")[0];
   const greet = firstName ? `${word}, ${firstName}` : word;
   const dateStr = tzDate(tz);
   const active = projects.filter((p) => p.status === "active");
@@ -298,7 +298,7 @@ function BrewCup({ pct, variant }: { pct: number; variant: "coffee" | "tea" }) {
   const liquidY = 250 - 112 * (pct / 100);
   const liquidH = Math.max(0, 252 - liquidY);
   return (
-    <svg width="360" height="360" viewBox="0 0 360 360" style={{ display: "block" }} aria-hidden>
+    <svg width="100%" height="100%" viewBox="0 0 360 360" style={{ display: "block" }} aria-hidden>
       <defs><clipPath id="bvCupClip"><path d="M132 130 L132 236 Q132 256 152 256 L208 256 Q228 256 228 236 L228 130 Z" /></clipPath></defs>
       <g className="bv-ring">
         <circle cx="180" cy="180" r="150" fill="none" stroke="rgba(63,224,139,.12)" strokeWidth="2" />
@@ -731,7 +731,7 @@ function BreakView({ onEnd, timerPaused, startedAt, projects, tasks, zohoConnect
       {/* HERO */}
       <section className="bv-hero">
         <div className="bv-eyebrow">BREW SYNC · {bev.label.toUpperCase()} BREAK</div>
-        <div style={{ position: "relative", width: 360, height: 360, margin: "2px 0 4px" }}>
+        <div style={{ position: "relative", width: "min(360px, 78vw)", height: "min(360px, 78vw)", margin: "2px 0 4px" }}>
           {pourKey > 0 && <span key={pourKey} className="bv-pour" style={{ background: bev.body }} />}
           <BrewCup pct={brewPct} variant={variant} />
           <div style={{ position: "absolute", left: "50%", bottom: 44, transform: "translateX(-50%)", textAlign: "center", pointerEvents: "none" }}>

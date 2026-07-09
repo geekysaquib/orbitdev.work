@@ -38,8 +38,8 @@ export default function Tickets() {
   }
 
   return (
-    <main className="page" style={{ padding: 0, display: "flex", overflow: "hidden" }}>
-      <div style={{ width: 380, borderRight: "1px solid var(--border)", overflowY: "auto", padding: "24px 18px", flexShrink: 0 }}>
+    <main className="page split-shell" style={{ padding: 0, overflow: "hidden" }}>
+      <div className="split-side" style={{ width: 380, borderRight: "1px solid var(--border)", overflowY: "auto", padding: "24px 18px", flexShrink: 0 }}>
         <div className="rowhead"><div className="h2">Work items</div>
           <button className="iconbtn" title="Sync from Zoho Sprints" onClick={syncZoho}><Icon name="refresh" size={15} className={syncing ? "spin" : ""} /></button></div>
         <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 6 }}>Synced from Zoho Sprints · configure keys in Settings</div>

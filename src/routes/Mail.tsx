@@ -5,8 +5,8 @@ import { OrbitLoader, SetupRequired } from "../components/ui";
 import { useToast } from "../context/Toast";
 import { useAgent } from "../context/Agent";
 import { useTimezone, tzDateTime } from "../context/Timezone";
-import { gmailStatus, gmailConfigure, gmailDisconnect, gmailList, gmailMessage, type GmailMsg, type GmailFull } from "../lib/agent";
-import { fetchIntegrations } from "../lib/integrations";
+import { gmailConfigure, gmailDisconnect, gmailList, gmailMessage, type GmailMsg, type GmailFull } from "../lib/agent";
+import { fetchIntegrations, saveIntegrations } from "../lib/integrations";
 
 const REFRESH_MS = 120000; // 2 minutes
 
@@ -56,17 +56,20 @@ export default function Mail() {
   const [loadingMsg, setLoadingMsg] = useState(false);
   const timer = useRef<number | null>(null);
 
+  // Supabase's `integrations` row (this account's own, RLS-scoped) is the only
+  // source of truth for "is Gmail connected." We never trust the agent's own
+  // gmailStatus() on its own — the agent is just a runtime cache the browser
+  // pushes into; falling back to whatever it already has cached is how one
+  // account's Gmail used to leak into another's.
   useEffect(() => {
     if (agentDown) { setConfigured(null); return; }
     (async () => {
       const intg = await fetchIntegrations();
       if (intg?.gmail_user && intg?.gmail_app_password) {
-        const s = await gmailStatus();
-        if (!s.configured || s.user !== intg.gmail_user) await gmailConfigure(intg.gmail_user, intg.gmail_app_password);
+        await gmailConfigure(intg.gmail_user, intg.gmail_app_password);
         setConfigured(true); setUser(intg.gmail_user);
       } else {
-        const s = await gmailStatus();
-        setConfigured(s.configured); setUser(s.user);
+        setConfigured(false); setUser(null);
       }
     })();
   }, [agentStatus]);
@@ -96,7 +99,12 @@ export default function Mail() {
     if (!m.seen) setMsgs((prev) => prev.map((x) => (x.uid === m.uid ? { ...x, seen: true } : x)));
   }
 
-  async function disconnect() { await gmailDisconnect(); setConfigured(false); setUser(null); setMsgs([]); setSel(null); toast("Gmail disconnected on this machine"); }
+  async function disconnect() {
+    await gmailDisconnect(); // clears the agent's local cache for this account
+    await saveIntegrations({ gmail_user: null, gmail_app_password: null }); // clears the durable record so it doesn't silently reconnect next visit
+    setConfigured(false); setUser(null); setMsgs([]); setSel(null);
+    toast("Gmail disconnected");
+  }
 
   const filtered = useMemo(() => {
     let list = msgs;

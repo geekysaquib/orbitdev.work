@@ -4,11 +4,12 @@
  * with the `pg` driver. Connection details live in the agent's pg-config.json.
  */
 import { getAgentUrl } from "./agent";
+import { authHeader } from "./auth";
 
 async function call(path: string, method: "GET" | "POST" | "DELETE" = "GET", body?: unknown): Promise<Response> {
   return fetch(getAgentUrl() + path, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeader() },
     body: body ? JSON.stringify(body) : undefined,
   });
 }
@@ -53,7 +54,7 @@ export async function pgQuery(server: string, database: string, sql: string): Pr
 export interface PgHealth { ok: boolean; name: string; connections: number; longestSec: number; size: string; error?: string; }
 export async function pgHealth(server: string): Promise<PgHealth> {
   try {
-    const r = await fetch(`${getAgentUrl()}/pg/health?server=${encodeURIComponent(server)}`);
+    const r = await fetch(`${getAgentUrl()}/pg/health?server=${encodeURIComponent(server)}`, { headers: authHeader() });
     const j = await r.json().catch(() => ({}));
     return { ok: !!j.ok, name: j.name ?? server, connections: j.connections ?? 0, longestSec: j.longestSec ?? 0, size: j.size ?? "—", error: j.error };
   } catch { return { ok: false, name: server, connections: 0, longestSec: 0, size: "—", error: "agent offline" }; }

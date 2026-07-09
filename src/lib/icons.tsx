@@ -52,6 +52,7 @@ const P: Record<string, JSX.Element> = {
   chevD: <polyline points="6 9 12 15 18 9"/>,
   sprint: <><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="14"/></>,
   folderOpen: <><path d="M6 14l1.5-2.5A2 2 0 0 1 9.2 10.5H21a1 1 0 0 1 .9 1.45l-2.3 4.6A2 2 0 0 1 17.8 18H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4.9a2 2 0 0 1 1.7.9l.8 1.2a2 2 0 0 0 1.7.9H18a2 2 0 0 1 2 2v2"/></>,
+  menu: <><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></>,
 };
 
 export function Icon({ name, size = 16, fill = false, className = "" }:

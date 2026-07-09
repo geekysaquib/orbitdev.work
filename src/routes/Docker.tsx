@@ -148,19 +148,19 @@ export default function Docker() {
 
           <div className="eyebrow" style={{ marginTop: 30 }}>Running containers · {containers.length}</div>
           {containers.length === 0 ? <div style={{ color: "var(--dim)", fontSize: 13, padding: "10px 0" }}>No containers running.</div> : (
-            <table className="tbl"><thead><tr><th>Name</th><th>Image</th><th>Status</th></tr></thead>
+            <div className="tbl-wrap"><table className="tbl"><thead><tr><th>Name</th><th>Image</th><th>Status</th></tr></thead>
               <tbody>{containers.map((c) => (
                 <tr key={c.name}>
                   <td style={{ fontFamily: "var(--display)", fontWeight: 600 }}><span style={{ color: ACCENT.mint, marginRight: 8 }}>●</span>{c.name}</td>
                   <td className="mono" style={{ color: "var(--muted)" }}>{c.image}</td>
                   <td style={{ color: "var(--muted)" }}>{c.status}</td>
                 </tr>
-              ))}</tbody></table>
+              ))}</tbody></table></div>
           )}
 
           <div className="eyebrow" style={{ marginTop: 30 }}>Images · {images.length}</div>
           {images.length === 0 ? <div style={{ color: "var(--dim)", fontSize: 13, padding: "10px 0" }}>No images found.</div> : (
-            <table className="tbl"><thead><tr><th>Repository</th><th>Tag</th><th>Size</th><th>Created</th><th></th></tr></thead>
+            <div className="tbl-wrap"><table className="tbl"><thead><tr><th>Repository</th><th>Tag</th><th>Size</th><th>Created</th><th></th></tr></thead>
               <tbody>{images.map((img) => {
                 const name = img.tag && img.tag !== "<none>" ? `${img.repository}:${img.tag}` : img.id;
                 return (
@@ -176,7 +176,7 @@ export default function Docker() {
                     </td>
                   </tr>
                 );
-              })}</tbody></table>
+              })}</tbody></table></div>
           )}
           <p style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 14 }}>Export runs <span className="mono">docker save</span> and writes a .tar to the folder you pick. Large images can take a while.</p>
         </>

@@ -136,7 +136,7 @@ export default function Settings() {
           {section === "account" && (
             <>
               <div className="card">
-                <div className="setrow"><div className="l"><div className="nm">{user?.email}</div><div className="ds">Signed in via Supabase</div></div>
+                <div className="setrow"><div className="l"><div className="nm">{user?.email}</div><div className="ds">{user?.email_verified ? "Verified · signed in with your ORBIT account" : "Signed in with your ORBIT account"}</div></div>
                   <button className="btn ghost" onClick={() => signOut()}><Icon name="logout" size={15} />Sign out</button></div>
               </div>
               <div className="card" style={{ marginTop: 12 }}>
@@ -271,10 +271,12 @@ export default function Settings() {
 
           {section === "data" && (
             <div className="card">
-              <div className="setrow"><div className="l"><div className="nm">Data store</div><div className="ds">Supabase Postgres with row-level security.</div></div>
+              <div className="setrow"><div className="l"><div className="nm">Data store</div><div className="ds">Supabase Postgres with row-level security. Auth is ORBIT's own — sign-in/sign-up, verification and password reset never touch Supabase Auth.</div></div>
                 <span className="pill live"><Icon name="db" size={15} />Supabase</span></div>
-              <div className="setrow"><div className="l"><div className="nm">Secrets vault</div><div className="ds">AES-256 encrypted, unlocked per session.</div></div>
-                <span className="pill live"><Icon name="shield" size={15} />Encrypted</span></div>
+              <div className="setrow"><div className="l"><div className="nm">Passwords</div><div className="ds">Hashed with bcrypt, verified server-side. Reset requires an emailed one-time code, never a plaintext link.</div></div>
+                <span className="pill live"><Icon name="shield" size={15} />bcrypt</span></div>
+              <div className="setrow"><div className="l"><div className="nm">Login alerts</div><div className="ds">Every sign-in emails you the time, approximate location and device — so you'd notice if it wasn't you.</div></div>
+                <span className="pill live"><Icon name="mail" size={15} />Enabled</span></div>
               <div className="setrow"><div className="l"><div className="nm">Break history</div><div className="ds">Chore digests are written to <code className="mono">break_logs</code> when a break ends.</div></div>
                 <span className="pill"><Icon name="clock" size={15} />Retained</span></div>
             </div>

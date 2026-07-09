@@ -1,15 +1,16 @@
 import { supabase } from "./supabase";
+import { getUser } from "./auth";
 
 const localKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 /** Save a completed focus-timer session to Supabase (Orbit hours). */
 export async function logOrbitSession(seconds: number, projectId?: string | null) {
   if (seconds < 1) return;
-  const { data: u } = await supabase.auth.getUser();
-  if (!u.user) return;
+  const u = getUser();
+  if (!u) return;
   const now = new Date();
   await supabase.from("time_entries").insert({
-    user_id: u.user.id,
+    user_id: u.id,
     project_id: projectId ?? null,
     started_at: new Date(now.getTime() - seconds * 1000).toISOString(),
     ended_at: now.toISOString(),

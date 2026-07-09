@@ -3,9 +3,19 @@
 // For https://localhost (no mixed-content issues), generate a trusted cert:
 //   mkcert -install && mkcert localhost 127.0.0.1
 // then set CERT/KEY paths below and use https.createServer.
+//
+// Every request (except / and /ping) must carry the same ORBIT session JWT the
+// web app uses — the agent verifies it with SUPABASE_JWT_SECRET (the exact
+// secret netlify/functions/auth.ts signs with) and trusts the `sub` claim as
+// the caller's user id. Postgres servers, Gmail credentials, and dev-server
+// tracking are all stored per user id, so two people running ORBIT against
+// the same agent never see each other's data. Docker is the one exception —
+// it reflects whatever's actually running on this machine, which by nature
+// can't be split per user.
 
 import express from "express";
 import cors from "cors";
+import jwt from "jsonwebtoken";
 import { spawn, execFile, exec } from "node:child_process";
 import net from "node:net";
 import { platform } from "node:os";
@@ -17,29 +27,90 @@ import { simpleParser } from "mailparser";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const GMAIL_CFG = join(__dir, "gmail-config.json");
+const PG_CFG = join(__dir, "pg-config.json");
+const AGENT_CFG = join(__dir, "agent-config.json");
 
-function gmailCreds() {
-  if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) return { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD };
-  if (existsSync(GMAIL_CFG)) { try { return JSON.parse(readFileSync(GMAIL_CFG, "utf8")); } catch { return null; } }
-  return null;
+function readJson(path, fallback) {
+  if (!existsSync(path)) return fallback;
+  try { return JSON.parse(readFileSync(path, "utf8")); } catch { return fallback; }
 }
-let imapClient = null;
-async function getClient() {
-  const c = gmailCreds();
+
+// ---- Auth: verify the same JWT netlify/functions/auth.ts issues ----
+function jwtSecret() {
+  if (process.env.SUPABASE_JWT_SECRET) return process.env.SUPABASE_JWT_SECRET;
+  return readJson(AGENT_CFG, {}).jwtSecret || "";
+}
+const JWT_SECRET = jwtSecret();
+if (!JWT_SECRET) {
+  console.warn("[agent] SUPABASE_JWT_SECRET not set (env or agent-config.json) — every authenticated request will fail with 401.");
+  console.warn("[agent] Copy agent-config.example.json -> agent-config.json and paste the same Legacy JWT Secret Netlify uses.");
+}
+
+function verifyToken(token) {
+  const payload = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] });
+  const userId = typeof payload === "object" ? payload.sub : null;
+  if (!userId) throw new Error("token has no sub claim");
+  return userId;
+}
+
+const PUBLIC_PATHS = new Set(["/", "/ping"]);
+function requireAuth(req, res, next) {
+  if (PUBLIC_PATHS.has(req.path)) return next();
+  if (!JWT_SECRET) return res.status(500).json({ ok: false, error: "agent misconfigured — set SUPABASE_JWT_SECRET (see agent/README.md)" });
+  const hdr = req.headers.authorization || "";
+  const token = hdr.startsWith("Bearer ") ? hdr.slice(7) : "";
+  if (!token) return res.status(401).json({ ok: false, error: "unauthorized — sign in to ORBIT first" });
+  try {
+    req.userId = verifyToken(token);
+    next();
+  } catch {
+    return res.status(401).json({ ok: false, error: "unauthorized — sign in again" });
+  }
+}
+
+// ---- Gmail (read-only IMAP, app password) — strictly one credential set per
+// user, keyed by their ORBIT user id. No environment-variable fallback and no
+// inheriting an old shared config: every account links its own Gmail here.
+function gmailCredsAll() {
+  const cfg = readJson(GMAIL_CFG, {});
+  return cfg && typeof cfg === "object" && !Array.isArray(cfg) && typeof cfg.user !== "string" ? cfg : {};
+}
+function gmailCreds(userId) {
+  return gmailCredsAll()[userId] || null;
+}
+function saveGmailCreds(userId, user, pass) {
+  const all = gmailCredsAll();
+  all[userId] = { user, pass };
+  writeFileSync(GMAIL_CFG, JSON.stringify(all, null, 2), "utf8");
+}
+function deleteGmailCreds(userId) {
+  const all = gmailCredsAll();
+  delete all[userId];
+  try { writeFileSync(GMAIL_CFG, JSON.stringify(all, null, 2), "utf8"); } catch { /**/ }
+}
+
+const imapClients = new Map(); // userId -> ImapFlow client
+async function getClient(userId) {
+  const c = gmailCreds(userId);
   if (!c) throw new Error("Gmail not configured");
-  if (imapClient && imapClient.usable) return imapClient;
+  const existing = imapClients.get(userId);
+  if (existing && existing.usable) return existing;
   const client = new ImapFlow({ host: "imap.gmail.com", port: 993, secure: true, auth: { user: c.user, pass: c.pass }, logger: false, emitLogs: false });
-  client.on("close", () => { if (imapClient === client) imapClient = null; });
-  client.on("error", () => { try { client.close(); } catch { /**/ } if (imapClient === client) imapClient = null; });
+  client.on("close", () => { if (imapClients.get(userId) === client) imapClients.delete(userId); });
+  client.on("error", () => { try { client.close(); } catch { /**/ } if (imapClients.get(userId) === client) imapClients.delete(userId); });
   await client.connect();
-  imapClient = client;
+  imapClients.set(userId, client);
   return client;
 }
-function resetClient() { try { imapClient?.close(); } catch { /**/ } imapClient = null; }
-async function withImap(fn) {
-  const client = await getClient();
+function resetClient(userId) {
+  const c = imapClients.get(userId);
+  try { c?.close(); } catch { /**/ }
+  imapClients.delete(userId);
+}
+async function withImap(userId, fn) {
+  const client = await getClient(userId);
   try { return await fn(client); }
-  catch (e) { resetClient(); throw e; } // drop a bad connection so the next call reconnects clean
+  catch (e) { resetClient(userId); throw e; } // drop a bad connection so the next call reconnects clean
 }
 
 const app = express();
@@ -48,6 +119,7 @@ const PORT = process.env.PORT || 47600;
 // Restrict to your ORBIT origins.
 app.use(cors({ origin: [/^https?:\/\/localhost(:\d+)?$/, /\.netlify\.app$/], credentials: false }));
 app.use(express.json());
+app.use(requireAuth);
 
 const isWin = platform() === "win32";
 
@@ -131,21 +203,21 @@ app.get("/", (_req, res) => {
 app.get("/ping", (_req, res) => res.json({ ok: true, agent: "orbit", version: "0.1.0" }));
 
 // ---- Gmail (read-only IMAP, app password) ----
-app.get("/gmail/status", (_req, res) => { const c = gmailCreds(); res.json({ ok: true, configured: !!c, user: c?.user || null }); });
+app.get("/gmail/status", (req, res) => { const c = gmailCreds(req.userId); res.json({ ok: true, configured: !!c, user: c?.user || null }); });
 
 app.post("/gmail/config", (req, res) => {
   const { user, pass } = req.body || {};
   if (!user || !pass) return res.status(400).json({ ok: false, error: "user and app password required" });
-  try { writeFileSync(GMAIL_CFG, JSON.stringify({ user, pass: String(pass).replace(/\s+/g, "") }), "utf8"); resetClient(); res.json({ ok: true }); }
+  try { saveGmailCreds(req.userId, user, String(pass).replace(/\s+/g, "")); resetClient(req.userId); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-app.delete("/gmail/config", (_req, res) => { try { if (existsSync(GMAIL_CFG)) unlinkSync(GMAIL_CFG); } catch { /**/ } resetClient(); res.json({ ok: true }); });
+app.delete("/gmail/config", (req, res) => { try { deleteGmailCreds(req.userId); } catch { /**/ } resetClient(req.userId); res.json({ ok: true }); });
 
 app.get("/gmail/list", async (req, res) => {
   try {
     const limit = Math.min(50, Number(req.query.limit) || 25);
-    const messages = await withImap(async (client) => {
+    const messages = await withImap(req.userId, async (client) => {
       const lock = await client.getMailboxLock("INBOX");
       try {
         const total = client.mailbox.exists;
@@ -173,7 +245,7 @@ app.get("/gmail/message", async (req, res) => {
   try {
     const uid = String(req.query.uid || "");
     if (!uid) return res.status(400).json({ ok: false, error: "uid required" });
-    const message = await withImap(async (client) => {
+    const message = await withImap(req.userId, async (client) => {
       const lock = await client.getMailboxLock("INBOX");
       try {
         const msg = await client.fetchOne(uid, { source: true }, { uid: true });
@@ -186,6 +258,7 @@ app.get("/gmail/message", async (req, res) => {
 });
 
 // List running Docker containers (for the dashboard "Containers up" stat).
+// Docker reflects the machine, not the caller — every authenticated user sees the same thing.
 app.get("/docker", (_req, res) => {
   exec('docker ps --format "{{.Names}}|{{.Image}}|{{.Status}}"', { timeout: 8000 }, (err, stdout) => {
     if (err) return res.json({ ok: true, available: false, containers: [] }); // docker not installed / not running
@@ -240,13 +313,21 @@ app.post("/docker/build", (req, res) => {
   });
 });
 
-// ---- PostgreSQL (via the local agent, using the `pg` driver) ----
-const PG_CFG = join(__dir, "pg-config.json");
-function pgServers() {
-  if (existsSync(PG_CFG)) { try { return JSON.parse(readFileSync(PG_CFG, "utf8")); } catch { return []; } }
-  return [];
+// ---- PostgreSQL (via the local agent, using the `pg` driver) — strictly one
+// server list per user, keyed by their ORBIT user id. No inheriting an old
+// shared list: every account adds its own servers here.
+function pgAll() {
+  const cfg = readJson(PG_CFG, {});
+  return cfg && typeof cfg === "object" && !Array.isArray(cfg) ? cfg : {};
 }
-function savePgServers(list) { writeFileSync(PG_CFG, JSON.stringify(list, null, 2), "utf8"); }
+function pgServersFor(userId) {
+  return pgAll()[userId] || [];
+}
+function savePgServersFor(userId, list) {
+  const all = pgAll();
+  all[userId] = list;
+  writeFileSync(PG_CFG, JSON.stringify(all, null, 2), "utf8");
+}
 const pubServer = (s) => ({ id: s.id, name: s.name, host: s.host, port: s.port, user: s.user, database: s.database || null, ssl: !!s.ssl });
 
 let _pg = null;
@@ -268,20 +349,20 @@ async function pgConnect(server, database) {
   return client;
 }
 
-app.get("/pg/servers", (_req, res) => res.json({ ok: true, servers: pgServers().map(pubServer) }));
+app.get("/pg/servers", (req, res) => res.json({ ok: true, servers: pgServersFor(req.userId).map(pubServer) }));
 
 app.post("/pg/servers", (req, res) => {
   const { name, host, port, user, password, database, ssl } = req.body || {};
   if (!host || !user) return res.status(400).json({ ok: false, error: "host and user are required" });
-  const list = pgServers();
+  const list = pgServersFor(req.userId);
   const server = { id: "pg_" + Date.now().toString(36), name: name || host, host, port: Number(port) || 5432, user, password: password || "", database: database || "", ssl: !!ssl };
   list.push(server);
-  try { savePgServers(list); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+  try { savePgServersFor(req.userId, list); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
   res.json({ ok: true, server: pubServer(server) });
 });
 
 app.delete("/pg/servers/:id", (req, res) => {
-  try { savePgServers(pgServers().filter((s) => s.id !== req.params.id)); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+  try { savePgServersFor(req.userId, pgServersFor(req.userId).filter((s) => s.id !== req.params.id)); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
   res.json({ ok: true });
 });
 
@@ -296,7 +377,7 @@ app.post("/pg/test", async (req, res) => {
 });
 
 app.get("/pg/databases", async (req, res) => {
-  const server = pgServers().find((s) => s.id === req.query.server);
+  const server = pgServersFor(req.userId).find((s) => s.id === req.query.server);
   if (!server) return res.status(404).json({ ok: false, error: "server not found" });
   let client;
   try {
@@ -308,7 +389,7 @@ app.get("/pg/databases", async (req, res) => {
 });
 
 app.get("/pg/tables", async (req, res) => {
-  const server = pgServers().find((s) => s.id === req.query.server);
+  const server = pgServersFor(req.userId).find((s) => s.id === req.query.server);
   if (!server) return res.status(404).json({ ok: false, error: "server not found" });
   let client;
   try {
@@ -326,7 +407,7 @@ app.get("/pg/tables", async (req, res) => {
 
 app.post("/pg/query", async (req, res) => {
   const { server: sid, database, sql } = req.body || {};
-  const server = pgServers().find((s) => s.id === sid);
+  const server = pgServersFor(req.userId).find((s) => s.id === sid);
   if (!server) return res.status(404).json({ ok: false, error: "server not found" });
   if (!sql || !String(sql).trim()) return res.status(400).json({ ok: false, error: "sql required" });
   let client;
@@ -343,7 +424,7 @@ app.post("/pg/query", async (req, res) => {
 });
 
 // ---- Start Work: git pull, port checks, dev servers ----
-const devServers = new Map(); // pid -> { pid, port, path, command, project, startedAt }
+const devServers = new Map(); // pid -> { pid, port, path, command, project, startedAt, userId }
 const clean = (p) => String(p).trim().replace(/^["']|["']$/g, "");
 
 function portInUse(port) {
@@ -405,7 +486,7 @@ app.get("/port/check", async (req, res) => {
   const port = Number(req.query.port);
   if (!port) return res.status(400).json({ ok: false, error: "port required" });
   const inUse = await portInUse(port);
-  const owned = [...devServers.values()].find((d) => d.port === port);
+  const owned = [...devServers.values()].find((d) => d.port === port && d.userId === req.userId);
   res.json({ ok: true, inUse, ownedBy: owned ? owned.project : null });
 });
 
@@ -416,13 +497,13 @@ app.post("/dev/start", async (req, res) => {
     const inUse = await portInUse(Number(port));
     if (inUse) {
       const owned = [...devServers.values()].find((d) => d.port === Number(port));
-      return res.status(409).json({ ok: false, error: `port ${port} already in use`, ownedBy: owned ? owned.project : null });
+      return res.status(409).json({ ok: false, error: `port ${port} already in use`, ownedBy: owned && owned.userId === req.userId ? owned.project : null });
     }
   }
   try {
     const child = spawn(command, { cwd: clean(path), shell: true, detached: true, stdio: "ignore" });
     child.unref();
-    const rec = { pid: child.pid, port: port ? Number(port) : null, path: clean(path), command, project: project || null, startedAt: Date.now() };
+    const rec = { pid: child.pid, port: port ? Number(port) : null, path: clean(path), command, project: project || null, startedAt: Date.now(), userId: req.userId };
     devServers.set(child.pid, rec);
     child.on("exit", () => { devServers.delete(child.pid); broadcast("dev:changed", { pid: child.pid, up: false }); });
     broadcast("dev:changed", { pid: child.pid, up: true, project: rec.project, port: rec.port });
@@ -430,11 +511,13 @@ app.post("/dev/start", async (req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-app.get("/dev/running", (_req, res) => res.json({ ok: true, servers: [...devServers.values()] }));
+app.get("/dev/running", (req, res) => res.json({ ok: true, servers: [...devServers.values()].filter((d) => d.userId === req.userId) }));
 
 app.post("/dev/stop", (req, res) => {
   const pid = Number(req.body?.pid);
   if (!pid) return res.status(400).json({ ok: false, error: "pid required" });
+  const rec = devServers.get(pid);
+  if (!rec || rec.userId !== req.userId) return res.status(404).json({ ok: false, error: "not found" });
   try {
     if (isWin) exec(`taskkill /PID ${pid} /T /F`);
     else { try { process.kill(-pid); } catch { process.kill(pid); } }
@@ -500,7 +583,7 @@ app.post("/pick", async (req, res) => {
 app.post("/macro", (req, res) => {
   const { name } = req.body || {};
   // Extend: git pull, docker compose up, dev server, etc.
-  console.log(`[agent] macro: ${name}`);
+  console.log(`[agent] macro: ${name} (user ${req.userId})`);
   res.json({ ok: true, ran: name });
 });
 
@@ -562,7 +645,7 @@ app.post("/docker/prune", (_req, res) => {
 
 // ---- Postgres health ping ----
 app.get("/pg/health", async (req, res) => {
-  const server = pgServers().find((s) => s.id === req.query.server);
+  const server = pgServersFor(req.userId).find((s) => s.id === req.query.server);
   if (!server) return res.status(404).json({ ok: false, error: "server not found" });
   let client;
   try {
@@ -582,16 +665,16 @@ app.get("/ports/map", async (req, res) => {
   const out = [];
   for (const p of ports) {
     const inUse = await portInUse(p);
-    const owned = [...devServers.values()].find((d) => d.port === p);
+    const owned = [...devServers.values()].find((d) => d.port === p && d.userId === req.userId);
     out.push({ port: p, inUse, ownedBy: owned ? owned.project : null, orbit: !!owned });
   }
   res.json({ ok: true, ports: out });
 });
 
 // ---- Unread mail count ----
-app.get("/gmail/unread", async (_req, res) => {
+app.get("/gmail/unread", async (req, res) => {
   try {
-    const unread = await withImap(async (client) => {
+    const unread = await withImap(req.userId, async (client) => {
       const lock = await client.getMailboxLock("INBOX");
       try { const r = await client.status("INBOX", { unseen: true }); return r.unseen || 0; }
       finally { lock.release(); }
@@ -614,7 +697,16 @@ const server = app.listen(PORT, () => console.log(`ORBIT agent listening on http
   try {
     const { WebSocketServer } = await import("ws");
     wss = new WebSocketServer({ server, path: "/events" });
-    wss.on("connection", (c) => { try { c.send(JSON.stringify({ event: "hello", payload: { agent: "orbit" }, at: Date.now() })); } catch { /**/ } });
+    wss.on("connection", (c, req) => {
+      try {
+        const token = new URL(req.url, "http://agent").searchParams.get("token") || "";
+        verifyToken(token);
+      } catch {
+        c.close(4001, "unauthorized");
+        return;
+      }
+      try { c.send(JSON.stringify({ event: "hello", payload: { agent: "orbit" }, at: Date.now() })); } catch { /**/ }
+    });
     console.log(`[agent] websocket events on ws://localhost:${PORT}/events`);
   } catch {
     console.log("[agent] `ws` not installed — run `npm install` in agent/ for live push (polling still works)");

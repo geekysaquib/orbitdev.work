@@ -100,9 +100,9 @@ export default function Sprints() {
   );
 
   return (
-    <main className="page" style={{ padding: 0, display: "flex", overflow: "hidden" }}>
+    <main className="page split-shell" style={{ padding: 0, overflow: "hidden" }}>
       {/* projects list */}
-      <div style={{ width: 288, borderRight: "1px solid var(--border)", overflowY: "auto", padding: "24px 16px", flexShrink: 0 }}>
+      <div className="split-side" style={{ width: 288, borderRight: "1px solid var(--border)", overflowY: "auto", padding: "24px 16px", flexShrink: 0 }}>
         <div className="rowhead"><div className="h2">Sprints</div>
           <span className="badge" style={{ color: "var(--muted)", background: "var(--raised)", border: "1px solid var(--border)" }}>{projects.length}</span></div>
         <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 6 }}>Your Zoho Sprints projects</div>

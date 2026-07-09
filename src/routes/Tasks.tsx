@@ -5,6 +5,7 @@ import { useTable } from "../hooks/useTable";
 import { useToast } from "../context/Toast";
 import { useTimezone, tzDate } from "../context/Timezone";
 import { supabase } from "../lib/supabase";
+import { getUser } from "../lib/auth";
 import type { Task, TaskStatus, Priority, Project } from "../lib/types";
 
 const COLS: [TaskStatus, string, string][] = [
@@ -42,8 +43,8 @@ export default function Tasks() {
     await insert({ title: t, status: "todo", priority: prio, project_id: projFilter === "all" ? null : projFilter } as Partial<Task>);
     setTitle("");
     toast(`Task added · ${t}`);
-    const { data: u } = await supabase.auth.getUser();
-    if (u.user) await supabase.from("notifications").insert({ user_id: u.user.id, kind: "task", title: "New task added", body: t });
+    const u = getUser();
+    if (u) await supabase.from("notifications").insert({ user_id: u.id, kind: "task", title: "New task added", body: t });
   }
   function drop(status: TaskStatus) {
     if (dragId) {

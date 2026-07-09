@@ -65,6 +65,7 @@ export default function Projects() {
           {query && <button className="bf-clear" onClick={() => setQuery("")} style={{ marginLeft: 4 }}>Clear</button>}
         </div>
       </div>
+      <div className="tbl-wrap">
       <table className="tbl">
         <thead><tr><th>Project</th><th>Stack</th><th>Status</th><th>Branch</th><th>Port</th><th></th></tr></thead>
         <tbody>
@@ -82,6 +83,7 @@ export default function Projects() {
           {list.length === 0 && <tr><td colSpan={6}><Empty icon="boxes" title={rows.length === 0 ? "No projects yet" : "Nothing matches this filter"} sub={rows.length === 0 ? "Add your first project to launch it in one click." : "Try a different filter."} mini /></td></tr>}
         </tbody>
       </table>
+      </div>
 
       {modal && (
         <div className="modal-bg">

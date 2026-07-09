@@ -52,6 +52,8 @@ kbd{font-family:var(--mono);font-size:11px}
 .page{flex:1;overflow-y:auto;padding:26px 28px 46px}
 .aside{width:336px;border-left:1px solid var(--border);background:var(--bg2);overflow-y:auto;padding:22px 18px 30px;flex-shrink:0}
 .viewport{flex:1;display:flex;min-height:0}
+.split-shell{display:flex;overflow:hidden}
+.split-side{flex-shrink:0}
 
 /* type */
 .h1{font-family:var(--display);font-size:25px;font-weight:700;letter-spacing:-.3px}
@@ -98,6 +100,8 @@ kbd{font-family:var(--mono);font-size:11px}
 .fchip.on{border-color:var(--blue);background:rgba(91,141,239,.1);color:var(--blue)}
 
 /* table */
+.tbl-wrap{width:100%;overflow-x:auto}
+.tbl-wrap .tbl{min-width:540px}
 .tbl{width:100%;border-collapse:collapse;margin-top:16px}
 .tbl th{text-align:left;font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);font-weight:500;padding:0 14px 10px}
 .tbl td{padding:13px 14px;border-top:1px solid var(--border-soft);font-size:13px;vertical-align:middle}
@@ -187,7 +191,7 @@ kbd{font-family:var(--mono);font-size:11px}
 
 /* overlay + toast + modal */
 .overlay{position:fixed;inset:0;z-index:60;background:rgba(6,9,14,.86);backdrop-filter:blur(6px);display:grid;place-items:center;animation:fadeIn .3s both}
-.ig{width:470px}
+.ig{width:470px;max-width:94vw}
 .ig .head{display:flex;align-items:center;gap:12px;margin-bottom:22px}
 .ig .badge2{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:linear-gradient(140deg,var(--mint),var(--blue));box-shadow:0 0 30px -4px var(--mint);color:var(--on-accent)}
 .igstep{display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:10px;font-size:13.5px;border:1px solid transparent;transition:.2s}
@@ -195,7 +199,7 @@ kbd{font-family:var(--mono);font-size:11px}
 .igstep.wait{opacity:.4}
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:70;background:var(--raised2);border:1px solid var(--border);padding:11px 18px;border-radius:11px;font-size:13.5px;box-shadow:0 20px 50px -20px rgba(0,0,0,.9);display:flex;align-items:center;gap:9px;animation:up .25s both}
 .modal-bg{position:fixed;inset:0;z-index:65;background:rgba(6,9,14,.7);backdrop-filter:blur(4px);display:grid;place-items:center;animation:fadeIn .2s both}
-.modal{width:460px;background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:24px;animation:up .25s both}
+.modal{width:460px;max-width:94vw;background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:24px;animation:up .25s both}
 .modal h3{font-family:var(--display);font-size:18px;margin-bottom:4px}
 .fld{margin-top:14px}
 .fld label{font-size:12px;color:var(--muted);display:block;margin-bottom:6px}
@@ -488,6 +492,15 @@ kbd{font-family:var(--mono);font-size:11px}
 .authx-note{background:rgba(55,223,160,.09);border:1px solid rgba(55,223,160,.28);color:var(--mint)}
 .authx-switch{margin-top:20px;text-align:center;font-size:13px;color:var(--muted)}
 .authx-switch button{color:var(--mint);font-weight:600}
+.authx-forgot{font-size:11.5px;color:var(--dim);font-weight:500}
+.authx-forgot:hover{color:var(--mint)}
+.authx-otp input{width:100%;height:56px;padding:0 14px;background:var(--bg);border:1px solid var(--border);border-radius:11px;color:var(--text);font-family:var(--mono);font-size:26px;letter-spacing:10px;text-align:center;outline:none;transition:.16s}
+.authx-otp input:focus{border-color:var(--mint);box-shadow:0 0 0 3px rgba(55,223,160,.14)}
+.authx-resend{margin-top:16px;text-align:center;font-size:12.5px;color:var(--dim)}
+.authx-resend button{color:var(--mint);font-weight:600}
+.authx-resend button:disabled{color:var(--dim);cursor:default}
+.authx-back{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted);margin-bottom:18px}
+.authx-back:hover{color:var(--text)}
 
 @media (max-width:900px){
   .authx{grid-template-columns:1fr;grid-template-rows:minmax(280px,38vh) 1fr;overflow-y:auto}
@@ -967,3 +980,68 @@ select.kf-input{padding-right:12px}
 .kf-copy:disabled{opacity:.35;cursor:default}
 .kf-copy.done{color:var(--mint)}
 .kf-hint{font-size:11.5px;color:var(--dim);line-height:1.45}
+
+/* ============================================================
+   MOBILE SHELL — rail becomes an off-canvas drawer, topbar
+   collapses to essentials, dense/two-pane layouts stack.
+   ============================================================ */
+.hamburger{display:none;width:36px;height:36px;border-radius:9px;border:1px solid var(--border);background:var(--raised);align-items:center;justify-content:center;color:var(--muted);flex-shrink:0}
+.hamburger:hover{color:var(--text);border-color:var(--dim)}
+.rail-backdrop{position:fixed;inset:0;z-index:90;background:rgba(6,9,14,.6);backdrop-filter:blur(2px);animation:fadeIn .15s both}
+
+@media(max-width:860px){
+  .hamburger{display:inline-flex}
+  .topbar{padding:0 14px;gap:10px}
+  .searchbar{display:none}
+  .pill-label{display:none}
+  .agent-wrap .pill{padding:0 9px;gap:6px}
+  .btn-label{display:none}
+  .btn-primary{padding:0 12px}
+  .tz-wrap{display:none}
+  .ver{display:none}
+
+  .rail{position:fixed;top:0;left:0;bottom:0;z-index:95;width:240px;transform:translateX(-100%);transition:transform .22s ease;padding:18px 14px 16px;align-items:stretch;gap:2px}
+  .rail.open{transform:translateX(0);box-shadow:20px 0 60px -20px rgba(0,0,0,.6)}
+  .rail .logo{align-self:flex-start}
+  .navbtn{width:100%;height:44px;justify-content:flex-start;gap:12px;padding:0 10px}
+  .navbtn .tip{position:static;opacity:1;pointer-events:auto;transform:none;background:none;border:none;padding:0;font-size:13.5px;color:inherit;white-space:nowrap}
+  .rail-foot{width:100%;align-items:stretch}
+  .rail-ver{align-self:flex-start}
+
+  /* topbar popovers anchor to their trigger via right:0, which isn't the
+     viewport edge on mobile — pin them to the viewport instead so they can't
+     spill off-screen regardless of where their trigger sits in the topbar */
+  .profile-menu,.agent-menu,.notif-menu,.tz-menu{position:fixed;top:66px;left:12px;right:12px;width:auto;max-width:none}
+  .pg-dbmenu{max-width:calc(100vw - 24px)}
+
+  .page{padding:18px 16px 32px}
+  .zoho-alert,.agent-alert{flex-wrap:wrap;padding:10px 14px}
+  .break-bar{flex-wrap:wrap;padding:10px 14px}
+  .break-bar-actions{width:100%;justify-content:flex-end}
+
+  .docs{grid-template-columns:1fr;gap:16px}
+  .docs-nav{position:static;flex-direction:row;overflow-x:auto;gap:6px;padding-bottom:4px}
+  .docs-nav a{flex-shrink:0}
+
+  .dk-build-grid{grid-template-columns:1fr}
+
+  .split-shell{flex-direction:column}
+  .split-side{width:100% !important;max-width:none !important;border-right:none !important;border-bottom:1px solid var(--border);max-height:38vh}
+  .pg-servers{width:100%;border-right:none;border-bottom:1px solid var(--border);max-height:36vh}
+  .mail-split{flex-direction:column}
+  .mail-listpane{width:100%;max-height:38vh;border-right:none;border-bottom:1px solid var(--border)}
+
+  .bv-hero{padding:20px 18px}
+}
+
+@media(max-width:640px){
+  .grid-stats{grid-template-columns:1fr}
+  .kanban{grid-template-columns:1fr}
+  .im-grid{grid-template-columns:1fr}
+  .ch-row{flex-wrap:wrap}
+  .ch-desc{max-width:none}
+}
+
+@media(max-width:480px){
+  .agent-wrap{display:none}
+}

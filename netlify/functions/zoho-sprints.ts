@@ -1,10 +1,11 @@
 import type { Handler, HandlerEvent } from "@netlify/functions";
 
 /**
- * Zoho SPRINTS proxy. Per-user credentials are read from the Supabase
- * `integrations` table (using the caller's JWT + RLS); if none are found it
- * falls back to ZOHO_* environment variables. This makes the tool multi-tenant
- * without code changes — each user stores their own keys in Settings.
+ * Zoho SPRINTS proxy. Credentials are read strictly from the caller's own row
+ * in the Supabase `integrations` table (via their JWT + RLS) — there is
+ * deliberately no environment-variable fallback. Each account must link its
+ * own Zoho keys in Settings; a signed-in user with nothing configured gets a
+ * "not configured" error, never another account's data.
  */
 
 interface Creds {
@@ -34,16 +35,16 @@ async function loadCreds(event: HandlerEvent): Promise<Partial<Creds>> {
 }
 
 function buildCfg(creds: Partial<Creds>): Cfg {
-  const dc = creds.dc || process.env.ZOHO_DC || "in";
+  const dc = creds.dc || "in";
   return {
     dc,
     ACCOUNTS: `https://accounts.zoho.${dc}`,
     API: `https://sprintsapi.zoho.${dc}/zsapi`,
-    clientId: creds.clientId || process.env.ZOHO_CLIENT_ID,
-    clientSecret: creds.clientSecret || process.env.ZOHO_CLIENT_SECRET,
-    refreshToken: creds.refreshToken || process.env.ZOHO_REFRESH_TOKEN,
-    teamId: creds.teamId || process.env.ZOHO_TEAM_ID,
-    projectId: creds.projectId || process.env.ZOHO_PROJECT_ID,
+    clientId: creds.clientId,
+    clientSecret: creds.clientSecret,
+    refreshToken: creds.refreshToken,
+    teamId: creds.teamId,
+    projectId: creds.projectId,
   };
 }
 

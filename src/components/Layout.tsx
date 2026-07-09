@@ -61,6 +61,7 @@ export function Layout() {
   const [tzQuery, setTzQuery] = useState("");
   const zones = useMemo(() => allZones(), []);
   const tzRef = useRef<HTMLDivElement>(null);
+  const [navOpen, setNavOpen] = useState(false);
   const [menu, setMenu] = useState(false);
   const [agentPop, setAgentPop] = useState(false);
   const [log, setLog] = useState(false);
@@ -123,10 +124,9 @@ export function Layout() {
     return () => document.removeEventListener("mousedown", h);
   }, []);
 
-  const name = (user?.user_metadata?.full_name as string | undefined) || user?.email?.split("@")[0] || "there";
+  const name = user?.full_name || user?.email?.split("@")[0] || "there";
   const initials = name.split(" ").map((s) => s[0]).slice(0, 2).join("").toUpperCase();
-  const verified = !!(user as { email_confirmed_at?: string; confirmed_at?: string } | null)?.email_confirmed_at
-    || !!(user as { confirmed_at?: string } | null)?.confirmed_at;
+  const verified = !!user?.email_verified;
 
   const pillClass = status === "online" ? "pill live" : status === "disconnected" ? "pill warn" : "pill";
   const pillLabel = status === "online" ? "Agent connected" : status === "disconnected" ? "Agent disconnected" : "Agent offline";
@@ -143,10 +143,10 @@ export function Layout() {
 
   return (
     <div className="app">
-      <nav className="rail">
-        <NavLink to="/app" className="logo" style={{ display: "grid", placeItems: "center" }}><Icon name="orbit" size={26} /></NavLink>
+      <nav className={"rail" + (navOpen ? " open" : "")}>
+        <NavLink to="/app" className="logo" style={{ display: "grid", placeItems: "center" }} onClick={() => setNavOpen(false)}><Icon name="orbit" size={26} /></NavLink>
         {NAV.map((n) => (
-          <NavLink key={n.to} to={n.to} end={n.end}
+          <NavLink key={n.to} to={n.to} end={n.end} onClick={() => setNavOpen(false)}
             className={({ isActive }) => "navbtn" + (isActive ? " on" : "")}>
             <Icon name={n.icon} size={20} />
             {n.to === "/notifications" && unread > 0 && <span className="dotbadge" />}
@@ -155,7 +155,7 @@ export function Layout() {
         ))}
         <div className="rail-foot">
           {NAV_BOTTOM.map((n) => (
-            <NavLink key={n.to} to={n.to}
+            <NavLink key={n.to} to={n.to} onClick={() => setNavOpen(false)}
               className={({ isActive }) => "navbtn" + (isActive ? " on" : "")}>
               <Icon name={n.icon} size={20} />
               <span className="tip">{n.label}</span>
@@ -165,9 +165,11 @@ export function Layout() {
           <button className="rail-ver" onClick={() => setLog(true)} title="What's new">v0.1</button>
         </div>
       </nav>
+      {navOpen && <div className="rail-backdrop" onClick={() => setNavOpen(false)} />}
 
       <div className="shell">
         <header className="topbar">
+          <button className="hamburger" onClick={() => setNavOpen((v) => !v)} aria-label="Open navigation"><Icon name="menu" size={20} /></button>
           <div style={{ display: "flex", alignItems: "baseline", gap: 9 }}>
             <span className="wordmark">ORBIT</span><span className="ver">v0.1</span>
           </div>
@@ -176,7 +178,7 @@ export function Layout() {
 
           <div className="agent-wrap" ref={agentRef}>
             <button className={pillClass} onClick={onPill} title={status === "online" ? "Agent connected — click to disconnect" : status === "disconnected" ? "Disconnected — click to reconnect" : "Agent offline"}>
-              <Icon name={pillIcon} size={15} />{pillLabel}
+              <Icon name={pillIcon} size={15} /><span className="pill-label">{pillLabel}</span>
               <span className={"dotled" + (status === "online" ? "" : status === "disconnected" ? " warn" : "")} />
             </button>
             {agentPop && status === "online" && (
@@ -200,7 +202,7 @@ export function Layout() {
           </div>
 
           <button className="btn-primary" onClick={() => setStartWork(true)}>
-            <Icon name="zap" size={16} fill /> Start Work
+            <Icon name="zap" size={16} fill /><span className="btn-label">Start Work</span>
           </button>
           <div className="tz-wrap" ref={tzRef}>
             <button className="clock clock-btn" title="Change timezone" onClick={() => { setTzOpen((v) => !v); setTzQuery(""); }}>
@@ -326,7 +328,7 @@ export function Layout() {
 
       {log && (
         <div className="modal-bg">
-          <div className="modal" style={{ width: 480 }}>
+          <div className="modal" style={{ width: 480, maxWidth: "94vw" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <h3 style={{ display: "flex", alignItems: "center", gap: 9 }}><span style={{ color: "var(--mint)" }}><Icon name="orbit" size={18} /></span>What's new</h3>
               <button className="iconbtn" onClick={() => setLog(false)}><Icon name="x" size={16} /></button>

@@ -106,7 +106,7 @@ export default function Postgres() {
   );
 
   return (
-    <main className="page" style={{ padding: 0, display: "flex", overflow: "hidden" }}>
+    <main className="page split-shell" style={{ padding: 0, overflow: "hidden" }}>
       {/* servers */}
       <div className="pg-servers">
         <div className="rowhead">

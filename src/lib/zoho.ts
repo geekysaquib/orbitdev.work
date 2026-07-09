@@ -28,14 +28,12 @@ export interface Board { project: string; columns: BoardColumn[]; sprints: Board
 export interface Attachment { name: string; ext?: string; size?: number; owner?: string; uploaded?: number; contentType?: string; thumb?: string; large?: string; previewUrl?: string; downloadUrl?: string; }
 export interface ItemDetail { item: ZohoItem | null; attachments: Attachment[]; }
 
-import { supabase } from "./supabase";
+import { authHeader as authHdr } from "./auth";
 
 const fn = "/.netlify/functions/zoho-sprints";
 
 async function authHeader(): Promise<Record<string, string>> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  return authHdr();
 }
 
 async function get<T>(qs = ""): Promise<T> {

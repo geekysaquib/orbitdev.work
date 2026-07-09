@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { getUser } from "./auth";
 
 /**
  * Chore history for breaks. Requires:
@@ -31,10 +32,10 @@ export async function saveBreakLog(input: {
   startedAt: number; seconds: number; beverage: string; rows: BreakLogRow[]; summary: BreakSummary;
 }): Promise<void> {
   try {
-    const { data: u } = await supabase.auth.getUser();
-    if (!u.user) return;
+    const u = getUser();
+    if (!u) return;
     await supabase.from("break_logs").insert({
-      user_id: u.user.id,
+      user_id: u.id,
       started_at: new Date(input.startedAt).toISOString(),
       ended_at: new Date().toISOString(),
       seconds: input.seconds,
@@ -56,8 +57,8 @@ export async function fetchBreakLogs(limit = 20): Promise<BreakLog[]> {
 /** Push a notification so a warning found mid-break outlives the break screen. */
 export async function notify(kind: string, title: string, body?: string): Promise<void> {
   try {
-    const { data: u } = await supabase.auth.getUser();
-    if (!u.user) return;
-    await supabase.from("notifications").insert({ user_id: u.user.id, kind, title, body: body ?? null, read: false } as never);
+    const u = getUser();
+    if (!u) return;
+    await supabase.from("notifications").insert({ user_id: u.id, kind, title, body: body ?? null, read: false } as never);
   } catch { /* noop */ }
 }

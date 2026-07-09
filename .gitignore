@@ -4,3 +4,4 @@ dist
 .env.local
 .netlify
 *.log
+netlify/functions/mail-config.json

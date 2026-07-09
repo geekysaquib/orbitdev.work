@@ -7,6 +7,8 @@ import { TimezoneProvider } from "./context/Timezone";
 import { BreakProvider } from "./context/Break";
 import { Layout } from "./components/Layout";
 import Login from "./routes/Login";
+import VerifyEmail from "./routes/VerifyEmail";
+import ForgotPassword from "./routes/ForgotPassword";
 import Landing from "./routes/Landing";
 import Dashboard from "./routes/Dashboard";
 import Projects from "./routes/Projects";
@@ -44,6 +46,8 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Landing />} />
             <Route path="/login" element={<Login />} />
+            <Route path="/verify" element={<VerifyEmail />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route element={<Guard><Layout /></Guard>}>
               <Route path="/app" element={<Dashboard />} />
               <Route path="/projects" element={<Projects />} />

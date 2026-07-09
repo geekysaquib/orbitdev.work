@@ -4,7 +4,13 @@
  * user's machine (see /agent) exposes an endpoint that ORBIT calls.
  * The endpoint URL is runtime-configurable from Settings (persisted locally)
  * and falls back to VITE_AGENT_URL, then to http://localhost:47600.
+ *
+ * Every call (besides /ping) carries the caller's ORBIT session token — the
+ * agent verifies it and scopes Postgres servers, Gmail config, and dev-server
+ * tracking to that user id. See agent/server.mjs.
  */
+import { authHeader, getToken } from "./auth";
+
 const DEFAULT_URL = "http://localhost:47600";
 const KEY = "orbit.agentUrl";
 
@@ -23,7 +29,7 @@ export function setAgentUrl(url: string): void {
 async function call(path: string, body?: unknown): Promise<Response> {
   return fetch(getAgentUrl() + path, {
     method: body ? "POST" : "GET",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeader() },
     body: body ? JSON.stringify(body) : undefined,
   });
 }
@@ -128,7 +134,7 @@ export async function gitPull(path: string): Promise<PullResult> {
 }
 export async function checkPort(port: number): Promise<{ ok: boolean; inUse: boolean; ownedBy: string | null; error?: string }> {
   try {
-    const r = await fetch(`${getAgentUrl()}/port/check?port=${port}`);
+    const r = await fetch(`${getAgentUrl()}/port/check?port=${port}`, { headers: authHeader() });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) return { ok: false, inUse: false, ownedBy: null, error: (j as { error?: string }).error };
     return { ok: true, inUse: !!(j as { inUse?: boolean }).inUse, ownedBy: (j as { ownedBy?: string | null }).ownedBy ?? null };
@@ -164,7 +170,7 @@ export async function gmailConfigure(user: string, pass: string): Promise<{ ok: 
   catch { return { ok: false, error: "agent offline" }; }
 }
 export async function gmailDisconnect(): Promise<void> {
-  try { await fetch(getAgentUrl() + "/gmail/config", { method: "DELETE" }); } catch { /**/ }
+  try { await fetch(getAgentUrl() + "/gmail/config", { method: "DELETE", headers: authHeader() }); } catch { /**/ }
 }
 export async function gmailList(limit = 25): Promise<{ ok: boolean; messages: GmailMsg[]; error?: string }> {
   try { const r = await call(`/gmail/list?limit=${limit}`); const j = await r.json().catch(() => ({})); return r.ok ? { ok: true, messages: j.messages ?? [] } : { ok: false, messages: [], error: (j as { error?: string }).error }; }
@@ -208,7 +214,7 @@ export async function dockerPrune(): Promise<{ ok: boolean; output?: string; err
 export interface PortInfo { port: number; inUse: boolean; ownedBy: string | null; orbit: boolean; }
 export async function portsMap(ports: number[]): Promise<PortInfo[]> {
   if (!ports.length) return [];
-  try { const r = await fetch(`${getAgentUrl()}/ports/map?ports=${ports.join(",")}`); const j = await r.json().catch(() => ({})); return (j.ports ?? []) as PortInfo[]; }
+  try { const r = await fetch(`${getAgentUrl()}/ports/map?ports=${ports.join(",")}`, { headers: authHeader() }); const j = await r.json().catch(() => ({})); return (j.ports ?? []) as PortInfo[]; }
   catch { return []; }
 }
 export async function gmailUnread(): Promise<{ ok: boolean; unread: number }> {
@@ -223,8 +229,10 @@ export function agentEvents(onEvent: (event: string) => void): () => void {
   let retry: ReturnType<typeof setTimeout>;
   const connect = () => {
     if (closed) return;
+    const token = getToken();
+    if (!token) { retry = setTimeout(connect, 5000); return; } // not signed in yet — try again shortly
     try {
-      ws = new WebSocket(getAgentUrl().replace(/^http/, "ws") + "/events");
+      ws = new WebSocket(`${getAgentUrl().replace(/^http/, "ws")}/events?token=${encodeURIComponent(token)}`);
       ws.onmessage = (m) => { try { const d = JSON.parse(m.data as string); if (d.event) onEvent(d.event); } catch { /* noop */ } };
       ws.onclose = () => { if (!closed) retry = setTimeout(connect, 5000); };
       ws.onerror = () => { try { ws?.close(); } catch { /* noop */ } };

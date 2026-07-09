@@ -1,2 +1,7 @@
 # Local Netlify folder
 .netlify
+
+# Per-machine secrets — never commit these
+gmail-config.json
+pg-config.json
+agent-config.json

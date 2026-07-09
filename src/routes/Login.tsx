@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { Icon } from "../lib/icons";
 import { useAuth } from "../context/AuthContext";
 
@@ -13,12 +13,13 @@ const RINGS = [
 export default function Login() {
   const { signIn, signUp } = useAuth();
   const nav = useNavigate();
+  const location = useLocation();
   const [mode, setMode] = useState<"in" | "up">("in");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>((location.state as { note?: string } | null)?.note ?? null);
   const [busy, setBusy] = useState(false);
 
   const stars = useMemo(() => Array.from({ length: 42 }, () => ({
@@ -29,10 +30,17 @@ export default function Login() {
   async function submit() {
     if (!email || !pw) return;
     setErr(null); setNote(null); setBusy(true);
-    const res = mode === "in" ? await signIn(email, pw) : await signUp(email, pw, name);
+    if (mode === "up") {
+      const res = await signUp(email, pw, name);
+      setBusy(false);
+      if (res.error) { setErr(res.error); return; }
+      nav(`/verify?email=${encodeURIComponent(email)}`);
+      return;
+    }
+    const res = await signIn(email, pw);
     setBusy(false);
+    if (res.verifyRequired) { nav(`/verify?email=${encodeURIComponent(email)}`); return; }
     if (res.error) { setErr(res.error); return; }
-    if (mode === "up") { setMode("in"); setNote("Account created — confirm via email, then sign in."); return; }
     nav("/app");
   }
 
@@ -93,7 +101,11 @@ export default function Login() {
           )}
           <div className="authx-fld"><label>Email</label>
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="you@example.com" /></div>
-          <div className="authx-fld"><label>Password</label>
+          <div className="authx-fld">
+            <label style={{ display: "flex", justifyContent: "space-between" }}>
+              Password
+              {mode === "in" && <button type="button" className="authx-forgot" onClick={() => nav("/forgot-password")}>Forgot password?</button>}
+            </label>
             <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="••••••••" /></div>
 
           {err && <div className="authx-err"><Icon name="plug" size={13} />{err}</div>}
