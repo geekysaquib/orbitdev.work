@@ -117,7 +117,14 @@ const app = express();
 const PORT = process.env.PORT || 47600;
 
 // Restrict to your ORBIT origins.
-app.use(cors({ origin: [/^https?:\/\/localhost(:\d+)?$/, /\.netlify\.app$/], credentials: false }));
+app.use(cors({
+  origin: [
+    /^https?:\/\/localhost(:\d+)?$/,
+    /\.netlify\.app$/,
+    "https://orbitdev.work"
+  ],
+  credentials: false
+}));
 app.use(express.json());
 app.use(requireAuth);
 
