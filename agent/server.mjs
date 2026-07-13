@@ -25,9 +25,29 @@ import { dirname, join } from "node:path";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 
-const __dir = dirname(fileURLToPath(import.meta.url));
+const sea = process.getBuiltinModule?.("node:sea");
+const isPackaged = !!sea?.isSea();
+
+// The packaged .exe should feel like an app, not a script: on Windows, the
+// first launch is a normal (visible) console process — immediately respawn a
+// second, fully hidden copy of itself (CREATE_NO_WINDOW) with a flag so it
+// doesn't do this again, then exit. The hidden copy does the actual work
+// below and opens the status page in the browser once it's listening.
+if (isPackaged && process.platform === "win32" && !process.env.ORBIT_AGENT_HIDDEN) {
+  spawn(process.execPath, process.argv.slice(2), {
+    detached: true,
+    windowsHide: true,
+    stdio: "ignore",
+    env: { ...process.env, ORBIT_AGENT_HIDDEN: "1" },
+  }).unref();
+  process.exit(0);
+}
+
+// When bundled into a single-executable app (see build/build.mjs), import.meta.url
+// points inside the embedded blob, not a real path on disk — config files must
+// instead live next to the .exe the user actually launched.
+const __dir = isPackaged ? dirname(process.execPath) : dirname(fileURLToPath(import.meta.url));
 const GMAIL_CFG = join(__dir, "gmail-config.json");
-const PG_CFG = join(__dir, "pg-config.json");
 const AGENT_CFG = join(__dir, "agent-config.json");
 
 function readJson(path, fallback) {
@@ -36,16 +56,17 @@ function readJson(path, fallback) {
 }
 
 // ---- Auth: verify the same JWT netlify/functions/auth.ts issues ----
+// Hardcoded as the default so the packaged .exe works with zero setup — this is
+// Supabase's Legacy JWT Secret and does not rotate. Still overridable via env
+// var or agent-config.json for local dev against a different Supabase project.
+const DEFAULT_JWT_SECRET = "OumYPgsct1FfKyVhsCzAXJ6xgCt0lyxZDLD1qVLq1FmnCpuiJBcO7eKpQ2HPzTl8BxprGC/5inJLGFfaIhaniA==";
 function jwtSecret() {
   if (process.env.SUPABASE_JWT_SECRET) return process.env.SUPABASE_JWT_SECRET;
-  return readJson(AGENT_CFG, {}).jwtSecret || "";
+  const fromConfig = readJson(AGENT_CFG, {}).jwtSecret;
+  if (fromConfig) return fromConfig;
+  return DEFAULT_JWT_SECRET;
 }
 const JWT_SECRET = jwtSecret();
-if (!JWT_SECRET) {
-  console.warn("[agent] SUPABASE_JWT_SECRET not set (env or agent-config.json) — every authenticated request will fail with 401.");
-  console.warn("[agent] Copy agent-config.example.json -> agent-config.json and paste the same Legacy JWT Secret Netlify uses.");
-}
-
 function verifyToken(token) {
   const payload = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] });
   const userId = typeof payload === "object" ? payload.sub : null;
@@ -53,10 +74,9 @@ function verifyToken(token) {
   return userId;
 }
 
-const PUBLIC_PATHS = new Set(["/", "/ping"]);
+const PUBLIC_PATHS = new Set(["/", "/ping", "/health/public"]);
 function requireAuth(req, res, next) {
   if (PUBLIC_PATHS.has(req.path)) return next();
-  if (!JWT_SECRET) return res.status(500).json({ ok: false, error: "agent misconfigured — set SUPABASE_JWT_SECRET (see agent/README.md)" });
   const hdr = req.headers.authorization || "";
   const token = hdr.startsWith("Bearer ") ? hdr.slice(7) : "";
   if (!token) return res.status(401).json({ ok: false, error: "unauthorized — sign in to ORBIT first" });
@@ -133,7 +153,7 @@ const isWin = platform() === "win32";
 // Run a shell command STRING (so we control quoting ourselves — critical on
 // Windows where paths contain spaces and spawn(shell:true) joins args unquoted).
 function runShell(cmdString) {
-  try { spawn(cmdString, { detached: true, stdio: "ignore", shell: true }).unref(); return true; }
+  try { spawn(cmdString, { detached: true, stdio: "ignore", shell: true, windowsHide: true }).unref(); return true; }
   catch { return false; }
 }
 // Normalise a path for the current OS and wrap in quotes.
@@ -179,6 +199,12 @@ app.get("/", (_req, res) => {
   .sdot{width:9px;height:9px;border-radius:50%;background:#37DFA0;box-shadow:0 0 10px #37DFA0;animation:blink 1.6s infinite}
   .endpoint{font-family:'JetBrains Mono',monospace;font-size:12.5px;color:#8B92A0;background:#101216;border:1px solid #20242C;padding:8px 14px;border-radius:9px}
   .hint{font-size:12.5px;color:#565C68;max-width:340px;line-height:1.6}
+  .checks{display:flex;flex-direction:column;gap:8px;background:#101216;border:1px solid #20242C;border-radius:11px;padding:12px 16px;min-width:220px}
+  .check{display:flex;align-items:center;gap:9px;font-family:'JetBrains Mono',monospace;font-size:12px;color:#8B92A0}
+  .check .dot{width:7px;height:7px;border-radius:50%;background:#565C68;flex-shrink:0;transition:background .2s,box-shadow .2s}
+  .check .dot.up{background:#37DFA0;box-shadow:0 0 8px #37DFA0}
+  .check .dot.down{background:#E0607A;box-shadow:0 0 8px #E0607A}
+  .check .label{flex:1;text-align:left}
   @keyframes glow{0%,100%{opacity:.10;transform:scale(1)}50%{opacity:.22;transform:scale(1.09)}}
   @keyframes spin{to{transform:rotate(360deg)}}
   @keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
@@ -202,12 +228,44 @@ app.get("/", (_req, res) => {
     <h1>ORBIT</h1>
     <div class="status"><span class="sdot"></span>Agent is active</div>
     <div class="endpoint">${`http://localhost:${PORT}`}</div>
-    <div class="hint">This window can stay minimized. ORBIT connects to it automatically — keep it running to launch your IDEs and browse for project paths.</div>
+    <div class="checks">
+      <div class="check"><span class="dot" id="dot-docker"></span><span class="label">Docker</span><span id="txt-docker">checking…</span></div>
+      <div class="check"><span class="dot up"></span><span class="label">Agent</span><span>online</span></div>
+    </div>
+    <div class="hint">This window can stay minimized. ORBIT connects to it automatically — sign in to see live Postgres &amp; Gmail health in the app.</div>
   </div>
+  <script>
+    async function refreshHealth() {
+      try {
+        const r = await fetch('/health/public').then(r => r.json());
+        const dot = document.getElementById('dot-docker');
+        const txt = document.getElementById('txt-docker');
+        dot.className = 'dot ' + (r.docker?.running ? 'up' : 'down');
+        txt.textContent = r.docker?.running ? 'running' : 'not running';
+      } catch { /* agent still starting up */ }
+    }
+    refreshHealth();
+    setInterval(refreshHealth, 15000);
+
+    // Presence-only socket so the agent knows this tab is open — closing this
+    // tab (and every other ORBIT tab) is what lets the packaged agent auto-quit.
+    (function connectPresence() {
+      try {
+        const ws = new WebSocket(location.origin.replace(/^http/, 'ws') + '/presence');
+        ws.onclose = () => setTimeout(connectPresence, 3000);
+        ws.onerror = () => { try { ws.close(); } catch { /* noop */ } };
+      } catch { setTimeout(connectPresence, 3000); }
+    })();
+  </script>
 </body></html>`);
 });
 
 app.get("/ping", (_req, res) => res.json({ ok: true, agent: "orbit", version: "0.1.0" }));
+
+// Unauthenticated — Docker isn't scoped per user, so this is safe to expose
+// without a session token. Powers the standalone status page's live dot.
+// Postgres/Gmail health is per-user and only served from GET /health (auth required).
+app.get("/health/public", async (_req, res) => res.json({ ok: true, checkedAt: Date.now(), docker: await checkDocker() }));
 
 // ---- Gmail (read-only IMAP, app password) ----
 app.get("/gmail/status", (req, res) => { const c = gmailCreds(req.userId); res.json({ ok: true, configured: !!c, user: c?.user || null }); });
@@ -267,7 +325,7 @@ app.get("/gmail/message", async (req, res) => {
 // List running Docker containers (for the dashboard "Containers up" stat).
 // Docker reflects the machine, not the caller — every authenticated user sees the same thing.
 app.get("/docker", (_req, res) => {
-  exec('docker ps --format "{{.Names}}|{{.Image}}|{{.Status}}"', { timeout: 8000 }, (err, stdout) => {
+  exec('docker ps --format "{{.Names}}|{{.Image}}|{{.Status}}"', { timeout: 8000, windowsHide: true }, (err, stdout) => {
     if (err) return res.json({ ok: true, available: false, containers: [] }); // docker not installed / not running
     const containers = String(stdout).trim().split("\n").filter(Boolean).map((line) => {
       const [name, image, status] = line.split("|");
@@ -279,7 +337,7 @@ app.get("/docker", (_req, res) => {
 
 // List Docker images on the system.
 app.get("/docker/images", (_req, res) => {
-  exec('docker images --format "{{.Repository}}|{{.Tag}}|{{.ID}}|{{.Size}}|{{.CreatedSince}}"', { timeout: 10000 }, (err, stdout) => {
+  exec('docker images --format "{{.Repository}}|{{.Tag}}|{{.ID}}|{{.Size}}|{{.CreatedSince}}"', { timeout: 10000, windowsHide: true }, (err, stdout) => {
     if (err) return res.json({ ok: true, available: false, images: [] });
     const images = String(stdout).trim().split("\n").filter(Boolean).map((line) => {
       const [repository, tag, id, size, created] = line.split("|");
@@ -297,7 +355,7 @@ app.post("/docker/save", (req, res) => {
   const sep = isWin ? "\\" : "/";
   const cleanDir = String(dir).replace(/^["']|["']$/g, "");
   const outPath = `${cleanDir}${cleanDir.endsWith(sep) ? "" : sep}${safe}.tar`;
-  exec(`docker save -o "${outPath}" "${image}"`, { timeout: 120000 }, (err) => {
+  exec(`docker save -o "${outPath}" "${image}"`, { timeout: 120000, windowsHide: true }, (err) => {
     if (err) return res.status(500).json({ ok: false, error: err.message.slice(0, 200) });
     res.json({ ok: true, path: outPath });
   });
@@ -313,30 +371,18 @@ app.post("/docker/build", (req, res) => {
   const safeTag = String(tag).trim();
   if (!/^[a-z0-9][a-z0-9._/-]*(:[\w.-]+)?$/i.test(safeTag)) return res.status(400).json({ ok: false, error: "invalid image tag" });
   const dfArg = dockerfile ? ` -f "${clean(dockerfile)}"` : "";
-  exec(`docker build -t "${safeTag}"${dfArg} "${ctx}"`, { timeout: 900000, maxBuffer: 1024 * 1024 * 16 }, (err, stdout, stderr) => {
+  exec(`docker build -t "${safeTag}"${dfArg} "${ctx}"`, { timeout: 900000, maxBuffer: 1024 * 1024 * 16, windowsHide: true }, (err, stdout, stderr) => {
     if (err) return res.status(500).json({ ok: false, error: (stderr || err.message || "build failed").toString().slice(-500) });
     broadcast("docker:changed", { tag: safeTag });
     res.json({ ok: true, tag: safeTag, output: (stdout || "").toString().slice(-500) });
   });
 });
 
-// ---- PostgreSQL (via the local agent, using the `pg` driver) — strictly one
-// server list per user, keyed by their ORBIT user id. No inheriting an old
-// shared list: every account adds its own servers here.
-function pgAll() {
-  const cfg = readJson(PG_CFG, {});
-  return cfg && typeof cfg === "object" && !Array.isArray(cfg) ? cfg : {};
-}
-function pgServersFor(userId) {
-  return pgAll()[userId] || [];
-}
-function savePgServersFor(userId, list) {
-  const all = pgAll();
-  all[userId] = list;
-  writeFileSync(PG_CFG, JSON.stringify(all, null, 2), "utf8");
-}
-const pubServer = (s) => ({ id: s.id, name: s.name, host: s.host, port: s.port, user: s.user, database: s.database || null, ssl: !!s.ssl });
-
+// ---- PostgreSQL (via the local agent, using the `pg` driver) ----
+// The agent is stateless about servers — the saved list lives in Supabase
+// (`pg_servers`, RLS-scoped per user) and the browser hands over the
+// connection details it needs for each call. Nothing Postgres-related is
+// written to disk here anymore.
 let _pg = null;
 async function getPgModule() {
   if (_pg) return _pg;
@@ -356,22 +402,15 @@ async function pgConnect(server, database) {
   return client;
 }
 
-app.get("/pg/servers", (req, res) => res.json({ ok: true, servers: pgServersFor(req.userId).map(pubServer) }));
-
-app.post("/pg/servers", (req, res) => {
-  const { name, host, port, user, password, database, ssl } = req.body || {};
-  if (!host || !user) return res.status(400).json({ ok: false, error: "host and user are required" });
-  const list = pgServersFor(req.userId);
-  const server = { id: "pg_" + Date.now().toString(36), name: name || host, host, port: Number(port) || 5432, user, password: password || "", database: database || "", ssl: !!ssl };
-  list.push(server);
-  try { savePgServersFor(req.userId, list); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
-  res.json({ ok: true, server: pubServer(server) });
-});
-
-app.delete("/pg/servers/:id", (req, res) => {
-  try { savePgServersFor(req.userId, pgServersFor(req.userId).filter((s) => s.id !== req.params.id)); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
-  res.json({ ok: true });
-});
+// Every /pg/* route below takes the connection details inline in the request
+// body (`server: {host,port,user,password,ssl}`) — the agent looks nothing up
+// locally anymore. `req.body.server` is the caller's own Supabase-scoped row,
+// forwarded as-is; validate just enough to fail clearly, not to gatekeep.
+function readServer(body) {
+  const s = (body && body.server) || null;
+  if (!s || !s.host || !s.user) return null;
+  return s;
+}
 
 // Test a connection without saving.
 app.post("/pg/test", async (req, res) => {
@@ -383,9 +422,9 @@ app.post("/pg/test", async (req, res) => {
   finally { try { await client?.end(); } catch { /**/ } }
 });
 
-app.get("/pg/databases", async (req, res) => {
-  const server = pgServersFor(req.userId).find((s) => s.id === req.query.server);
-  if (!server) return res.status(404).json({ ok: false, error: "server not found" });
+app.post("/pg/databases", async (req, res) => {
+  const server = readServer(req.body);
+  if (!server) return res.status(400).json({ ok: false, error: "server connection details are required" });
   let client;
   try {
     client = await pgConnect(server, "postgres");
@@ -395,12 +434,12 @@ app.get("/pg/databases", async (req, res) => {
   finally { try { await client?.end(); } catch { /**/ } }
 });
 
-app.get("/pg/tables", async (req, res) => {
-  const server = pgServersFor(req.userId).find((s) => s.id === req.query.server);
-  if (!server) return res.status(404).json({ ok: false, error: "server not found" });
+app.post("/pg/tables", async (req, res) => {
+  const server = readServer(req.body);
+  if (!server) return res.status(400).json({ ok: false, error: "server connection details are required" });
   let client;
   try {
-    client = await pgConnect(server, req.query.database);
+    client = await pgConnect(server, req.body.database);
     const r = await client.query(
       `SELECT table_schema, table_name, table_type
        FROM information_schema.tables
@@ -412,10 +451,108 @@ app.get("/pg/tables", async (req, res) => {
   finally { try { await client?.end(); } catch { /**/ } }
 });
 
+// Full schema map for the ER diagram: every table's columns (with a compact
+// type label), primary keys, and foreign keys (composite-key aware, via
+// pg_constraint rather than information_schema so multi-column FKs come back
+// as one edge instead of one per column).
+function pgShortType(c) {
+  switch (c.data_type) {
+    case "character varying": return `varchar${c.character_maximum_length ? `(${c.character_maximum_length})` : ""}`;
+    case "character": return `char(${c.character_maximum_length || 1})`;
+    case "numeric": return `numeric${c.numeric_precision ? `(${c.numeric_precision}${c.numeric_scale ? `,${c.numeric_scale}` : ""})` : ""}`;
+    case "timestamp without time zone": return "timestamp";
+    case "timestamp with time zone": return "timestamptz";
+    case "time without time zone": return "time";
+    case "double precision": return "float8";
+    case "ARRAY": return `${(c.udt_name || "").replace(/^_/, "")}[]`;
+    case "USER-DEFINED": return c.udt_name;
+    default: return c.data_type;
+  }
+}
+app.post("/pg/schema", async (req, res) => {
+  const server = readServer(req.body);
+  if (!server) return res.status(400).json({ ok: false, error: "server connection details are required" });
+  let client;
+  try {
+    client = await pgConnect(server, req.body.database);
+
+    const colsQ = client.query(
+      `SELECT table_schema, table_name, column_name, data_type, udt_name, is_nullable, column_default,
+              character_maximum_length, numeric_precision, numeric_scale, ordinal_position
+       FROM information_schema.columns
+       WHERE table_schema NOT IN ('pg_catalog','information_schema')
+       ORDER BY table_schema, table_name, ordinal_position`
+    );
+    const tablesQ = client.query(
+      `SELECT table_schema, table_name, table_type
+       FROM information_schema.tables
+       WHERE table_schema NOT IN ('pg_catalog','information_schema')
+       ORDER BY table_schema, table_name`
+    );
+    const pkQ = client.query(
+      `SELECT tc.table_schema, tc.table_name, kcu.column_name
+       FROM information_schema.table_constraints tc
+       JOIN information_schema.key_column_usage kcu
+         ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+       WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema NOT IN ('pg_catalog','information_schema')
+       ORDER BY tc.table_schema, tc.table_name, kcu.ordinal_position`
+    );
+    // pg_constraint (not information_schema) so composite FKs collapse to a single edge.
+    const fkQ = client.query(
+      `SELECT con.conname AS constraint_name,
+              ns.nspname AS table_schema, tbl.relname AS table_name, att.attname AS column_name,
+              fns.nspname AS ref_schema, ftbl.relname AS ref_table, fatt.attname AS ref_column,
+              ord.ordinality AS position
+       FROM pg_constraint con
+       JOIN pg_class tbl ON tbl.oid = con.conrelid
+       JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+       JOIN pg_class ftbl ON ftbl.oid = con.confrelid
+       JOIN pg_namespace fns ON fns.oid = ftbl.relnamespace
+       JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS ord(attnum, ordinality) ON true
+       JOIN pg_attribute att ON att.attnum = ord.attnum AND att.attrelid = tbl.oid
+       JOIN pg_attribute fatt ON fatt.attnum = con.confkey[ord.ordinality] AND fatt.attrelid = ftbl.oid
+       WHERE con.contype = 'f' AND ns.nspname NOT IN ('pg_catalog','information_schema')
+       ORDER BY table_schema, table_name, constraint_name, ord.ordinality`
+    );
+
+    const [cols, tbls, pks, fks] = await Promise.all([colsQ, tablesQ, pkQ, fkQ]);
+
+    const pkSet = new Set(pks.rows.map((r) => `${r.table_schema}.${r.table_name}.${r.column_name}`));
+    const tableMap = new Map();
+    for (const t of tbls.rows) {
+      const key = `${t.table_schema}.${t.table_name}`;
+      tableMap.set(key, { schema: t.table_schema, name: t.table_name, type: t.table_type, columns: [], primaryKey: [] });
+    }
+    for (const c of cols.rows) {
+      const key = `${c.table_schema}.${c.table_name}`;
+      const t = tableMap.get(key);
+      if (!t) continue;
+      const isPk = pkSet.has(`${c.table_schema}.${c.table_name}.${c.column_name}`);
+      if (isPk) t.primaryKey.push(c.column_name);
+      t.columns.push({ name: c.column_name, type: pgShortType(c), nullable: c.is_nullable === "YES", default: c.column_default, isPrimaryKey: isPk });
+    }
+
+    const fkMap = new Map();
+    for (const r of fks.rows) {
+      const key = `${r.table_schema}.${r.table_name}.${r.constraint_name}`;
+      let fk = fkMap.get(key);
+      if (!fk) {
+        fk = { name: r.constraint_name, schema: r.table_schema, table: r.table_name, columns: [], refSchema: r.ref_schema, refTable: r.ref_table, refColumns: [] };
+        fkMap.set(key, fk);
+      }
+      fk.columns.push(r.column_name);
+      fk.refColumns.push(r.ref_column);
+    }
+
+    res.json({ ok: true, tables: [...tableMap.values()], foreignKeys: [...fkMap.values()] });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+  finally { try { await client?.end(); } catch { /**/ } }
+});
+
 app.post("/pg/query", async (req, res) => {
-  const { server: sid, database, sql } = req.body || {};
-  const server = pgServersFor(req.userId).find((s) => s.id === sid);
-  if (!server) return res.status(404).json({ ok: false, error: "server not found" });
+  const { database, sql } = req.body || {};
+  const server = readServer(req.body);
+  if (!server) return res.status(400).json({ ok: false, error: "server connection details are required" });
   if (!sql || !String(sql).trim()) return res.status(400).json({ ok: false, error: "sql required" });
   let client;
   const started = Date.now();
@@ -446,7 +583,7 @@ function portInUse(port) {
 const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "echo", GCM_INTERACTIVE: "never" };
 const git = (cwd, args, timeout = 90000) =>
   new Promise((resolve) => {
-    exec(`git ${args}`, { cwd, env: GIT_ENV, timeout, maxBuffer: 1024 * 1024 * 8 }, (err, stdout, stderr) =>
+    exec(`git ${args}`, { cwd, env: GIT_ENV, timeout, maxBuffer: 1024 * 1024 * 8, windowsHide: true }, (err, stdout, stderr) =>
       resolve({ ok: !err, out: String(stdout || "").trim(), err: String(stderr || err?.message || "").trim() })
     );
   });
@@ -508,7 +645,7 @@ app.post("/dev/start", async (req, res) => {
     }
   }
   try {
-    const child = spawn(command, { cwd: clean(path), shell: true, detached: true, stdio: "ignore" });
+    const child = spawn(command, { cwd: clean(path), shell: true, detached: true, stdio: "ignore", windowsHide: true });
     child.unref();
     const rec = { pid: child.pid, port: port ? Number(port) : null, path: clean(path), command, project: project || null, startedAt: Date.now(), userId: req.userId };
     devServers.set(child.pid, rec);
@@ -526,7 +663,7 @@ app.post("/dev/stop", (req, res) => {
   const rec = devServers.get(pid);
   if (!rec || rec.userId !== req.userId) return res.status(404).json({ ok: false, error: "not found" });
   try {
-    if (isWin) exec(`taskkill /PID ${pid} /T /F`);
+    if (isWin) exec(`taskkill /PID ${pid} /T /F`, { windowsHide: true });
     else { try { process.kill(-pid); } catch { process.kill(pid); } }
     devServers.delete(pid);
     broadcast("dev:changed", { pid, up: false });
@@ -574,7 +711,7 @@ function nativePick(type) {
     } else {
       cmd = "zenity"; args = type === "folder" ? ["--file-selection", "--directory"] : ["--file-selection"];
     }
-    execFile(cmd, args, { timeout: 120000 }, (err, stdout) => {
+    execFile(cmd, args, { timeout: 120000, windowsHide: true }, (err, stdout) => {
       if (err || !stdout) return resolve(null);
       resolve(stdout.toString().trim() || null);
     });
@@ -597,7 +734,7 @@ app.post("/macro", (req, res) => {
 // ---- npm chores: dependency drift + advisories (read-only) ----
 const npmRun = (cwd, args, timeout = 120000) =>
   new Promise((resolve) => {
-    exec(`npm ${args}`, { cwd, timeout, maxBuffer: 1024 * 1024 * 24, env: { ...process.env, NO_UPDATE_NOTIFIER: "1" } },
+    exec(`npm ${args}`, { cwd, timeout, maxBuffer: 1024 * 1024 * 24, env: { ...process.env, NO_UPDATE_NOTIFIER: "1" }, windowsHide: true },
       (err, stdout, stderr) => resolve({ err, out: String(stdout || ""), stderr: String(stderr || "") }));
   });
 
@@ -632,10 +769,10 @@ app.post("/npm/audit", async (req, res) => {
 
 // ---- Docker disk usage (read-only) + gated prune ----
 app.get("/docker/df", (_req, res) => {
-  exec('docker system df --format "{{json .}}"', { timeout: 15000 }, (err, stdout) => {
+  exec('docker system df --format "{{json .}}"', { timeout: 15000, windowsHide: true }, (err, stdout) => {
     if (err) return res.json({ ok: true, available: false, rows: [] });
     const rows = String(stdout).trim().split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-    exec("docker images -f dangling=true -q", { timeout: 10000 }, (e2, out2) => {
+    exec("docker images -f dangling=true -q", { timeout: 10000, windowsHide: true }, (e2, out2) => {
       const dangling = e2 ? 0 : String(out2).trim().split("\n").filter(Boolean).length;
       const reclaimable = rows.map((r) => r.Reclaimable || "").find((x) => /\d/.test(x)) || "0B";
       res.json({ ok: true, available: true, rows, dangling, reclaimable });
@@ -644,26 +781,57 @@ app.get("/docker/df", (_req, res) => {
 });
 // Destructive — never called automatically; the UI gates this behind a toggle.
 app.post("/docker/prune", (_req, res) => {
-  exec("docker system prune -f", { timeout: 120000, maxBuffer: 1024 * 1024 * 8 }, (err, stdout, stderr) => {
+  exec("docker system prune -f", { timeout: 120000, maxBuffer: 1024 * 1024 * 8, windowsHide: true }, (err, stdout, stderr) => {
     if (err) return res.status(500).json({ ok: false, error: (stderr || err.message).slice(-300) });
     res.json({ ok: true, output: String(stdout).trim().slice(-300) });
   });
 });
 
 // ---- Postgres health ping ----
-app.get("/pg/health", async (req, res) => {
-  const server = pgServersFor(req.userId).find((s) => s.id === req.query.server);
-  if (!server) return res.status(404).json({ ok: false, error: "server not found" });
+app.post("/pg/health", async (req, res) => {
+  const server = readServer(req.body);
+  if (!server) return res.status(400).json({ ok: false, error: "server connection details are required" });
   let client;
   try {
-    client = await pgConnect(server, req.query.database);
+    client = await pgConnect(server, req.body.database);
     const conns = await client.query("SELECT count(*)::int AS n FROM pg_stat_activity");
     const longest = await client.query(
       "SELECT COALESCE(EXTRACT(EPOCH FROM (now() - min(query_start))), 0)::int AS s FROM pg_stat_activity WHERE state = 'active' AND query NOT ILIKE '%pg_stat_activity%'");
     const size = await client.query("SELECT pg_size_pretty(pg_database_size(current_database())) AS size");
-    res.json({ ok: true, name: server.name, connections: conns.rows[0]?.n ?? 0, longestSec: longest.rows[0]?.s ?? 0, size: size.rows[0]?.size || "—" });
-  } catch (e) { res.status(200).json({ ok: false, name: server.name, error: e.message.slice(0, 160) }); }
+    res.json({ ok: true, connections: conns.rows[0]?.n ?? 0, longestSec: longest.rows[0]?.s ?? 0, size: size.rows[0]?.size || "—" });
+  } catch (e) { res.status(200).json({ ok: false, error: e.message.slice(0, 160) }); }
   finally { try { await client?.end(); } catch { /**/ } }
+});
+
+// ---- Routine checkup: is everything this user depends on actually reachable? ----
+function checkDocker() {
+  return new Promise((resolve) => {
+    exec('docker ps --format "{{.Names}}"', { timeout: 5000, windowsHide: true }, (err) => resolve({ ok: !err, running: !err }));
+  });
+}
+
+async function checkGmailHealth(userId) {
+  const creds = gmailCreds(userId);
+  if (!creds) return { configured: false, ok: true };
+  try {
+    await withImap(userId, async () => true);
+    return { configured: true, ok: true, user: creds.user };
+  } catch (e) {
+    return { configured: true, ok: false, user: creds.user, error: String(e.message || e).slice(0, 160) };
+  }
+}
+
+// The saved server list now lives in Supabase, not on this machine, so there's
+// nothing to proactively iterate here anymore — per-server health is an
+// on-demand POST /pg/health call instead (see pgHealth() client-side).
+async function runHealthCheck(userId) {
+  const [docker, gmail] = await Promise.all([checkDocker(), checkGmailHealth(userId)]);
+  return { ok: true, checkedAt: Date.now(), docker, gmail, postgres: [] };
+}
+
+app.get("/health", async (req, res) => {
+  try { res.json(await runHealthCheck(req.userId)); }
+  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 // ---- What's actually listening on the dev ports ----
@@ -697,25 +865,74 @@ function broadcast(event, payload = {}) {
   const msg = JSON.stringify({ event, payload, at: Date.now() });
   for (const c of wss.clients) { if (c.readyState === 1) { try { c.send(msg); } catch { /**/ } } }
 }
+function sendToUser(userId, event, payload = {}) {
+  if (!wss) return;
+  const msg = JSON.stringify({ event, payload, at: Date.now() });
+  for (const c of wss.clients) { if (c.readyState === 1 && c.userId === userId) { try { c.send(msg); } catch { /**/ } } }
+}
 
-const server = app.listen(PORT, () => console.log(`ORBIT agent listening on http://localhost:${PORT}`));
+// Routine checkup, run for every currently-connected user every 45s, pushed
+// over the websocket so a kept-open status page (or the ORBIT tab) reflects
+// Postgres/Gmail/Docker health without polling.
+setInterval(async () => {
+  if (!wss) return;
+  const userIds = new Set([...wss.clients].filter((c) => c.readyState === 1 && c.userId).map((c) => c.userId));
+  for (const userId of userIds) {
+    try { sendToUser(userId, "health:update", await runHealthCheck(userId)); } catch { /**/ }
+  }
+}, 45000);
+
+const server = app.listen(PORT, () => {
+  console.log(`ORBIT agent listening on http://localhost:${PORT}`);
+  if (isPackaged) openBrowser(PORT);
+});
 
 (async () => {
   try {
     const { WebSocketServer } = await import("ws");
-    wss = new WebSocketServer({ server, path: "/events" });
+    // No `path` filter: the authenticated ORBIT web app connects on /events, and
+    // the agent's own auto-opened status page (no user session to authenticate
+    // with) connects on /presence purely so its tab is counted below.
+    wss = new WebSocketServer({ server });
     wss.on("connection", (c, req) => {
+      const { pathname, searchParams } = new URL(req.url, "http://agent");
+      if (pathname === "/presence") return; // unauthenticated — presence-only, no push events
+      if (pathname !== "/events") { c.close(1008, "unknown path"); return; }
       try {
-        const token = new URL(req.url, "http://agent").searchParams.get("token") || "";
-        verifyToken(token);
+        c.userId = verifyToken(searchParams.get("token") || "");
       } catch {
         c.close(4001, "unauthorized");
         return;
       }
       try { c.send(JSON.stringify({ event: "hello", payload: { agent: "orbit" }, at: Date.now() })); } catch { /**/ }
+      runHealthCheck(c.userId).then((h) => { try { c.send(JSON.stringify({ event: "health:update", payload: h, at: Date.now() })); } catch { /**/ } }).catch(() => {});
     });
     console.log(`[agent] websocket events on ws://localhost:${PORT}/events`);
   } catch {
     console.log("[agent] `ws` not installed — run `npm install` in agent/ for live push (polling still works)");
   }
 })();
+
+// ---- Auto-quit the packaged background agent once every ORBIT tab is closed ----
+// The web app holds one /events WebSocket open for as long as any tab is open —
+// in-app navigation (React Router) doesn't touch it, only a real tab close,
+// reload, or browser quit does. A reload briefly drops to zero clients too, so
+// we wait out a grace period rather than exiting on the first empty check.
+// Only for the double-clickable .exe: `node server.mjs` in a dev terminal
+// should keep running even with no tab open.
+if (isPackaged) {
+  const AUTO_QUIT_GRACE_MS = 25000;
+  let everConnected = false;
+  let emptySince = null;
+  setInterval(() => {
+    if (!wss) return;
+    const openClients = [...wss.clients].filter((c) => c.readyState === 1).length;
+    if (openClients > 0) { everConnected = true; emptySince = null; return; }
+    if (!everConnected) return; // no tab has connected since launch yet — don't quit before anyone's opened one
+    if (emptySince === null) { emptySince = Date.now(); return; }
+    if (Date.now() - emptySince >= AUTO_QUIT_GRACE_MS) {
+      console.log(`[agent] no ORBIT tab connected for ${Math.round(AUTO_QUIT_GRACE_MS / 1000)}s — shutting down`);
+      process.exit(0);
+    }
+  }, 5000);
+}

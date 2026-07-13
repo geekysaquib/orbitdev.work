@@ -6,6 +6,7 @@ import type { Notification } from "../lib/types";
 const ICON: Record<string, [string, string]> = {
   ticket: ["ticket", ACCENT.amber], deploy: ["upload", ACCENT.mint],
   git: ["git", ACCENT.blue], deadline: ["cal", ACCENT.red], system: ["bolt", ACCENT.violet],
+  task_team: ["users", ACCENT.mint],
 };
 
 export default function Notifications() {

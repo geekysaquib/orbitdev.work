@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Icon } from "../lib/icons";
+import { Select } from "../components/Select";
 import { ACCENT, OrbitLoader } from "../components/ui";
 import { useTable } from "../hooks/useTable";
 import type { CalEvent } from "../lib/types";
@@ -107,9 +108,9 @@ export default function Calendar() {
               <div className="fld" style={{ flex: 1 }}><label>End date <span style={{ color: "var(--dim)" }}>(optional)</span></label><input type="date" value={form.end} min={form.start} onChange={(e) => setForm({ ...form, end: e.target.value })} /></div>
             </div>
             <div className="fld"><label>Kind</label>
-              <select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
+              <Select full value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
                 {KINDS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
-              </select></div>
+              </Select></div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 22 }}>
               <button className="btn" onClick={() => setModal(null)}>Cancel</button>
               <button className="btn-primary" onClick={add} disabled={!form.title || !form.start}>Add event</button>

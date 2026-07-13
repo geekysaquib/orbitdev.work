@@ -1,12 +1,14 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Icon } from "../lib/icons";
+import { Select } from "../components/Select";
 import { ACCENT, Empty } from "../components/ui";
 import { useTable } from "../hooks/useTable";
 import { useToast } from "../context/Toast";
 import { useTimezone, tzDate } from "../context/Timezone";
 import { supabase } from "../lib/supabase";
 import { getUser } from "../lib/auth";
-import type { Task, TaskStatus, Priority, Project } from "../lib/types";
+import { listMyTeams } from "../lib/teams";
+import type { Task, TaskStatus, Priority, Project, Team } from "../lib/types";
 
 const COLS: [TaskStatus, string, string][] = [
   ["todo", "To do", ACCENT.muted],
@@ -19,23 +21,32 @@ const prColorOf = (p: Priority) => (p === "high" ? ACCENT.red : p === "med" ? AC
 const nextPrio = (p: Priority): Priority => (p === "low" ? "med" : p === "med" ? "high" : "low");
 
 export default function Tasks() {
-  const { rows, insert, update, remove } = useTable<Task>("tasks");
+  const { rows, insert, update, remove, error } = useTable<Task>("tasks");
   const { rows: projects } = useTable<Project>("projects");
   const toast = useToast();
   const { tz } = useTimezone();
+  const myId = getUser()?.id;
   const [title, setTitle] = useState("");
   const [prio, setPrio] = useState<Priority>("med");
   const [projFilter, setProjFilter] = useState("all");
   const [hideDone, setHideDone] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<TaskStatus | null>(null);
+  const [teams, setTeams] = useState<Team[]>([]);
+  useEffect(() => { listMyTeams().then(setTeams); }, []);
 
   const projName = useMemo(() => Object.fromEntries(projects.map((p) => [p.id, p.name])), [projects]);
+  const teamName = useMemo(() => Object.fromEntries(teams.map((t) => [t.id, t.name])), [teams]);
+
+  async function share(t: Task, teamId: string) {
+    const { error } = await update(t.id, { team_id: teamId || null } as Partial<Task>);
+    if (error) { toast(`Couldn't update sharing: ${error}`); return; }
+    toast(teamId ? `Shared with ${teamName[teamId]}` : "Made personal");
+  }
 
   const visible = rows.filter((t) => (projFilter === "all" || t.project_id === projFilter) && !(hideDone && t.status === "done"));
   const total = rows.length;
   const done = rows.filter((t) => t.status === "done").length;
-  const pct = total ? Math.round((done / total) * 100) : 0;
 
   async function add() {
     if (!title.trim()) return;
@@ -67,64 +78,84 @@ export default function Tasks() {
       <div className="rowhead">
         <div><div className="h1">Tasks</div><div className="sub">Everything across your projects, on one board.</div></div>
         <div className="task-stats">
-          <div className="ts-item"><span className="mono">{total - done}</span> open</div>
-          <div className="ts-item"><span className="mono" style={{ color: ACCENT.mint }}>{done}</span> done</div>
-          <div className="ts-bar" title={`${pct}% complete`}><span style={{ width: `${pct}%` }} /></div>
+          <div className="ts-item"><b className="mono">{total - done}</b> <span style={{ color: ACCENT.muted }}>open</span></div>
+          <div className="ts-item"><b className="mono" style={{ color: ACCENT.mint }}>{done}</b> <span style={{ color: ACCENT.muted }}>done</span></div>
         </div>
       </div>
 
-      <div className="task-controls">
-        <div className="task-add">
-          <input value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} placeholder="Add a task and press Enter" />
-          <div className="task-prio">
-            {PRIOS.map(([p, l, c]) => (
-              <button key={p} className={"tp" + (prio === p ? " on" : "")} style={prio === p ? { color: c, borderColor: c + "66", background: c + "18" } : {}} onClick={() => setPrio(p)}>
-                <span className="prdot" style={{ background: c }} />{l}
-              </button>
-            ))}
-          </div>
-          <button className="btn accent" onClick={add}><Icon name="plus" size={15} />Add</button>
+      {error && (
+        <div className="authx-err" style={{ marginTop: 12 }}><Icon name="plug" size={13} />Couldn't load tasks: {error}</div>
+      )}
+
+      <div className="ttoolbar">
+        <input className="tinput" value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} placeholder="Add a task and press Enter" />
+        <div className="tprios">
+          {PRIOS.map(([p, l, c]) => (
+            <span key={p} className={"tprio-chip" + (prio === p ? " on" : "")} style={{ color: prio === p ? c : undefined }} onClick={() => setPrio(p)}>{l}</span>
+          ))}
         </div>
-        <div className="task-filters">
-          <select className="field" value={projFilter} onChange={(e) => setProjFilter(e.target.value)}>
+        <button className="btn-primary" onClick={add}><Icon name="plus" size={15} />Add</button>
+        <div className="tprojsel">
+          <Select value={projFilter} onChange={(e) => setProjFilter(e.target.value)} chevron={false}>
             <option value="all">All projects</option>
             {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-          <label className="task-toggle"><input type="checkbox" checked={hideDone} onChange={(e) => setHideDone(e.target.checked)} />Hide done</label>
+          </Select>
+          <span className="chev"><Icon name="chevD" size={11} /></span>
         </div>
+        <label className="thidedone"><input type="checkbox" checked={hideDone} onChange={(e) => setHideDone(e.target.checked)} />Hide done</label>
       </div>
 
       {rows.length === 0 && <Empty icon="layers" title="No tasks yet" sub="Add one above, or create tasks from a Zoho work item on the Tickets screen." />}
 
-      <div className="kanban" style={{ marginTop: 22 }}>
+      <div className="tboard">
         {COLS.map(([status, label, color]) => {
           const items = visible.filter((t) => t.status === status);
           return (
-            <div key={status} className={"kcol" + (overCol === status ? " over" : "")}
+            <div key={status} className={"tcol" + (overCol === status ? " over" : "")}
               onDragOver={(e) => { e.preventDefault(); setOverCol(status); }}
               onDragLeave={() => setOverCol((c) => (c === status ? null : c))}
               onDrop={() => drop(status)}>
-              <h4><span style={{ display: "flex", alignItems: "center", gap: 7 }}><span className="kdot" style={{ background: color }} />{label}</span><span className="kcount">{items.length}</span></h4>
+              <div className="tcol-head">
+                <span className="tcol-dot" style={{ background: color }} />
+                <span className="tcol-label">{label}</span>
+                <span className="tcol-count">{items.length}</span>
+              </div>
+              {items.length === 0 && <div className="tempty">No tasks</div>}
               {items.map((t) => {
                 const due = t.due_date ? dueLabel(t.due_date) : null;
+                const mine = t.user_id === myId;
                 return (
-                  <div key={t.id} className={"kcard" + (t.status === "done" ? " kdone" : "")} draggable
-                    onDragStart={() => setDragId(t.id)} onDragEnd={() => { setDragId(null); setOverCol(null); }}>
-                    <div className="kcard-top">
-                      <span className="ktitle">{t.title}</span>
-                      <button className="kdel" title="Delete" onClick={() => { remove(t.id); toast("Task deleted"); }}><Icon name="x" size={12} /></button>
+                  <div key={t.id} className={"ttask" + (t.status === "done" ? " done" : "") + (mine ? "" : " readonly")} draggable={mine}
+                    onDragStart={() => mine && setDragId(t.id)} onDragEnd={() => { setDragId(null); setOverCol(null); }}>
+                    <div className="ttask-top">
+                      <span className="ttask-title">{t.title}</span>
+                      {mine && <button className="ttask-del" title="Delete" onClick={() => { remove(t.id); toast("Task deleted"); }}><Icon name="x" size={12} /></button>}
                     </div>
-                    <div className="kt">
-                      <button className="kprio" title="Cycle priority" onClick={() => update(t.id, { priority: nextPrio(t.priority) } as Partial<Task>)}>
-                        <span className="prdot" style={{ background: prColorOf(t.priority) }} />{t.priority}
-                      </button>
-                      {t.project_id && projName[t.project_id] && <span className="kchip"><Icon name="boxes" size={10} />{projName[t.project_id]}</span>}
-                      {due && <span className={"kdue" + (due.over ? " over" : "")}><Icon name="clock" size={10} />{due.text}</span>}
+                    <div className="ttask-meta">
+                      {mine ? (
+                        <button className="ttask-prio" title="Cycle priority" style={{ color: prColorOf(t.priority) }} onClick={() => update(t.id, { priority: nextPrio(t.priority) } as Partial<Task>)}>{t.priority}</button>
+                      ) : (
+                        <span className="ttask-prio" title="Only the creator can edit this task" style={{ color: prColorOf(t.priority) }}>{t.priority}</span>
+                      )}
+                      {t.project_id && projName[t.project_id] && <span>· {projName[t.project_id]}</span>}
+                      {due && <span className={"ttask-due" + (due.over ? " over" : "")}>· {due.text}</span>}
+                      {mine ? (
+                        teams.length > 0 && (
+                          <>
+                            <span>·</span>
+                            <Select value={t.team_id ?? ""} onChange={(e) => share(t, e.target.value)} onClick={(e) => e.stopPropagation()}>
+                              <option value="">Personal</option>
+                              {teams.map((tm) => <option key={tm.id} value={tm.id}>Share with {tm.name}</option>)}
+                            </Select>
+                          </>
+                        )
+                      ) : (
+                        t.team_id && teamName[t.team_id] && <span title="Shared by a teammate">· Shared with {teamName[t.team_id]}</span>
+                      )}
                     </div>
                   </div>
                 );
               })}
-              {items.length === 0 && <div className="kempty">Drop here</div>}
             </div>
           );
         })}

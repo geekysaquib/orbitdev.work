@@ -116,6 +116,16 @@ function footNote(text: string): string {
   return `<p style="margin:26px 0 0;padding-top:22px;border-top:1px solid ${BORDER_SOFT};font-size:12.5px;line-height:1.65;color:${MUTED};">${text}</p>`;
 }
 
+function ctaButton(label: string, url: string, tone: Tone): string {
+  const c = toneColor(tone);
+  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:26px 0 6px;"><tr>
+    <td style="border-radius:9px;background:${c};">
+      <a href="${url}" style="display:inline-block;padding:13px 26px;font-family:${SANS};font-size:14px;font-weight:600;color:${BG};text-decoration:none;">${esc(label)}</a>
+    </td>
+  </tr></table>
+  <p style="margin:12px 0 0;font-size:12px;line-height:1.6;color:${DIM};word-break:break-all;">Or paste this link into your browser:<br/><a href="${url}" style="color:${c};">${esc(url)}</a></p>`;
+}
+
 export function verifyEmail(name: string, code: string): Rendered {
   const first = esc((name || "").trim().split(" ")[0]);
   const subject = `${code} is your ORBIT verification code`;
@@ -138,6 +148,20 @@ export function resetEmail(name: string, code: string): Rendered {
     ${footNote(`If you didn't request a password reset, your password is still safe — just ignore this email.`)}
   `;
   return { subject, html: shell(`Your ORBIT password reset code is ${code}`, "mint", body), text: `Your ORBIT password reset code is ${code}. It expires in 10 minutes.` };
+}
+
+export function teamInviteEmail(inviterName: string, teamName: string, acceptUrl: string): Rendered {
+  const inviter = esc((inviterName || "").trim()) || "Someone";
+  const team = esc(teamName);
+  const subject = `${inviter} invited you to join ${teamName} on ORBIT`;
+  const body = `
+    ${eyebrow("TEAM INVITE", "mint")}
+    ${heading(`Join ${team} on ORBIT`, `${inviter} invited you to collaborate on their team. Accept to see and share tasks together.`)}
+    ${ctaButton("Accept invite", acceptUrl, "mint")}
+    ${footNote(`This invite was sent to your email address and expires in 7 days. If you weren't expecting this, you can ignore it — no account changes happen until the link is opened and accepted.`)}
+  `;
+  const text = `${inviter} invited you to join ${teamName} on ORBIT.\n\nAccept: ${acceptUrl}\n\nThis invite expires in 7 days. If you weren't expecting this, you can ignore it.`;
+  return { subject, html: shell(subject, "mint", body), text };
 }
 
 export function loginAlertEmail(name: string, info: { time: string; ip: string; location: string; device: string }): Rendered {

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import { Icon } from "../lib/icons";
 import { useAuth } from "../context/AuthContext";
 
@@ -14,6 +14,8 @@ export default function Login() {
   const { signIn, signUp } = useAuth();
   const nav = useNavigate();
   const location = useLocation();
+  const [params] = useSearchParams();
+  const next = params.get("next") || "";
   const [mode, setMode] = useState<"in" | "up">("in");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -30,18 +32,19 @@ export default function Login() {
   async function submit() {
     if (!email || !pw) return;
     setErr(null); setNote(null); setBusy(true);
+    const verifyUrl = `/verify?email=${encodeURIComponent(email)}${next ? `&next=${encodeURIComponent(next)}` : ""}`;
     if (mode === "up") {
       const res = await signUp(email, pw, name);
       setBusy(false);
       if (res.error) { setErr(res.error); return; }
-      nav(`/verify?email=${encodeURIComponent(email)}`);
+      nav(`${verifyUrl}&signup=1`);
       return;
     }
     const res = await signIn(email, pw);
     setBusy(false);
-    if (res.verifyRequired) { nav(`/verify?email=${encodeURIComponent(email)}`); return; }
+    if (res.verifyRequired) { nav(verifyUrl); return; }
     if (res.error) { setErr(res.error); return; }
-    nav("/app");
+    nav(next || "/app");
   }
 
   return (

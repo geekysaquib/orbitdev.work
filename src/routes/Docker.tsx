@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Icon } from "../lib/icons";
+import { Select } from "../components/Select";
 import { ACCENT, OrbitLoader, Empty, SetupRequired } from "../components/ui";
 import { useToast } from "../context/Toast";
 import { useAgent } from "../context/Agent";
@@ -107,10 +108,10 @@ export default function Docker() {
             <div className="dk-build-grid">
               <div className="dk-field">
                 <label>Project</label>
-                <select value={projId} onChange={(e) => onPickProject(e.target.value)}>
+                <Select full value={projId} onChange={(e) => onPickProject(e.target.value)}>
                   <option value="">Select a project…</option>
                   {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
+                </Select>
               </div>
               <div className="dk-field">
                 <label>Image tag</label>

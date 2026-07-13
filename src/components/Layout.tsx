@@ -11,11 +11,13 @@ import { CommandPalette } from "./CommandPalette";
 import { StartWorkModal } from "./StartWorkModal";
 import { supabase } from "../lib/supabase";
 import { ACCENT } from "./ui";
+import { ORBIT_AGENT_DOWNLOAD_URL } from "../lib/downloads";
 import type { Notification } from "../lib/types";
 
 const NOTIF_ICON: Record<string, [string, string]> = {
   ticket: ["ticket", ACCENT.amber], deploy: ["upload", ACCENT.mint],
   git: ["git", ACCENT.blue], deadline: ["cal", ACCENT.red], system: ["bolt", ACCENT.violet],
+  task_team: ["users", ACCENT.mint],
 };
 const notifAgo = (iso: string) => {
   const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
@@ -25,6 +27,7 @@ const notifAgo = (iso: string) => {
 const NAV = [
   { to: "/app", label: "Dashboard", icon: "grid", end: true },
   { to: "/projects", label: "Projects", icon: "boxes" },
+  { to: "/teams", label: "Teams", icon: "users" },
   { to: "/sprints", label: "Sprints", icon: "sprint" },
   { to: "/mail", label: "Mail", icon: "mail" },
   { to: "/postgres", label: "Postgres", icon: "db" },
@@ -306,7 +309,7 @@ export function Layout() {
           {status !== "online" && (
             <div className="zoho-alert agent-alert">
               <Icon name="zap" size={15} />
-              <span>Local agent is {status === "disconnected" ? "disconnected" : "offline"}. Launching apps, browsing paths, and the focus timer are disabled — <button onClick={() => nav("/settings")}>fix in Settings</button>.</span>
+              <span>Local agent is {status === "disconnected" ? "disconnected" : "offline"}. Launching apps, browsing paths, and the focus timer are disabled — <button onClick={() => nav("/settings")}>fix in Settings</button>, or <a href={ORBIT_AGENT_DOWNLOAD_URL}>download the agent</a> if you haven't set it up yet.</span>
               <button className="za-x" onClick={() => reconnect()}><Icon name="refresh" size={14} /></button>
             </div>
           )}

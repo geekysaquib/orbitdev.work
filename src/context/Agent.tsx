@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { pingAgent, getAgentUrl, setAgentUrl } from "../lib/agent";
+import { pingAgent, getAgentUrl, setAgentUrl, agentEvents } from "../lib/agent";
 
 export type AgentStatus = "online" | "offline" | "disconnected";
 
@@ -10,6 +10,7 @@ interface AgentShape {
   disconnect: () => void;
   reconnect: () => void;
   updateUrl: (url: string) => void;
+  subscribe: (onEvent: (event: string) => void) => () => void;
 }
 
 const Ctx = createContext<AgentShape | undefined>(undefined);
@@ -19,6 +20,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AgentStatus>("offline");
   const [url, setUrl] = useState(getAgentUrl());
   const disconnected = useRef(false);
+  const listeners = useRef(new Set<(event: string) => void>());
 
   const check = useCallback(async () => {
     if (disconnected.current) return;               // user chose to disconnect — don't auto-reconnect
@@ -32,6 +34,18 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     return () => window.clearInterval(t);
   }, [check]);
 
+  // Held open for as long as the app itself is mounted (i.e. the tab is open)
+  // — the packaged agent watches this connection to know when to auto-quit,
+  // so it must not be tied to any one route's lifetime.
+  useEffect(() => {
+    return agentEvents((event) => { for (const fn of listeners.current) fn(event); });
+  }, []);
+
+  const subscribe = useCallback((onEvent: (event: string) => void) => {
+    listeners.current.add(onEvent);
+    return () => { listeners.current.delete(onEvent); };
+  }, []);
+
   const recheck = useCallback(() => { disconnected.current = false; check(); }, [check]);
   const disconnect = useCallback(() => { disconnected.current = true; setStatus("disconnected"); }, []);
   const reconnect = useCallback(() => { disconnected.current = false; setStatus("offline"); check(); }, [check]);
@@ -43,7 +57,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   }, [check]);
 
   return (
-    <Ctx.Provider value={{ status, url, recheck, disconnect, reconnect, updateUrl }}>
+    <Ctx.Provider value={{ status, url, recheck, disconnect, reconnect, updateUrl, subscribe }}>
       {children}
     </Ctx.Provider>
   );

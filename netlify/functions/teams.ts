@@ -1,0 +1,304 @@
+import type { Handler } from "@netlify/functions";
+import { randomBytes, createHash } from "node:crypto";
+import { dbSelect, dbInsert, dbUpdate, dbDelete } from "./_lib/db";
+import { sendMail } from "./_lib/mailer";
+import { teamInviteEmail } from "./_lib/email-templates";
+import { verifySession } from "./_lib/verifyToken";
+
+/**
+ * Everything that changes who's on a team lives here, behind the
+ * service-role key — team_members/team_invites have no client-facing write
+ * policies in supabase/schema.sql on purpose (see the comment there). That
+ * keeps exactly one file to audit for "can this request change team
+ * membership," instead of relying on RLS to get a self-insert-as-owner edge
+ * case right.
+ *
+ * Routes (dispatched by ?action=), all POST except preview-invite (GET):
+ *   create            { name }                               -> new team, caller becomes owner
+ *   invite            { team_id, email, role? }               -> owner/admin only
+ *   resend-invite     { invite_id }                            -> owner/admin only
+ *   revoke-invite     { invite_id }                            -> owner/admin only
+ *   preview-invite    ?token=                                  -> public, read-only
+ *   accept-invite     { token }                                -> authenticated, email must match
+ *   remove-member     { team_id, user_id }                     -> owner/admin only
+ *   change-role       { team_id, user_id, role }                -> owner only
+ *   transfer-ownership{ team_id, new_owner_user_id }            -> owner only
+ *   leave             { team_id }                               -> any member except a sole owner
+ */
+
+interface TeamRow { id: string; name: string; owner_id: string; created_at: string; }
+interface TeamMemberRow { team_id: string; user_id: string; role: "owner" | "admin" | "member"; joined_at: string; }
+interface TeamInviteRow {
+  id: string; team_id: string; email: string; role: "admin" | "member"; token_hash: string;
+  invited_by: string; status: string; expires_at: string; accepted_at: string | null; created_at: string;
+}
+interface UserRow { id: string; email: string; full_name: string; }
+
+const INVITE_TTL_DAYS = 7;
+const RESEND_COOLDOWN_SEC = 60;
+const TEAM_NAME_MAX = 60;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PUBLIC_SITE_URL = (process.env.PUBLIC_SITE_URL || "").replace(/\/+$/, "");
+
+const json = (statusCode: number, data: unknown) => ({
+  statusCode,
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(data),
+});
+
+function genToken(): string {
+  return randomBytes(32).toString("base64url");
+}
+function hashToken(raw: string): string {
+  return createHash("sha256").update(raw).digest("hex");
+}
+function maskEmail(email: string): string {
+  const [user, domain] = email.split("@");
+  if (!domain) return email;
+  return `${user.slice(0, 1)}${"*".repeat(Math.max(user.length - 1, 1))}@${domain}`;
+}
+
+async function membershipRole(teamId: string, userId: string): Promise<"owner" | "admin" | "member" | null> {
+  const rows = await dbSelect<TeamMemberRow>("team_members", `team_id=eq.${teamId}&user_id=eq.${userId}&limit=1`);
+  return rows[0]?.role ?? null;
+}
+
+async function findUserByEmail(email: string): Promise<UserRow | null> {
+  const rows = await dbSelect<UserRow>("users", `email=eq.${encodeURIComponent(email)}&limit=1`);
+  return rows[0] ?? null;
+}
+
+async function findUserById(id: string): Promise<UserRow | null> {
+  const rows = await dbSelect<UserRow>("users", `id=eq.${id}&limit=1&select=id,email,full_name`);
+  return rows[0] ?? null;
+}
+
+export const handler: Handler = async (event) => {
+  const action = event.queryStringParameters?.action || "";
+
+  if (action === "preview-invite") {
+    if (event.httpMethod !== "GET") return json(405, { error: "Method not allowed" });
+    const token = event.queryStringParameters?.token || "";
+    if (!token) return json(400, { error: "Missing token." });
+    try {
+      const rows = await dbSelect<TeamInviteRow>(
+        "team_invites",
+        `token_hash=eq.${hashToken(token)}&status=eq.pending&limit=1`,
+      );
+      const invite = rows[0];
+      if (!invite || new Date(invite.expires_at).getTime() < Date.now()) {
+        return json(404, { error: "This invite is invalid or has expired." });
+      }
+      const [team, inviter] = await Promise.all([
+        dbSelect<TeamRow>("teams", `id=eq.${invite.team_id}&limit=1`),
+        findUserById(invite.invited_by),
+      ]);
+      return json(200, {
+        team_name: team[0]?.name ?? "a team",
+        invited_by_name: inviter?.full_name || inviter?.email || "Someone",
+        email: maskEmail(invite.email),
+      });
+    } catch (e) {
+      console.error("[teams] preview-invite", e);
+      return json(500, { error: "Something went wrong. Please try again." });
+    }
+  }
+
+  if (event.httpMethod !== "POST") return json(405, { error: "Method not allowed" });
+
+  const session = verifySession(event.headers.authorization);
+  if (!session) return json(401, { error: "Sign in required." });
+
+  let body: Record<string, unknown>;
+  try { body = JSON.parse(event.body || "{}"); } catch { return json(400, { error: "Invalid request body." }); }
+
+  try {
+    switch (action) {
+      case "create": {
+        const name = String(body.name || "").trim();
+        if (!name || name.length > TEAM_NAME_MAX) return json(400, { error: `Team name must be 1–${TEAM_NAME_MAX} characters.` });
+
+        const team = await dbInsert<TeamRow>("teams", { name, owner_id: session.userId });
+        try {
+          await dbInsert<TeamMemberRow>("team_members", { team_id: team.id, user_id: session.userId, role: "owner" });
+        } catch (e) {
+          await dbDelete("teams", `id=eq.${team.id}`).catch(() => {});
+          throw e;
+        }
+        return json(200, { team, role: "owner" });
+      }
+
+      case "invite": {
+        const teamId = String(body.team_id || "");
+        const email = String(body.email || "").trim().toLowerCase();
+        const role = body.role === "admin" ? "admin" : "member";
+        if (!EMAIL_RE.test(email)) return json(400, { error: "Enter a valid email address." });
+
+        const callerRole = await membershipRole(teamId, session.userId);
+        if (callerRole !== "owner" && callerRole !== "admin") return json(403, { error: "Only team owners/admins can invite." });
+
+        const existingUser = await findUserByEmail(email);
+        if (existingUser && (await membershipRole(teamId, existingUser.id))) {
+          return json(200, { ok: true }); // already a member — quietly a no-op
+        }
+
+        const pending = await dbSelect<TeamInviteRow>(
+          "team_invites",
+          `team_id=eq.${teamId}&email=eq.${encodeURIComponent(email)}&status=eq.pending&limit=1`,
+        );
+        if (pending[0]) {
+          const ageSec = (Date.now() - new Date(pending[0].created_at).getTime()) / 1000;
+          if (ageSec < RESEND_COOLDOWN_SEC) return json(429, { error: `Please wait ${Math.ceil(RESEND_COOLDOWN_SEC - ageSec)}s before resending.` });
+        }
+
+        const [team, inviter] = await Promise.all([
+          dbSelect<TeamRow>("teams", `id=eq.${teamId}&limit=1`),
+          findUserById(session.userId),
+        ]);
+        if (!team[0]) return json(404, { error: "Team not found." });
+        if (!PUBLIC_SITE_URL) return json(500, { error: "Server misconfigured — PUBLIC_SITE_URL is not set." });
+
+        const token = genToken();
+        const token_hash = hashToken(token);
+        const expires_at = new Date(Date.now() + INVITE_TTL_DAYS * 86_400_000).toISOString();
+
+        if (pending[0]) {
+          await dbUpdate("team_invites", `id=eq.${pending[0].id}`, { token_hash, role, invited_by: session.userId, expires_at, created_at: new Date().toISOString() });
+        } else {
+          await dbInsert("team_invites", { team_id: teamId, email, role, token_hash, invited_by: session.userId, expires_at });
+        }
+
+        const tpl = teamInviteEmail(inviter?.full_name || inviter?.email || "Someone", team[0].name, `${PUBLIC_SITE_URL}/invite/${token}`);
+        await sendMail(email, tpl.subject, tpl.html, tpl.text);
+        return json(200, { ok: true });
+      }
+
+      case "resend-invite": {
+        const inviteId = String(body.invite_id || "");
+        const rows = await dbSelect<TeamInviteRow>("team_invites", `id=eq.${inviteId}&limit=1`);
+        const invite = rows[0];
+        if (!invite || invite.status !== "pending") return json(404, { error: "Invite not found." });
+
+        const callerRole = await membershipRole(invite.team_id, session.userId);
+        if (callerRole !== "owner" && callerRole !== "admin") return json(403, { error: "Only team owners/admins can resend invites." });
+
+        const ageSec = (Date.now() - new Date(invite.created_at).getTime()) / 1000;
+        if (ageSec < RESEND_COOLDOWN_SEC) return json(429, { error: `Please wait ${Math.ceil(RESEND_COOLDOWN_SEC - ageSec)}s before resending.` });
+
+        const [team, inviter] = await Promise.all([
+          dbSelect<TeamRow>("teams", `id=eq.${invite.team_id}&limit=1`),
+          findUserById(session.userId),
+        ]);
+        if (!PUBLIC_SITE_URL) return json(500, { error: "Server misconfigured — PUBLIC_SITE_URL is not set." });
+
+        const token = genToken();
+        const token_hash = hashToken(token);
+        const expires_at = new Date(Date.now() + INVITE_TTL_DAYS * 86_400_000).toISOString();
+        await dbUpdate("team_invites", `id=eq.${invite.id}`, { token_hash, expires_at, created_at: new Date().toISOString() });
+
+        const tpl = teamInviteEmail(inviter?.full_name || inviter?.email || "Someone", team[0]?.name ?? "the team", `${PUBLIC_SITE_URL}/invite/${token}`);
+        await sendMail(invite.email, tpl.subject, tpl.html, tpl.text);
+        return json(200, { ok: true });
+      }
+
+      case "revoke-invite": {
+        const inviteId = String(body.invite_id || "");
+        const rows = await dbSelect<TeamInviteRow>("team_invites", `id=eq.${inviteId}&limit=1`);
+        const invite = rows[0];
+        if (!invite) return json(200, { ok: true });
+
+        const callerRole = await membershipRole(invite.team_id, session.userId);
+        if (callerRole !== "owner" && callerRole !== "admin") return json(403, { error: "Only team owners/admins can revoke invites." });
+
+        await dbUpdate("team_invites", `id=eq.${invite.id}`, { status: "revoked" });
+        return json(200, { ok: true });
+      }
+
+      case "accept-invite": {
+        const token = String(body.token || "");
+        if (!token) return json(400, { error: "Missing token." });
+
+        const rows = await dbSelect<TeamInviteRow>("team_invites", `token_hash=eq.${hashToken(token)}&status=eq.pending&limit=1`);
+        const invite = rows[0];
+        if (!invite) return json(404, { error: "This invite is invalid or has already been used." });
+        if (new Date(invite.expires_at).getTime() < Date.now()) {
+          await dbUpdate("team_invites", `id=eq.${invite.id}`, { status: "expired" });
+          return json(400, { error: "This invite has expired — ask for a new one." });
+        }
+        if (invite.email.toLowerCase() !== session.email.toLowerCase()) {
+          return json(403, { error: `This invite was sent to ${maskEmail(invite.email)} — sign in with that email to accept it.` });
+        }
+
+        const existingRole = await membershipRole(invite.team_id, session.userId);
+        if (!existingRole) {
+          await dbInsert("team_members", { team_id: invite.team_id, user_id: session.userId, role: invite.role });
+        }
+        await dbUpdate("team_invites", `id=eq.${invite.id}`, { status: "accepted", accepted_at: new Date().toISOString() });
+
+        const team = await dbSelect<TeamRow>("teams", `id=eq.${invite.team_id}&limit=1`);
+        return json(200, { ok: true, team_id: invite.team_id, team_name: team[0]?.name ?? "" });
+      }
+
+      case "remove-member": {
+        const teamId = String(body.team_id || "");
+        const targetId = String(body.user_id || "");
+        const callerRole = await membershipRole(teamId, session.userId);
+        if (callerRole !== "owner" && callerRole !== "admin") return json(403, { error: "Only team owners/admins can remove members." });
+
+        const targetRole = await membershipRole(teamId, targetId);
+        if (!targetRole) return json(200, { ok: true });
+        if (targetRole === "owner") return json(400, { error: "The owner can't be removed — transfer ownership first." });
+        if (callerRole === "admin" && targetRole === "admin") return json(403, { error: "Admins can't remove other admins." });
+
+        await dbDelete("team_members", `team_id=eq.${teamId}&user_id=eq.${targetId}`);
+        return json(200, { ok: true });
+      }
+
+      case "change-role": {
+        const teamId = String(body.team_id || "");
+        const targetId = String(body.user_id || "");
+        const role = body.role === "admin" ? "admin" : "member";
+        const callerRole = await membershipRole(teamId, session.userId);
+        if (callerRole !== "owner") return json(403, { error: "Only the team owner can change roles." });
+
+        const targetRole = await membershipRole(teamId, targetId);
+        if (!targetRole) return json(404, { error: "That person isn't a member of this team." });
+        if (targetRole === "owner") return json(400, { error: "Use transfer-ownership to change the owner." });
+
+        await dbUpdate("team_members", `team_id=eq.${teamId}&user_id=eq.${targetId}`, { role });
+        return json(200, { ok: true });
+      }
+
+      case "transfer-ownership": {
+        const teamId = String(body.team_id || "");
+        const newOwnerId = String(body.new_owner_user_id || "");
+        const callerRole = await membershipRole(teamId, session.userId);
+        if (callerRole !== "owner") return json(403, { error: "Only the current owner can transfer ownership." });
+
+        const newOwnerRole = await membershipRole(teamId, newOwnerId);
+        if (!newOwnerRole) return json(400, { error: "The new owner must already be a member of this team." });
+
+        await dbUpdate("team_members", `team_id=eq.${teamId}&user_id=eq.${newOwnerId}`, { role: "owner" });
+        await dbUpdate("team_members", `team_id=eq.${teamId}&user_id=eq.${session.userId}`, { role: "admin" });
+        await dbUpdate("teams", `id=eq.${teamId}`, { owner_id: newOwnerId });
+        return json(200, { ok: true });
+      }
+
+      case "leave": {
+        const teamId = String(body.team_id || "");
+        const callerRole = await membershipRole(teamId, session.userId);
+        if (!callerRole) return json(200, { ok: true });
+        if (callerRole === "owner") return json(400, { error: "Transfer ownership or delete the team before leaving." });
+
+        await dbDelete("team_members", `team_id=eq.${teamId}&user_id=eq.${session.userId}`);
+        return json(200, { ok: true });
+      }
+
+      default:
+        return json(400, { error: "Unknown action." });
+    }
+  } catch (e) {
+    console.error("[teams]", e);
+    return json(500, { error: "Something went wrong. Please try again." });
+  }
+};

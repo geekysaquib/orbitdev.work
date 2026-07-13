@@ -1,9 +1,10 @@
 export type ProjectStatus = "active" | "hold" | "archived";
 export type TaskStatus = "todo" | "doing" | "review" | "done";
 export type Priority = "low" | "med" | "high";
+export type TeamRole = "owner" | "admin" | "member";
 
 export interface Project {
-  id: string; user_id: string; name: string; client: string | null;
+  id: string; user_id: string; team_id: string | null; name: string; client: string | null;
   stacks: string[]; status: ProjectStatus; accent: string | null;
   fe_path: string | null; sln_path: string | null; dev_port: number | null;
   branch: string | null; description: string | null;
@@ -11,8 +12,21 @@ export interface Project {
   created_at: string;
 }
 export interface Task {
-  id: string; user_id: string; project_id: string | null; title: string;
+  id: string; user_id: string; project_id: string | null; team_id: string | null; title: string;
   status: TaskStatus; priority: Priority; due_date: string | null; created_at: string;
+}
+export interface Team {
+  id: string; name: string; owner_id: string; created_at: string;
+}
+export interface TeamMember {
+  team_id: string; user_id: string; role: TeamRole; joined_at: string;
+  // joined client-side from `users` via the "teammates are visible" policy
+  full_name?: string; email?: string;
+}
+export interface TeamInvite {
+  id: string; team_id: string; email: string; role: Exclude<TeamRole, "owner">;
+  invited_by: string; status: "pending" | "accepted" | "revoked" | "expired";
+  expires_at: string; accepted_at: string | null; created_at: string;
 }
 export interface Ticket {
   id: string; user_id: string; project_id: string | null; zoho_id: string | null;

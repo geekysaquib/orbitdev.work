@@ -9,10 +9,12 @@ import { Layout } from "./components/Layout";
 import Login from "./routes/Login";
 import VerifyEmail from "./routes/VerifyEmail";
 import ForgotPassword from "./routes/ForgotPassword";
+import InviteAccept from "./routes/InviteAccept";
 import Landing from "./routes/Landing";
 import Dashboard from "./routes/Dashboard";
 import Projects from "./routes/Projects";
 import ProjectDetail from "./routes/ProjectDetail";
+import Teams from "./routes/Teams";
 import Tickets from "./routes/Tickets";
 import Sprints from "./routes/Sprints";
 import Tasks from "./routes/Tasks";
@@ -25,6 +27,7 @@ import Automation from "./routes/Automation";
 import TimeTracking from "./routes/TimeTracking";
 import Docs from "./routes/Docs";
 import Settings from "./routes/Settings";
+import GetStarted from "./routes/GetStarted";
 import type { JSX } from "react";
 
 function Guard({ children }: { children: JSX.Element }) {
@@ -48,10 +51,13 @@ export default function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/verify" element={<VerifyEmail />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/invite/:token" element={<InviteAccept />} />
             <Route element={<Guard><Layout /></Guard>}>
+              <Route path="/get-started" element={<GetStarted />} />
               <Route path="/app" element={<Dashboard />} />
               <Route path="/projects" element={<Projects />} />
               <Route path="/projects/:id" element={<ProjectDetail />} />
+              <Route path="/teams" element={<Teams />} />
               <Route path="/tickets" element={<Tickets />} />
               <Route path="/sprints" element={<Sprints />} />
               <Route path="/tasks" element={<Tasks />} />

@@ -10,7 +10,7 @@ import { useTimezone, tzHour, tzDate } from "../context/Timezone";
 import { useBreak } from "../context/Break";
 import { useWeather } from "../hooks/useWeather";
 import { useAgent } from "../context/Agent";
-import { launch, fetchDocker, fetchDockerImages, gitPull, devRunning, npmOutdated, npmAudit, dockerDf, dockerPrune, portsMap, gmailUnread, agentEvents, type DockerContainer } from "../lib/agent";
+import { launch, fetchDocker, fetchDockerImages, gitPull, devRunning, npmOutdated, npmAudit, dockerDf, dockerPrune, portsMap, gmailUnread, type DockerContainer } from "../lib/agent";
 import { pgServers, pgHealth } from "../lib/pg";
 import { cachedChores, loadChores, type ChoreSettings, type ChoreId } from "../lib/chores";
 import { saveBreakLog, notify } from "../lib/breakLog";
@@ -364,6 +364,7 @@ function BreakView({ onEnd, timerPaused, startedAt, projects, tasks, zohoConnect
   const sigsRef = useRef(new Map<string, string>());
   const notifiedRef = useRef(new Set<string>());
   const runningRef = useRef(false);
+  const { subscribe } = useAgent();
 
   useEffect(() => { loadChores().then(setCfg); }, []);
 
@@ -592,14 +593,16 @@ function BreakView({ onEnd, timerPaused, startedAt, projects, tasks, zohoConnect
           const srv = await pgServers();
           for (const s of (srv.servers || []).slice(0, 3)) {
             if (!alive) return;
-            const h = await pgHealth(s.id);
+            const h = await pgHealth(s, s.database || undefined);
             if (!alive) return;
             if (h.ok) push(`pg:${s.id}`, `h${h.connections}/${h.longestSec}/${h.size}`, {
               icon: "pg", title: `${h.name} · ${h.connections} connection${h.connections === 1 ? "" : "s"} · ${h.size}`,
               meta: h.longestSec > 60 ? `longest query ${Math.floor(h.longestSec / 60)}m` : `longest query ${h.longestSec}s`,
               delta: h.longestSec > 300 ? "slow query" : "healthy", tone: h.longestSec > 300 ? "warn" : "ok", href: "/postgres",
             });
-            else push(`pg:${s.id}`, `x${h.error}`, { icon: "pg", title: `${h.name}: unreachable`, meta: (h.error || "").slice(0, 44), delta: "down", tone: "warn", href: "/postgres" });
+            // "agent offline" is an expected, already-surfaced-elsewhere state — only
+            // worth an activity item when a *saved* server itself is unreachable.
+            else if (h.error !== "agent offline") push(`pg:${s.id}`, `x${h.error}`, { icon: "pg", title: `${h.name}: unreachable`, meta: (h.error || "").slice(0, 44), delta: "down", tone: "warn", href: "/postgres" });
             await sleep(500);
           }
         }
@@ -632,9 +635,9 @@ function BreakView({ onEnd, timerPaused, startedAt, projects, tasks, zohoConnect
     cycle();
     const iv = setInterval(cycle, Math.max(15, cfg.intervalSec) * 1000);
     // agent pushes: re-run right away instead of waiting for the interval
-    const off = agentEvents((ev) => { if (ev === "dev:changed" || ev === "docker:changed") cycle(); });
+    const off = subscribe((ev) => { if (ev === "dev:changed" || ev === "docker:changed") cycle(); });
     return () => { alive = false; clearInterval(iv); off(); };
-  }, [real, cfg.intervalSec]);
+  }, [real, cfg.intervalSec, subscribe]);
 
   // Ending a break: persist the digest and leave a summary notification behind.
   const finish = () => {

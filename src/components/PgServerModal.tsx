@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { Icon } from "../lib/icons";
 import { useToast } from "../context/Toast";
-import { pgAddServer, pgTestServer, type PgServerInput } from "../lib/pg";
+import { pgAddServer, pgUpdateServer, pgTestServer, type PgServer, type PgServerInput } from "../lib/pg";
 
-export function PgServerModal({ onClose, onAdded }: { onClose: () => void; onAdded: (id: string) => void }) {
+export function PgServerModal({ editing, onClose, onSaved }: { editing?: PgServer | null; onClose: () => void; onSaved: (id: string) => void }) {
   const toast = useToast();
-  const [f, setF] = useState<PgServerInput>({ name: "", host: "localhost", port: 5432, user: "postgres", password: "", database: "", ssl: false });
+  const [f, setF] = useState<PgServerInput>(() => editing
+    ? { name: editing.name, host: editing.host, port: editing.port, user: editing.user, password: editing.password || "", database: editing.database || "", ssl: editing.ssl }
+    : { name: "", host: "localhost", port: 5432, user: "postgres", password: "", database: "", ssl: false });
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const set = (k: keyof PgServerInput, v: unknown) => setF((prev) => ({ ...prev, [k]: v }));
@@ -20,17 +22,17 @@ export function PgServerModal({ onClose, onAdded }: { onClose: () => void; onAdd
   async function save() {
     if (!f.host || !f.user) { toast("Host and user are required."); return; }
     setSaving(true);
-    const r = await pgAddServer(f);
+    const r = editing ? await pgUpdateServer(editing.id, f) : await pgAddServer(f);
     setSaving(false);
-    if (r.ok && r.server) { toast(`Added ${r.server.name}`); onAdded(r.server.id); }
-    else toast(`Couldn't add: ${r.error}`);
+    if (r.ok && r.server) { toast(editing ? `Saved ${r.server.name}` : `Added ${r.server.name}`); onSaved(r.server.id); }
+    else toast(`Couldn't ${editing ? "save" : "add"}: ${r.error}`);
   }
 
   return (
     <div className="modal-bg">
       <div className="modal" style={{ width: 460 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h3 style={{ display: "flex", alignItems: "center", gap: 9 }}><span style={{ color: "var(--mint)" }}><Icon name="db" size={18} /></span>Add Postgres server</h3>
+          <h3 style={{ display: "flex", alignItems: "center", gap: 9 }}><span style={{ color: "var(--mint)" }}><Icon name="db" size={18} /></span>{editing ? "Edit machine" : "Add Postgres server"}</h3>
           <button className="iconbtn" onClick={onClose}><Icon name="x" size={16} /></button>
         </div>
         <div className="dk-field" style={{ marginTop: 16 }}>
@@ -55,9 +57,9 @@ export function PgServerModal({ onClose, onAdded }: { onClose: () => void; onAdd
         </label>
         <div style={{ display: "flex", gap: 8, marginTop: 18, justifyContent: "flex-end" }}>
           <button className="btn ghost" disabled={testing} onClick={test}>{testing ? <><Icon name="loader" size={14} className="spin" />Testing…</> : <><Icon name="plug" size={14} />Test</>}</button>
-          <button className="btn accent" disabled={saving} onClick={save}>{saving ? "Saving…" : "Save server"}</button>
+          <button className="btn accent" disabled={saving} onClick={save}>{saving ? "Saving…" : editing ? "Save changes" : "Save server"}</button>
         </div>
-        <div style={{ fontSize: 11, color: "var(--dim)", marginTop: 12 }}>Credentials are stored by the local agent on your machine (<span className="mono">agent/pg-config.json</span>), never sent to ORBIT's servers.</div>
+        <div style={{ fontSize: 11, color: "var(--dim)", marginTop: 12 }}>Saved to your ORBIT account, visible only to you. The local agent uses these details to connect when you browse or run a query — they're never stored on the machine running the agent.</div>
       </div>
     </div>
   );

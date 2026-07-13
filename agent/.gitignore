@@ -5,3 +5,6 @@
 gmail-config.json
 pg-config.json
 agent-config.json
+
+# Packaged app build output (large binary, rebuild with `npm run build:exe`)
+dist/

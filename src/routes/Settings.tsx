@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Icon } from "../lib/icons";
+import { Select } from "../components/Select";
 import { ACCENT } from "../components/ui";
 import { useAgent } from "../context/Agent";
 import { useZoho } from "../context/Zoho";
@@ -8,6 +10,7 @@ import { useAuth } from "../context/AuthContext";
 import { useTimezone, allZones, tzOffset, tzClock, deviceTz } from "../context/Timezone";
 import { fetchIntegrations, saveIntegrations } from "../lib/integrations";
 import { fetchDocker } from "../lib/agent";
+import { ORBIT_AGENT_DOWNLOAD_URL } from "../lib/downloads";
 import { pgServers, pgDeleteServer, type PgServer } from "../lib/pg";
 import { PgServerModal } from "../components/PgServerModal";
 import { ChoresCard } from "../components/ChoresCard";
@@ -27,13 +30,18 @@ const SECTIONS: { id: SectionId; label: string; icon: string; desc: string }[] =
   { id: "integrations", label: "Integrations", icon: "layers", desc: "Other services and IDE paths" },
   { id: "data", label: "Data & security", icon: "shield", desc: "Where everything is stored" },
 ];
+const SECTIONS_IDS = new Set<string>(SECTIONS.map((s) => s.id));
 
 export default function Settings() {
   const toast = useToast();
   const { user, signOut } = useAuth();
   const { status, url, updateUrl, recheck } = useAgent();
   const zoho = useZoho();
-  const [section, setSection] = useState<SectionId>("account");
+  const [searchParams] = useSearchParams();
+  const [section, setSection] = useState<SectionId>(() => {
+    const s = searchParams.get("section");
+    return (SECTIONS_IDS.has(s || "") ? s : "account") as SectionId;
+  });
   const [draft, setDraft] = useState(url);
   const [zk, setZk] = useState({ zoho_client_id: "", zoho_client_secret: "", zoho_refresh_token: "", zoho_dc: "in", zoho_team_id: "", zoho_project_id: "" });
   const [gk, setGk] = useState({ gmail_user: "", gmail_app_password: "" });
@@ -49,8 +57,9 @@ export default function Settings() {
 
   const [pgList, setPgList] = useState<PgServer[]>([]);
   const [pgAddOpen, setPgAddOpen] = useState(false);
+  const [pgEditing, setPgEditing] = useState<PgServer | null>(null);
   const loadPg = () => { pgServers().then((r) => setPgList(r.servers)); };
-  useEffect(() => { if (status === "online") loadPg(); else setPgList([]); }, [status]);
+  useEffect(() => { loadPg(); }, []);
 
   async function checkDocker() {
     if (status !== "online") { setDocker(null); return; }
@@ -98,7 +107,7 @@ export default function Settings() {
     if (id === "zoho") return zoho.status === "connected" ? "ok" : zoho.status === "checking" ? null : "warn";
     if (id === "gmail") return gk.gmail_user && gk.gmail_app_password ? "ok" : null;
     if (id === "docker") return status !== "online" ? null : docker?.available ? "ok" : "warn";
-    if (id === "postgres") return status === "online" && pgList.length ? "ok" : null;
+    if (id === "postgres") return pgList.length ? "ok" : null;
     return null;
   };
 
@@ -147,9 +156,9 @@ export default function Settings() {
                       <div className="mono" style={{ fontSize: 18, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>{tzClock(tz, new Date(nowTick))}</div>
                       <div className="mono" style={{ fontSize: 11, color: "var(--dim)" }}>{tzOffset(tz)}</div>
                     </div>
-                    <select className="field" value={tz} onChange={(e) => { setTz(e.target.value); toast("Timezone updated"); }} style={{ minWidth: 240 }}>
+                    <Select className="field" value={tz} onChange={(e) => { setTz(e.target.value); toast("Timezone updated"); }} style={{ minWidth: 240 }}>
                       {zones.map((z) => <option key={z} value={z}>{z.replace(/_/g, " ")}</option>)}
-                    </select>
+                    </Select>
                   </div>
                 </div>
                 {tz !== deviceTz() && (
@@ -161,16 +170,27 @@ export default function Settings() {
           )}
 
           {section === "agent" && (
-            <div className="card">
-              <div className="setrow"><div className="l"><div className="nm">Companion agent</div><div className="ds">Background service that launches IDEs, runs git and Docker, and powers break chores. It polls automatically and connects the moment it's running.</div></div>
-                {agentPill}</div>
-              <div className="setrow"><div className="l"><div className="nm">Agent URL</div><div className="ds mono" style={{ fontSize: 11.5 }}>default http://localhost:47600</div></div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <input className="field mono" value={draft} onChange={(e) => setDraft(e.target.value)} style={{ minWidth: 240 }} />
-                  <button className="btn" onClick={() => { updateUrl(draft); toast("Agent URL saved"); }}>Save</button>
-                  <button className="btn" onClick={() => { recheck(); toast("Checking agent…"); }}><Icon name="refresh" size={15} />Test</button>
-                </div></div>
-            </div>
+            <>
+              {status !== "online" && (
+                <div className="card">
+                  <div className="setrow">
+                    <div className="l"><div className="nm">Download the ORBIT Agent</div><div className="ds">The desktop companion that gives ORBIT hands on this machine — launches IDEs, runs git/Docker, and connects automatically. Windows, single file, no install.</div></div>
+                    <a className="btn accent" href={ORBIT_AGENT_DOWNLOAD_URL}><Icon name="download" size={15} />Download for Windows</a>
+                  </div>
+                  <div className="setrow"><div className="l"><div className="ds">Double-click <code className="mono">orbit.exe</code> to run it — no install, no console window. It opens a status page in your browser and ORBIT connects automatically within a few seconds.</div></div></div>
+                </div>
+              )}
+              <div className="card" style={{ marginTop: status !== "online" ? 12 : 0 }}>
+                <div className="setrow"><div className="l"><div className="nm">Companion agent</div><div className="ds">Background service that launches IDEs, runs git and Docker, and powers break chores. It polls automatically and connects the moment it's running.</div></div>
+                  {agentPill}</div>
+                <div className="setrow"><div className="l"><div className="nm">Agent URL</div><div className="ds mono" style={{ fontSize: 11.5 }}>default http://localhost:47600</div></div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input className="field mono" value={draft} onChange={(e) => setDraft(e.target.value)} style={{ minWidth: 240 }} />
+                    <button className="btn" onClick={() => { updateUrl(draft); toast("Agent URL saved"); }}>Save</button>
+                    <button className="btn" onClick={() => { recheck(); toast("Checking agent…"); }}><Icon name="refresh" size={15} />Test</button>
+                  </div></div>
+              </div>
+            </>
           )}
 
           {section === "zoho" && (
@@ -182,9 +202,9 @@ export default function Settings() {
                 <KeyField span label="Refresh Token" value={zk.zoho_refresh_token} onChange={(v) => setZk({ ...zk, zoho_refresh_token: v })} placeholder="1000.xxxx.yyyy" hint="Long-lived. Regenerate it in the Zoho API console if it ever leaks." />
                 <div className="kf">
                   <label>Data center</label>
-                  <select className="kf-input" value={zk.zoho_dc} onChange={(e) => setZk({ ...zk, zoho_dc: e.target.value })}>
+                  <Select full className="kf-input" value={zk.zoho_dc} onChange={(e) => setZk({ ...zk, zoho_dc: e.target.value })}>
                     {["in", "com", "eu", "com.au", "jp", "sa", "com.cn"].map((d) => <option key={d} value={d}>{d}</option>)}
-                  </select>
+                  </Select>
                 </div>
                 <KeyField optional label="Team ID" value={zk.zoho_team_id} onChange={(v) => setZk({ ...zk, zoho_team_id: v })} placeholder="60069474422" />
                 <KeyField span optional label="Default Project ID" value={zk.zoho_project_id} onChange={(v) => setZk({ ...zk, zoho_project_id: v })} placeholder="45354000001026097" />
@@ -211,10 +231,11 @@ export default function Settings() {
 
           {section === "postgres" && (
             <div className="card">
-              {status !== "online" ? (
-                <div className="setrow"><div className="l"><div className="nm">Postgres servers</div><div className="ds">Connections run through the local agent. Start the agent to manage them.</div></div>
+              {status !== "online" && (
+                <div className="setrow"><div className="l"><div className="nm">Local agent</div><div className="ds">Your machines are saved regardless \u2014 browsing tables and running queries just needs the agent running too.</div></div>
                   <span className="pill warn"><Icon name="plug" size={15} />Agent offline<span className="dotled warn" /></span></div>
-              ) : pgList.length === 0 ? (
+              )}
+              {pgList.length === 0 ? (
                 <div className="setrow"><div className="l"><div className="nm">No servers configured</div><div className="ds">Add a Postgres connection to browse databases and run queries from the Postgres tab.</div></div>
                   <button className="btn accent" onClick={() => setPgAddOpen(true)}><Icon name="plus" size={15} />Add server</button></div>
               ) : (
@@ -223,10 +244,13 @@ export default function Settings() {
                     <div className="setrow" key={s.id}>
                       <div className="l"><div className="nm" style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ color: "var(--mint)" }}><Icon name="db" size={15} /></span>{s.name}{s.ssl && <span className="mono" style={{ fontSize: 10, color: ACCENT.mint }}>SSL</span>}</div>
                         <div className="ds mono" style={{ fontSize: 11.5 }}>{s.user}@{s.host}:{s.port}{s.database ? ` \u00b7 ${s.database}` : ""}</div></div>
-                      <button className="btn ghost" onClick={async () => { await pgDeleteServer(s.id); loadPg(); toast(`Removed ${s.name}`); }}><Icon name="x" size={15} />Remove</button>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button className="btn ghost" onClick={() => setPgEditing(s)}><Icon name="edit" size={15} />Edit</button>
+                        <button className="btn ghost" onClick={async () => { const r = await pgDeleteServer(s.id); if (!r.ok) { toast(`Couldn't remove ${s.name}: ${r.error}`); return; } loadPg(); toast(`Removed ${s.name}`); }}><Icon name="x" size={15} />Remove</button>
+                      </div>
                     </div>
                   ))}
-                  <div className="setrow"><div className="l"><div className="ds">Servers are stored by the agent on this machine, never in Supabase.</div></div>
+                  <div className="setrow"><div className="l"><div className="ds">Saved to your ORBIT account, visible only to you.</div></div>
                     <button className="btn ghost" onClick={() => setPgAddOpen(true)}><Icon name="plus" size={15} />Add server</button></div>
                 </>
               )}
@@ -284,7 +308,8 @@ export default function Settings() {
         </section>
       </div>
 
-      {pgAddOpen && <PgServerModal onClose={() => setPgAddOpen(false)} onAdded={() => { setPgAddOpen(false); loadPg(); }} />}
+      {pgAddOpen && <PgServerModal onClose={() => setPgAddOpen(false)} onSaved={() => { setPgAddOpen(false); loadPg(); }} />}
+      {pgEditing && <PgServerModal editing={pgEditing} onClose={() => setPgEditing(null)} onSaved={() => { setPgEditing(null); loadPg(); }} />}
     </main>
   );
 }

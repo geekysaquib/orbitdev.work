@@ -8,6 +8,8 @@ const RESEND_COOLDOWN = 45;
 export default function VerifyEmail() {
   const [params] = useSearchParams();
   const email = params.get("email") || "";
+  const next = params.get("next") || "";
+  const isSignup = params.get("signup") === "1";
   const { verifyOtp, resendOtp } = useAuth();
   const nav = useNavigate();
   const [code, setCode] = useState("");
@@ -30,7 +32,8 @@ export default function VerifyEmail() {
     const res = await verifyOtp(email, code.trim());
     setBusy(false);
     if (res.error) { setErr(res.error); return; }
-    nav("/app");
+    if (isSignup) { nav(`/get-started?next=${encodeURIComponent(next || "/app")}`); return; }
+    nav(next || "/app");
   }
 
   async function resend() {

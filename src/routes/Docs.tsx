@@ -53,6 +53,8 @@ export default function Docs() {
           <p>Browsers can't open native apps like VS Code or Visual Studio. ORBIT solves this with a tiny
             background service — the agent — that runs on your machine and exposes a local endpoint ORBIT
             talks to. When the agent is running, the topbar pill turns green and reads "Agent connected".</p>
+          <p>Easiest path: download the prebuilt Windows app from <b>Settings → Local agent</b> and
+            double-click it — no install, no console window. Building it from source instead:</p>
           <div className="cq">cd agent
 npm install
 npm start        # listens on http://localhost:47600</div>

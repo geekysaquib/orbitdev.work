@@ -37,3 +37,9 @@ export async function dbUpdate(table: string, query: string, patch: Record<strin
   const r = await fetch(`${URL}/rest/v1/${table}?${query}`, { method: "PATCH", headers: headers(), body: JSON.stringify(patch) });
   if (!r.ok) throw new Error(`db update ${table} failed: ${r.status} ${(await r.text().catch(() => "")).slice(0, 200)}`);
 }
+
+export async function dbDelete(table: string, query: string): Promise<void> {
+  assertConfigured();
+  const r = await fetch(`${URL}/rest/v1/${table}?${query}`, { method: "DELETE", headers: headers() });
+  if (!r.ok) throw new Error(`db delete ${table} failed: ${r.status} ${(await r.text().catch(() => "")).slice(0, 200)}`);
+}

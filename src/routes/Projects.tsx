@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Icon } from "../lib/icons";
+import { Select } from "../components/Select";
 import { Chip, Badge, ACCENT, Empty } from "../components/ui";
 import { useTable } from "../hooks/useTable";
 import { useToast } from "../context/Toast";
@@ -12,7 +13,7 @@ const FILTERS: [string, string][] = [["all", "All"], ["work", "Client work"], ["
 
 export default function Projects() {
   const nav = useNavigate();
-  const { rows, insert } = useTable<Project>("projects");
+  const { rows, insert, error } = useTable<Project>("projects");
   const toast = useToast();
   const { status } = useAgent();
   const [filter, setFilter] = useState("all");
@@ -55,6 +56,9 @@ export default function Projects() {
         <div><div className="h1">Projects</div><div className="sub">Every workspace you launch from — one registry.</div></div>
         <button className="btn accent" onClick={() => setModal(true)}><Icon name="plus" size={15} />New project</button>
       </div>
+      {error && (
+        <div className="authx-err" style={{ marginTop: 16 }}><Icon name="plug" size={13} />Couldn't load projects: {error}</div>
+      )}
       <div className="filters" style={{ marginTop: 22, display: "flex", alignItems: "center", gap: 10 }}>
         {FILTERS.map(([k, l]) => (
           <button key={k} className={"fchip" + (filter === k ? " on" : "")} onClick={() => setFilter(k)}>{l}</button>
@@ -109,9 +113,9 @@ export default function Projects() {
               </div>
             </div>
             <div className="fld"><label>Primary stack</label>
-              <select value={form.stack} onChange={(e) => setForm({ ...form, stack: e.target.value })}>
+              <Select full value={form.stack} onChange={(e) => setForm({ ...form, stack: e.target.value })}>
                 <option>React</option><option>.NET</option><option>Next.js</option><option>Python</option>
-              </select></div>
+              </Select></div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 22 }}>
               <button className="btn" onClick={() => setModal(false)}>Cancel</button>
               <button className="btn-primary" onClick={add} disabled={!form.name}>Add project</button>

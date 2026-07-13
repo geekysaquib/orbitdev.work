@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Icon } from "../lib/icons";
+import { Select } from "../components/Select";
 import { ACCENT, prColor, Empty, OrbitLoader, SetupRequired } from "../components/ui";
 import { useToast } from "../context/Toast";
 import { useZoho } from "../context/Zoho";
@@ -143,18 +144,18 @@ export default function Sprints() {
 
             <div className="board-filter">
               <div className="bf-search"><Icon name="search" size={13} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by ticket ID or title…" /></div>
-              <select className="bf-sel" value={fType} onChange={(e) => setFType(e.target.value)}>
+              <Select className="bf-sel" value={fType} onChange={(e) => setFType(e.target.value)}>
                 <option value="all">All types</option>
                 {types.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
-              <select className="bf-sel" value={fPrio} onChange={(e) => setFPrio(e.target.value)}>
+              </Select>
+              <Select className="bf-sel" value={fPrio} onChange={(e) => setFPrio(e.target.value)}>
                 <option value="all">All priority</option>
                 <option value="high">High</option><option value="med">Medium</option><option value="low">Low</option>
-              </select>
-              <select className="bf-sel" value={fAssignee} onChange={(e) => setFAssignee(e.target.value)} title="Filter by assignee">
+              </Select>
+              <Select className="bf-sel" value={fAssignee} onChange={(e) => setFAssignee(e.target.value)} title="Filter by assignee">
                 <option value="all">All assignees</option>
                 {assignees.map((a) => <option key={a} value={a}>{a}</option>)}
-              </select>
+              </Select>
               {(query || fType !== "all" || fPrio !== "all" || fAssignee !== "all") && <button className="bf-clear" onClick={() => { setQuery(""); setFType("all"); setFPrio("all"); setFAssignee("all"); }}>Clear</button>}
             </div>
 

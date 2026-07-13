@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Icon } from "../lib/icons";
+import { Select } from "../components/Select";
 import { Chip, ACCENT } from "../components/ui";
 import { useTable } from "../hooks/useTable";
 import { useToast } from "../context/Toast";
 import { useAgent } from "../context/Agent";
 import { launch } from "../lib/agent";
 import { fetchSprintProjects, type SprintProject } from "../lib/zoho";
-import type { Project, Task } from "../lib/types";
+import { listMyTeams } from "../lib/teams";
+import { getUser } from "../lib/auth";
+import type { Project, Task, Team } from "../lib/types";
 
 const TABS = ["overview", "tasks", "git", "environment", "notes"];
 
@@ -21,14 +24,25 @@ export default function ProjectDetail() {
   const { rows: tasks } = useTable<Task>("tasks");
   const [tab, setTab] = useState("overview");
   const [sprintProjects, setSprintProjects] = useState<SprintProject[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
   const [edit, setEdit] = useState(false);
   const p = rows.find((x) => x.id === id);
+  const myId = getUser()?.id;
 
   useEffect(() => { fetchSprintProjects().then(setSprintProjects).catch(() => {}); }, []);
+  useEffect(() => { listMyTeams().then(setTeams); }, []);
 
   if (!p) return <main className="page"><div style={{ color: "var(--dim)" }}>Loading project…</div></main>;
   const accent = p.accent || ACCENT.mint;
   const mine = tasks.filter((t) => t.project_id === p.id);
+  const owned = p.user_id === myId;
+  const teamName = p.team_id ? teams.find((t) => t.id === p.team_id)?.name : undefined;
+
+  async function share(teamId: string) {
+    const { error } = await update(p!.id, { team_id: teamId || null } as Partial<Project>);
+    if (error) { toast(`Couldn't update sharing: ${error}`); return; }
+    toast(teamId ? `Shared with ${teams.find((t) => t.id === teamId)?.name}` : "Made personal");
+  }
   // robust: linked if an id exists; resolve a display name even if not stored
   const linkedId = p.sprint_project_id || null;
   const linkedName = p.sprint_project_name || sprintProjects.find((x) => x.id === linkedId)?.name || linkedId;
@@ -58,7 +72,7 @@ export default function ProjectDetail() {
           <div className="sub">{p.client}</div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn" onClick={() => setEdit(true)}><Icon name="settings" size={14} />Edit</button>
+          {owned && <button className="btn" onClick={() => setEdit(true)}><Icon name="settings" size={14} />Edit</button>}
           {p.fe_path && <button className="btn" disabled={agentDown} onClick={() => doLaunch("vscode")}><span style={{ color: ACCENT.blue }}><Icon name="code" size={14} /></span>Open UI</button>}
           {p.sln_path && <button className="btn" disabled={agentDown} onClick={() => doLaunch("visualstudio")}><span style={{ color: ACCENT.violet }}><Icon name="server" size={14} /></span>Backend</button>}
           <button className="iconbtn" title="Terminal" disabled={agentDown} onClick={() => doLaunch("terminal")}><Icon name="terminal" size={15} /></button>
@@ -100,12 +114,32 @@ export default function ProjectDetail() {
                     </div>
                   : <div style={{ marginTop: 10 }}>
                       <p style={{ fontSize: 12.5, color: "var(--dim)", marginBottom: 10 }}>Link this project to a Zoho Sprints project to jump straight to its board.</p>
-                      <select className="field" style={{ width: "100%", fontFamily: "var(--body)", fontSize: 13 }} value="" onChange={(e) => e.target.value && linkSprint(e.target.value)}>
+                      <Select full className="field" style={{ fontFamily: "var(--body)", fontSize: 13 }} value="" onChange={(e) => e.target.value && linkSprint(e.target.value)}>
                         <option value="">{sprintProjects.length ? "Select a Sprints project…" : "Loading projects…"}</option>
                         {sprintProjects.map((sp) => <option key={sp.id} value={sp.id}>{sp.name}{sp.key ? ` (${sp.key})` : ""}</option>)}
-                      </select>
+                      </Select>
                     </div>}
               </div>
+              {(owned ? teams.length > 0 : !!teamName) && (
+                <div className="card" style={{ padding: 20, marginTop: 18 }}>
+                  <div className="eyebrow">Team sharing</div>
+                  {owned ? (
+                    <>
+                      <p style={{ fontSize: 12.5, color: "var(--dim)", margin: "10px 0" }}>
+                        {p.team_id ? `Visible to everyone on ${teamName}.` : "Personal — only you can see this project."}
+                      </p>
+                      <Select full className="field" style={{ fontFamily: "var(--body)", fontSize: 13 }} value={p.team_id ?? ""} onChange={(e) => share(e.target.value)}>
+                        <option value="">Personal (not shared)</option>
+                        {teams.map((t) => <option key={t.id} value={t.id}>Share with {t.name}</option>)}
+                      </Select>
+                    </>
+                  ) : (
+                    <p style={{ fontSize: 12.5, color: "var(--dim)", marginTop: 10, display: "flex", alignItems: "center", gap: 7 }}>
+                      <Icon name="users" size={14} />Shared by its owner with {teamName} — you can view it, edits are theirs to make.
+                    </p>
+                  )}
+                </div>
+              )}
               <div className="card" style={{ padding: 20, marginTop: 18 }}>
               <div className="eyebrow">Quick actions</div>
               {["Pull latest", "Run tests", "Docker compose up", "Deploy to Netlify"].map((a) => (
@@ -164,7 +198,7 @@ function EditProjectModal({ p, onClose, onSave, onDelete }: { p: Project; onClos
         <div style={{ display: "flex", gap: 12 }}>
           <div className="fld" style={{ flex: 1 }}><label>Client</label><input value={f.client} onChange={(e) => set("client", e.target.value)} /></div>
           <div className="fld" style={{ flex: 1 }}><label>Status</label>
-            <select value={f.status} onChange={(e) => set("status", e.target.value)}><option value="active">Active</option><option value="hold">On hold</option><option value="archived">Archived</option></select></div>
+            <Select full value={f.status} onChange={(e) => set("status", e.target.value)}><option value="active">Active</option><option value="hold">On hold</option><option value="archived">Archived</option></Select></div>
         </div>
         <div className="fld"><label>Frontend path (Open UI)</label><input value={f.fe_path} onChange={(e) => set("fe_path", e.target.value)} placeholder="D:\\projects\\app-web" /></div>
         <div className="fld"><label>Solution / backend path (Backend)</label><input value={f.sln_path} onChange={(e) => set("sln_path", e.target.value)} placeholder="D:\\projects\\app.sln" /></div>
