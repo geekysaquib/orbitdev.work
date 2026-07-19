@@ -1,44 +1,57 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Icon } from "../lib/icons";
 import { useAuth } from "../context/AuthContext";
 import { useAgent } from "../context/Agent";
 import { useZoho } from "../context/Zoho";
+import { useOffline } from "../context/Offline";
 import { useToast } from "../context/Toast";
 import { useTimezone, tzClock, allZones, tzOffset, zoneMatches } from "../context/Timezone";
 import { useBreak } from "../context/Break";
+import { PresenceProvider } from "../context/Presence";
+import { useSignOutGuard } from "../hooks/useSignOutGuard";
 import { CommandPalette } from "./CommandPalette";
 import { StartWorkModal } from "./StartWorkModal";
+import { AskAiModal } from "./AskAiModal";
+import { Modal } from "./Modal";
 import { supabase } from "../lib/supabase";
 import { ACCENT } from "./ui";
+import { NOTIF_ICON, notifAgo, fireDesktopNotification, DEFAULT_NOTIF_PREFS, type NotificationPrefs } from "../lib/notifications";
+import { fetchSettings } from "../lib/settings";
+import { fetchIntegrations } from "../lib/integrations";
+import { gmailList, gmailConfigure } from "../lib/agent";
+import { mailRules, matchesRule } from "../lib/mailRules";
 import { ORBIT_AGENT_DOWNLOAD_URL } from "../lib/downloads";
 import type { Notification } from "../lib/types";
 
-const NOTIF_ICON: Record<string, [string, string]> = {
-  ticket: ["ticket", ACCENT.amber], deploy: ["upload", ACCENT.mint],
-  git: ["git", ACCENT.blue], deadline: ["cal", ACCENT.red], system: ["bolt", ACCENT.violet],
-  task_team: ["users", ACCENT.mint],
-};
-const notifAgo = (iso: string) => {
-  const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
-  if (m < 1) return "now"; if (m < 60) return `${m}m`; if (m < 1440) return `${Math.floor(m / 60)}h`; return `${Math.floor(m / 1440)}d`;
-};
-
-const NAV = [
-  { to: "/app", label: "Dashboard", icon: "grid", end: true },
-  { to: "/projects", label: "Projects", icon: "boxes" },
-  { to: "/teams", label: "Teams", icon: "users" },
-  { to: "/sprints", label: "Sprints", icon: "sprint" },
-  { to: "/mail", label: "Mail", icon: "mail" },
-  { to: "/postgres", label: "Postgres", icon: "db" },
-  { to: "/tasks", label: "Tasks", icon: "layers" },
-  { to: "/docker", label: "Docker", icon: "container" },
-  { to: "/calendar", label: "Calendar", icon: "cal" },
-  { to: "/automation", label: "Automation", icon: "zap" },
-  { to: "/time", label: "Time", icon: "timer" },
+// Grouped into small labeled clusters (visible on the mobile expanded rail;
+// on desktop the icon-only rail just gets a divider between groups, same
+// bare `rail-div` already used once between this and NAV_BOTTOM) so the rail
+// doesn't read as one flat list of 14 items as it grows.
+const NAV_GROUPS: { label: string; items: { to: string; label: string; icon: string; end?: boolean }[] }[] = [
+  { label: "Work", items: [
+    { to: "/app", label: "Dashboard", icon: "grid", end: true },
+    { to: "/projects", label: "Projects", icon: "boxes" },
+    { to: "/tasks", label: "Tasks", icon: "layers" },
+    { to: "/sprints", label: "Sprints", icon: "sprint" },
+  ] },
+  { label: "Team", items: [
+    { to: "/teams", label: "Teams", icon: "users" },
+    { to: "/mail", label: "Mail", icon: "mail" },
+    { to: "/calendar", label: "Calendar", icon: "cal" },
+  ] },
+  { label: "Infra", items: [
+    { to: "/postgres", label: "Postgres", icon: "db" },
+    { to: "/docker", label: "Docker", icon: "container" },
+  ] },
+  { label: "Time", items: [
+    { to: "/time", label: "Time", icon: "timer" },
+  ] },
 ];
 const NAV_BOTTOM = [
   { to: "/docs", label: "Docs", icon: "book" },
+  { to: "/audit", label: "Audit log", icon: "activity" },
+  { to: "/health", label: "Health", icon: "checkc" },
   { to: "/settings", label: "Settings", icon: "settings" },
 ];
 
@@ -49,13 +62,16 @@ const CHANGELOG = [
 ];
 
 export function Layout() {
-  const { user, signOut } = useAuth();
+  const { user } = useAuth();
   const { status, disconnect, reconnect } = useAgent();
   const zoho = useZoho();
+  const { online } = useOffline();
   const toast = useToast();
   const { tz, setTz } = useTimezone();
-  const { onBreak, endBreak } = useBreak();
+  const { onBreak, endBreak, idlePaused } = useBreak();
+  const { requestSignOut, signOutGuardModal } = useSignOutGuard();
   const nav = useNavigate();
+  const location = useLocation();
   const [clock, setClock] = useState("");
   const [unread, setUnread] = useState(0);
   const [notifs, setNotifs] = useState<Notification[]>([]);
@@ -70,6 +86,7 @@ export function Layout() {
   const [log, setLog] = useState(false);
   const [cmdk, setCmdk] = useState(false);
   const [startWork, setStartWork] = useState(false);
+  const [askAi, setAskAi] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const agentRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
@@ -89,18 +106,72 @@ export function Layout() {
     return () => clearInterval(t);
   }, [tz]);
 
+  const notifPrefs = useRef<NotificationPrefs>(DEFAULT_NOTIF_PREFS);
+  const seenNotifIds = useRef<Set<string> | null>(null); // null until the first load, so the existing backlog never fires on mount
+
   const loadNotifs = async () => {
-    const { data } = await supabase.from("notifications").select("*").order("created_at", { ascending: false }).limit(15);
+    const [{ data }, settings] = await Promise.all([
+      supabase.from("notifications").select("*").order("created_at", { ascending: false }).limit(15),
+      fetchSettings(),
+    ]);
+    notifPrefs.current = settings.notifications || DEFAULT_NOTIF_PREFS;
     const list = (data ?? []) as Notification[];
     setNotifs(list);
     const { count } = await supabase.from("notifications").select("id", { count: "exact", head: true }).eq("read", false);
     setUnread(count ?? list.filter((n) => !n.read).length);
+
+    if (seenNotifIds.current) {
+      for (const n of list) if (!n.read && !seenNotifIds.current.has(n.id)) fireDesktopNotification(n, notifPrefs.current);
+    }
+    seenNotifIds.current = new Set(list.map((n) => n.id));
   };
   useEffect(() => {
     loadNotifs();
     const t = setInterval(loadNotifs, 60000); // keep the bell fresh
     return () => clearInterval(t);
   }, []);
+
+  // "Rules -> notifications": checked here (rather than only in Mail.tsx) so a
+  // match fires even when the user isn't on the Mail page — same constraint
+  // as the rest of Gmail though: needs the agent's IMAP session, so it only
+  // runs while ORBIT + the agent are both open.
+  const seenMailUids = useRef<Set<number> | null>(null); // null until the first check, so the existing inbox backlog never fires on mount
+  async function checkMailRules() {
+    if (status !== "online" || !user) return;
+    const intg = await fetchIntegrations();
+    if (!intg?.gmail_user || !intg?.gmail_app_password) return;
+    const rulesRes = await mailRules();
+    const active = rulesRes.ok ? rulesRes.rules.filter((r) => r.enabled) : [];
+    if (active.length === 0) { seenMailUids.current = null; return; }
+    await gmailConfigure(intg.gmail_user, intg.gmail_app_password);
+    const listRes = await gmailList(20);
+    if (!listRes.ok) return;
+    const isFirstRun = seenMailUids.current === null;
+    const seen = seenMailUids.current ?? new Set<number>();
+    let matched = false;
+    for (const m of listRes.messages) {
+      if (seen.has(m.uid)) continue;
+      seen.add(m.uid);
+      if (isFirstRun) continue;
+      const hit = active.find((r) => matchesRule(r, m));
+      if (hit) {
+        matched = true;
+        await supabase.from("notifications").insert({
+          user_id: user.id, kind: "mail",
+          title: `Mail rule: ${hit.field === "from" ? "sender" : "subject"} contains "${hit.value}"`,
+          body: `${m.subject} — ${m.from || m.fromAddr}`,
+        });
+      }
+    }
+    seenMailUids.current = seen;
+    if (matched) loadNotifs();
+  }
+  useEffect(() => {
+    checkMailRules();
+    const t = setInterval(checkMailRules, 120000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
 
   async function markRead(n: Notification) {
     if (n.read) return;
@@ -145,16 +216,23 @@ export function Layout() {
   }
 
   return (
+    <PresenceProvider>
     <div className="app">
       <nav className={"rail" + (navOpen ? " open" : "")}>
         <NavLink to="/app" className="logo" style={{ display: "grid", placeItems: "center" }} onClick={() => setNavOpen(false)}><Icon name="orbit" size={26} /></NavLink>
-        {NAV.map((n) => (
-          <NavLink key={n.to} to={n.to} end={n.end} onClick={() => setNavOpen(false)}
-            className={({ isActive }) => "navbtn" + (isActive ? " on" : "")}>
-            <Icon name={n.icon} size={20} />
-            {n.to === "/notifications" && unread > 0 && <span className="dotbadge" />}
-            <span className="tip">{n.label}</span>
-          </NavLink>
+        {NAV_GROUPS.map((g, i) => (
+          <div key={g.label} className="rail-group">
+            {i > 0 && <span className="rail-div" />}
+            <span className="rail-group-label">{g.label}</span>
+            {g.items.map((n) => (
+              <NavLink key={n.to} to={n.to} end={n.end} onClick={() => setNavOpen(false)}
+                className={({ isActive }) => "navbtn" + (isActive ? " on" : "")}>
+                <Icon name={n.icon} size={20} />
+                {n.to === "/notifications" && unread > 0 && <span className="dotbadge" />}
+                <span className="tip">{n.label}</span>
+              </NavLink>
+            ))}
+          </div>
         ))}
         <div className="rail-foot">
           {NAV_BOTTOM.map((n) => (
@@ -178,6 +256,10 @@ export function Layout() {
           </div>
           <button className="searchbar" onClick={() => setCmdk(true)}><Icon name="search" size={14} /><span>Jump to project or action</span><kbd style={{ color: "var(--muted)" }}>⌘K</kbd></button>
           <div className="spacer" />
+
+          <button className="btn ghost" onClick={() => setAskAi(true)} title="Ask AI about your projects, tasks, tickets and sprints">
+            <Icon name="sparkles" size={14} /><span className="btn-label">Ask AI</span>
+          </button>
 
           <div className="agent-wrap" ref={agentRef}>
             <button className={pillClass} onClick={onPill} title={status === "online" ? "Agent connected — click to disconnect" : status === "disconnected" ? "Disconnected — click to reconnect" : "Agent offline"}>
@@ -253,7 +335,7 @@ export function Layout() {
                   ) : notifs.map((n) => {
                     const [icn, col] = NOTIF_ICON[n.kind] || ["bell", ACCENT.muted];
                     return (
-                      <button key={n.id} className={"notif-menu-item" + (n.read ? "" : " unread")} onClick={() => markRead(n)}>
+                      <button key={n.id} className={"notif-menu-item" + (n.read ? "" : " unread")} onClick={() => { markRead(n); if (n.link) { setNotifOpen(false); nav(n.link); } }}>
                         <span className="nm-ic" style={{ color: col }}><Icon name={icn} size={15} /></span>
                         <span className="nm-body">
                           <span className="nm-title">{n.title}</span>
@@ -291,7 +373,7 @@ export function Layout() {
                 <button className="menu-item" onClick={() => { setMenu(false); setLog(true); }}>
                   <Icon name="bolt" size={16} />What's new
                 </button>
-                <button className="menu-item danger" onClick={() => signOut()}>
+                <button className="menu-item danger" onClick={() => { setMenu(false); requestSignOut(); }}>
                   <Icon name="logout" size={16} />Sign out
                 </button>
               </div>
@@ -299,6 +381,12 @@ export function Layout() {
           </div>
         </header>
         <div className="viewport" style={{ flexDirection: "column" }}>
+          {!online && (
+            <div className="zoho-alert offline-alert">
+              <Icon name="wifiOff" size={15} />
+              <span>You're offline — showing cached data. Changes won't save until you're back online.</span>
+            </div>
+          )}
           {zoho.status === "disconnected" && (
             <div className="zoho-alert">
               <Icon name="plug" size={15} />
@@ -324,36 +412,45 @@ export function Layout() {
                 </div>
               </div>
             )}
-            <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}><Outlet /></div>
+            {!onBreak && idlePaused && (
+              <div className="break-bar idle">
+                <span className="bb-ic"><Icon name="timer" size={15} /></span>
+                <span>Timer paused — no activity on this tab. It'll resume the moment you're back.</span>
+              </div>
+            )}
+            <div key={location.pathname} className="page-transition"><Outlet /></div>
           </div>
         </div>
       </div>
 
       {log && (
-        <div className="modal-bg">
-          <div className="modal" style={{ width: 480, maxWidth: "94vw" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <h3 style={{ display: "flex", alignItems: "center", gap: 9 }}><span style={{ color: "var(--mint)" }}><Icon name="orbit" size={18} /></span>What's new</h3>
-              <button className="iconbtn" onClick={() => setLog(false)}><Icon name="x" size={16} /></button>
-            </div>
-            <div style={{ marginTop: 8, maxHeight: 380, overflowY: "auto" }}>
-              {CHANGELOG.map((c) => (
-                <div key={c.v} style={{ padding: "14px 0", borderTop: "1px solid var(--border-soft)" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-                    <span className="badge" style={{ color: "var(--mint)", background: "rgba(55,223,160,.12)", border: "1px solid rgba(55,223,160,.3)" }}>v{c.v}</span>
-                    <span style={{ fontSize: 11.5, color: "var(--dim)" }}>{c.date}</span>
-                  </div>
-                  <ul style={{ margin: "10px 0 0 18px", color: "var(--muted)", fontSize: 13, lineHeight: 1.6 }}>
-                    {c.notes.map((n, i) => <li key={i}>{n}</li>)}
-                  </ul>
-                </div>
-              ))}
-            </div>
+        <Modal onClose={() => setLog(false)} style={{ width: 480, maxWidth: "94vw" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h3 style={{ display: "flex", alignItems: "center", gap: 9 }}><span style={{ color: "var(--mint)" }}><Icon name="orbit" size={18} /></span>What's new</h3>
+            <button className="iconbtn" onClick={() => setLog(false)}><Icon name="x" size={16} /></button>
           </div>
-        </div>
+          <div style={{ marginTop: 8, maxHeight: 380, overflowY: "auto" }}>
+            {CHANGELOG.map((c) => (
+              <div key={c.v} style={{ padding: "14px 0", borderTop: "1px solid var(--border-soft)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                  <span className="badge" style={{ color: "var(--mint)", background: "rgba(55,223,160,.12)", border: "1px solid rgba(55,223,160,.3)" }}>v{c.v}</span>
+                  <span style={{ fontSize: 11.5, color: "var(--dim)" }}>{c.date}</span>
+                </div>
+                <ul style={{ margin: "10px 0 0 18px", color: "var(--muted)", fontSize: 13, lineHeight: 1.6 }}>
+                  {c.notes.map((n, i) => <li key={i}>{n}</li>)}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </Modal>
       )}
-      {cmdk && <CommandPalette onClose={() => setCmdk(false)} />}
+      {cmdk && <CommandPalette onClose={() => setCmdk(false)} onAskAi={() => setAskAi(true)} />}
       {startWork && <StartWorkModal onClose={() => setStartWork(false)} />}
+      {/* Always mounted: it prefetches the workspace snapshot so the first open is
+          instant, and keeps the conversation thread across close/reopen. */}
+      <AskAiModal open={askAi} onClose={() => setAskAi(false)} />
+      {signOutGuardModal}
     </div>
+    </PresenceProvider>
   );
 }

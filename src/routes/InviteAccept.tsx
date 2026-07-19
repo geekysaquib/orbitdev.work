@@ -4,6 +4,8 @@ import { Icon } from "../lib/icons";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/Toast";
 import { previewInvite, acceptInvite } from "../lib/teams";
+import { recordAudit } from "../lib/audit";
+import { OrbitSpinner } from "../components/ui";
 
 type PreviewState =
   | { status: "loading" }
@@ -35,6 +37,7 @@ export default function InviteAccept() {
     const res = await acceptInvite(token);
     setBusy(false);
     if (!res.ok) { setErr(res.error); return; }
+    recordAudit({ action: "team.join", entityType: "team", entityId: res.team_id, teamId: res.team_id, meta: { team_name: res.team_name } });
     toast(`You joined ${res.team_name}`);
     nav(`/teams?team=${res.team_id}`, { replace: true });
   }
@@ -53,7 +56,7 @@ export default function InviteAccept() {
         <div className="authx-panel">
           <div className="authx-brand"><span className="authx-mark"><Icon name="orbit" size={22} /></span><span className="wordmark">ORBIT</span></div>
 
-          {preview.status === "loading" && <p className="authx-desc">Checking your invite…</p>}
+          {preview.status === "loading" && <p className="authx-desc" style={{ display: "flex", alignItems: "center", gap: 9 }}><OrbitSpinner size={15} />Checking your invite…</p>}
 
           {preview.status === "error" && (
             <>

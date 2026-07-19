@@ -13,3 +13,18 @@
   from = "/*"
   to = "/index.html"
   status = 200
+
+# Defense-in-depth against the session token (stored in localStorage — see
+# src/lib/auth.ts) being exfiltrated by an injected script. Deliberately does
+# NOT restrict script-src/connect-src: this app's local agent URL is
+# user-configurable (any host/port, see Settings), and a locked-down
+# connect-src would also break Vite's dev-mode HMR websocket — either would
+# be a real functionality regression for a CSP that can't fully close the
+# hole anyway (an XSS bug that can read localStorage can also just make same-
+# origin fetches). These headers cover what's safe to lock down unconditionally.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "strict-origin-when-cross-origin"

@@ -6,9 +6,29 @@
     <title>ORBIT — dev command center</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Google+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   </head>
   <body>
+    <!-- Paint the saved palette before first render, or the default dark flashes first. -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("orbit.theme") || "dark";
+          if (t === "system") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          document.documentElement.dataset.theme = t;
+        } catch (e) { document.documentElement.dataset.theme = "dark"; }
+        try {
+          var a = localStorage.getItem("orbit.accent") || "mint";
+          document.documentElement.dataset.accent = a;
+          if (a === "custom") {
+            var hex = localStorage.getItem("orbit.accent.custom");
+            if (hex) document.documentElement.style.setProperty("--mint", hex);
+          }
+        } catch (e) { /* default accent stands */ }
+        try { document.documentElement.dataset.font = localStorage.getItem("orbit.font") || "grotesk"; } catch (e) { /* default font stands */ }
+        try { document.documentElement.dataset.density = localStorage.getItem("orbit.density") || "comfortable"; } catch (e) { /* default density stands */ }
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

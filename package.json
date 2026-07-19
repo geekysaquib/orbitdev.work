@@ -9,6 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@aws-sdk/client-cost-explorer": "^3.1088.0",
+    "@aws-sdk/client-sts": "^3.1088.0",
+    "@sentry/react": "^10.66.0",
     "@supabase/supabase-js": "^2.45.4",
     "bcryptjs": "^2.4.3",
     "html-to-image": "^1.11.13",

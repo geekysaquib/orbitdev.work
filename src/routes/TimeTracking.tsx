@@ -5,9 +5,9 @@ import { useToast } from "../context/Toast";
 import { useZoho } from "../context/Zoho";
 import { useAgent } from "../context/Agent";
 import { useBreak } from "../context/Break";
-import { TIMER_EVENT } from "../context/Break";
 import { fetchTimesheet, type Timesheet } from "../lib/zoho";
-import { logOrbitSession, fetchOrbitHours, type OrbitHours } from "../lib/orbitHours";
+import { fetchOrbitHours, type OrbitHours } from "../lib/orbitHours";
+import { TIMER_EVENT, readTimer, startTimer, stopTimer } from "../lib/timer";
 
 export default function TimeTracking() {
   const toast = useToast();
@@ -19,21 +19,12 @@ export default function TimeTracking() {
   const [ts, setTs] = useState<Timesheet | null>(null);
   const [loading, setLoading] = useState(true);
   const [orbit, setOrbit] = useState<OrbitHours>({ todayH: 0, totalH: 0 });
-  const TIMER_KEY = "orbit.timerStart";
 
-  // restore a running timer after a page refresh
+  // restore a running timer after a page refresh, and stay in sync when it's
+  // started/paused/resumed elsewhere (break mode, another tab, Ask AI)
   useEffect(() => {
-    const saved = localStorage.getItem(TIMER_KEY);
-    if (saved && Number(saved) > 0) { setRunning(true); setSec(Math.floor((Date.now() - Number(saved)) / 1000)); }
-  }, []);
-
-  // stay in sync when the timer is paused/resumed elsewhere (e.g. break mode)
-  useEffect(() => {
-    const sync = () => {
-      const saved = localStorage.getItem(TIMER_KEY);
-      if (saved && Number(saved) > 0) { setRunning(true); setSec(Math.floor((Date.now() - Number(saved)) / 1000)); }
-      else { setRunning(false); setSec(0); }
-    };
+    const sync = () => { const t = readTimer(); setRunning(t.startedAt !== null); setSec(t.seconds); };
+    sync();
     window.addEventListener(TIMER_EVENT, sync);
     window.addEventListener("storage", sync);
     return () => { window.removeEventListener(TIMER_EVENT, sync); window.removeEventListener("storage", sync); };
@@ -41,11 +32,7 @@ export default function TimeTracking() {
 
   useEffect(() => {
     if (!running) return;
-    const iv = setInterval(() => {
-      const saved = localStorage.getItem(TIMER_KEY);
-      const start = saved ? Number(saved) : Date.now();
-      setSec(Math.floor((Date.now() - start) / 1000));
-    }, 1000);
+    const iv = setInterval(() => setSec(readTimer().seconds), 1000);
     return () => clearInterval(iv);
   }, [running]);
 
@@ -61,14 +48,13 @@ export default function TimeTracking() {
   async function toggle() {
     if (running) {
       setRunning(false);
-      localStorage.removeItem(TIMER_KEY);
-      await logOrbitSession(sec);
+      const logged = await stopTimer();
       const h = await fetchOrbitHours(); setOrbit(h);
-      toast(`Logged ${Math.floor(sec / 60)}m ${sec % 60}s to Orbit hours`);
+      toast(`Logged ${Math.floor(logged / 60)}m ${logged % 60}s to Orbit hours`);
       setSec(0);
     } else {
       if (agentDown) { toast("Agent required — start the ORBIT agent to run the timer"); return; }
-      localStorage.setItem(TIMER_KEY, String(Date.now()));
+      startTimer();
       setRunning(true); toast("Timer started");
     }
   }

@@ -1,14 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Icon } from "../lib/icons";
 import { ACCENT, Empty, OrbitLoader, SetupRequired } from "../components/ui";
 import { useToast } from "../context/Toast";
 import { useAgent } from "../context/Agent";
 import { PgServerModal } from "../components/PgServerModal";
+import { CreateDatabaseModal } from "../components/CreateDatabaseModal";
 import { SchemaDiagram } from "../components/SchemaDiagram";
+import { SeedDataModal } from "../components/SeedDataModal";
 import {
   pgServers, pgDeleteServer, pgDatabases, pgTables, pgQuery, pgSchema,
+  pgBackup, pgBackupAvailable,
   type PgServer, type PgResult, type PgTable, type PgSchema,
 } from "../lib/pg";
+import { SchemaDiffView } from "../components/SchemaDiffView";
 
 const cell = (v: unknown): string => {
   if (v === null || v === undefined) return "";
@@ -25,8 +30,8 @@ function schemaColor(schema: string) {
 
 interface Tab {
   id: string;
-  schema: string;
-  table: string;
+  schema: string | null;
+  table: string | null;
   query: string;
   hasRun: boolean;
   running: boolean;
@@ -38,6 +43,7 @@ export default function Postgres() {
   const toast = useToast();
   const { status } = useAgent();
   const agentDown = status !== "online";
+  const [params, setParams] = useSearchParams();
 
   const [servers, setServers] = useState<PgServer[]>([]);
   const [loadingS, setLoadingS] = useState(true);
@@ -48,8 +54,28 @@ export default function Postgres() {
   const [tables, setTables] = useState<PgTable[]>([]);
   const [schema, setSchema] = useState<PgSchema | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [createDbOpen, setCreateDbOpen] = useState(false);
+  const [seedOpen, setSeedOpen] = useState(false);
   const [editingServer, setEditingServer] = useState<PgServer | null>(null);
-  const [mode, setMode] = useState<"query" | "diagram">("query");
+  const [mode, setMode] = useState<"query" | "diagram" | "diff">("query");
+  const [schemaSnapshot, setSchemaSnapshot] = useState<PgSchema | null>(null);
+  const [backupAvailable, setBackupAvailable] = useState(false);
+  const [backingUp, setBackingUp] = useState(false);
+  useEffect(() => { pgBackupAvailable().then(setBackupAvailable); }, []);
+
+  async function doBackup() {
+    if (!sel || !db || backingUp) return;
+    setBackingUp(true);
+    const r = await pgBackup(sel, db);
+    setBackingUp(false);
+    if (!r.ok || !r.blob) { toast(`Backup failed: ${r.error}`); return; }
+    const url = URL.createObjectURL(r.blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = r.filename || `${db}.sql`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast(`Backed up ${db}`);
+  }
 
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
@@ -74,27 +100,38 @@ export default function Postgres() {
   }
   useEffect(() => { loadServers(); }, []); // eslint-disable-line
 
-  useEffect(() => {
+  async function loadDbs(preferDb?: string) {
     if (!sel) { setDbs([]); setDb(""); return; }
     setLoadingDb(true); setDbs([]);
-    pgDatabases(sel).then((r) => {
-      setDbs(r.databases);
-      setDb(sel.database && r.databases.includes(sel.database) ? sel.database : r.databases[0] || "");
-      if (!r.ok) toast(r.error || "Couldn't list databases");
-    }).finally(() => setLoadingDb(false));
-  }, [selId]); // eslint-disable-line
+    const r = await pgDatabases(sel);
+    setDbs(r.databases);
+    setDb(preferDb && r.databases.includes(preferDb) ? preferDb : sel.database && r.databases.includes(sel.database) ? sel.database : r.databases[0] || "");
+    if (!r.ok) toast(r.error || "Couldn't list databases");
+    setLoadingDb(false);
+  }
+  useEffect(() => { loadDbs(); }, [selId]); // eslint-disable-line
 
   // Table catalogue (for the find-table palette + table picker) and full schema (for the column inspector).
   useEffect(() => {
     setTabs([]); setActiveTabId(null); setInspectorOpen(false);
+    setSchemaSnapshot(null); // a snapshot from a different server/db wouldn't mean anything to diff against
     if (!sel || !db) { setTables([]); setSchema(null); return; }
+    const wantsNew = params.get("new") === "1";
+    if (wantsNew) setParams((p) => { p.delete("new"); return p; }, { replace: true });
     pgTables(sel, db).then((r) => {
       setTables(r.tables);
       if (!r.ok) toast(r.error || "Couldn't list tables");
+      else if (wantsNew) addBlankTab();
       else if (r.tables.length > 0) addTab(r.tables[0]); // default to the first table so the view isn't empty
     });
     pgSchema(sel, db).then((r) => { if (r.ok) setSchema(r.schema || null); });
   }, [selId, db]); // eslint-disable-line
+
+  // Re-fetch the live schema each time Diff mode is opened, so "current" reflects
+  // anything changed since the last time (not just since the last server/db switch).
+  useEffect(() => {
+    if (mode === "diff" && sel && db) pgSchema(sel, db).then((r) => { if (r.ok) setSchema(r.schema || null); });
+  }, [mode]); // eslint-disable-line
 
   function patchTab(id: string, patch: Partial<Tab>) {
     setTabs((ts) => ts.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -115,6 +152,13 @@ export default function Postgres() {
     setMode("query");
     addTab(t);
     setPaletteOpen(false);
+  }
+  /** Opens a fresh, unbound query tab (e.g. for CREATE TABLE on an empty database). */
+  function addBlankTab() {
+    const id = "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    setMode("query");
+    setActiveTabId(id);
+    setTabs((ts) => [...ts, { id, schema: null, table: null, query: "", hasRun: false, running: false, result: null, error: null }]);
   }
   function closeTab(id: string, e?: { stopPropagation: () => void }) {
     e?.stopPropagation();
@@ -178,14 +222,30 @@ export default function Postgres() {
       <div className="pg-toolbar">
         <ServerPicker servers={servers} value={selId} loading={loadingS} onChange={setSelId} onAdd={() => setAddOpen(true)} onEdit={setEditingServer} onRemove={removeServer} />
         <span className="pg-sep">/</span>
-        <DbPicker dbs={dbs} value={db} loading={loadingDb} onChange={setDb} />
+        <DbPicker dbs={dbs} value={db} loading={loadingDb} onChange={setDb} onAdd={() => sel && setCreateDbOpen(true)} />
         <span className="pg-sep">/</span>
-        <TablePicker tables={tables} value={activeTab ? `${activeTab.schema}.${activeTab.table}` : null} onChange={openTable} />
+        <TablePicker tables={tables} value={activeTab?.schema && activeTab.table ? `${activeTab.schema}.${activeTab.table}` : null} onChange={openTable} />
         <div className="pg-modetabs">
           <button className={"pg-modetab" + (mode === "query" ? " on" : "")} onClick={() => setMode("query")}><Icon name="terminal" size={13} />Query</button>
           <button className={"pg-modetab" + (mode === "diagram" ? " on" : "")} onClick={() => setMode("diagram")}><Icon name="layers" size={13} />Diagram</button>
+          <button className={"pg-modetab" + (mode === "diff" ? " on" : "")} onClick={() => setMode("diff")}><Icon name="activity" size={13} />Diff</button>
         </div>
         <div style={{ flex: 1 }} />
+        {sel && db && backupAvailable && (
+          <button className="pg-findbtn" disabled={backingUp} onClick={doBackup}>
+            {backingUp ? <Icon name="loader" size={14} className="spin" /> : <Icon name="download" size={14} />}Backup
+          </button>
+        )}
+        {sel && db && (
+          <button className="pg-findbtn" onClick={() => setSeedOpen(true)}>
+            <Icon name="sparkles" size={14} />Seed dummy data
+          </button>
+        )}
+        {mode === "query" && sel && db && (
+          <button className="pg-findbtn" onClick={addBlankTab}>
+            <Icon name="plus" size={14} />New query
+          </button>
+        )}
         {mode === "query" && (
           <button className="pg-findbtn" onClick={() => setPaletteOpen(true)}>
             <Icon name="search" size={14} />Find table<kbd>⌘T</kbd>
@@ -197,16 +257,18 @@ export default function Postgres() {
         <div className="pg-tabstrip">
           {tabs.map((t) => (
             <div key={t.id} className={"pg-tab" + (t.id === activeTabId ? " on" : "")} onClick={() => setActiveTabId(t.id)}>
-              <span className="pg-tab-dot" style={{ background: schemaColor(t.schema) }} />
-              <span className="mono">{t.table}</span>
+              <span className="pg-tab-dot" style={{ background: t.schema ? schemaColor(t.schema) : "var(--dim)" }} />
+              <span className="mono">{t.table || "New query"}</span>
               <button className="pg-tab-x" onClick={(e) => closeTab(t.id, e)}><Icon name="x" size={11} /></button>
             </div>
           ))}
-          <button className="pg-tab-add" title="Find table (⌘T)" onClick={() => setPaletteOpen(true)}><Icon name="plus" size={14} /></button>
+          <button className="pg-tab-add" title="New query" onClick={addBlankTab}><Icon name="plus" size={14} /></button>
         </div>
       )}
 
-      {!selId ? (
+      {loadingS ? (
+        <div className="page-loader"><OrbitLoader label="Loading servers…" /></div>
+      ) : !selId ? (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <SetupRequired icon="db" title="No Postgres servers yet" sub="Add a connection to start browsing tables and running queries." cta="Add server" onCta={() => setAddOpen(true)} />
         </div>
@@ -220,20 +282,34 @@ export default function Postgres() {
         </div>
       ) : mode === "diagram" ? (
         <SchemaDiagram server={sel!} database={db} />
+      ) : mode === "diff" ? (
+        <SchemaDiffView
+          snapshot={schemaSnapshot} current={schema}
+          onSnapshot={() => setSchemaSnapshot(schema)}
+          onClear={() => setSchemaSnapshot(null)}
+        />
       ) : !activeTab ? (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <SetupRequired icon="layers" title="Nothing open" sub="Search for a table to start querying it." cta="Find table" onCta={() => setPaletteOpen(true)} />
+          <SetupRequired
+            icon="terminal"
+            title="Nothing open"
+            sub={tables.length > 0 ? "Search for a table to start querying it, or start a blank query." : "This database has no tables yet — start a blank query to create one."}
+            cta="New query"
+            onCta={addBlankTab}
+          />
         </div>
       ) : (
         <div className="pg-content">
           <div className="pg-tabhead">
             <div>
-              <h2 className="pg-tabtitle">{activeTab.schema}.{activeTab.table}</h2>
+              <h2 className="pg-tabtitle">{activeTab.schema && activeTab.table ? `${activeTab.schema}.${activeTab.table}` : "New query"}</h2>
               <p className="pg-tabsub">{activeTab.hasRun ? `Query executed against ${db}` : `Not run yet · ${db}`}</p>
             </div>
-            <button className={"pg-colbtn" + (inspectorOpen ? " on" : "")} onClick={() => setInspectorOpen((o) => !o)}>
-              <Icon name="grid" size={13} />Columns
-            </button>
+            {activeTab.schema && activeTab.table && (
+              <button className={"pg-colbtn" + (inspectorOpen ? " on" : "")} onClick={() => setInspectorOpen((o) => !o)}>
+                <Icon name="grid" size={13} />Columns
+              </button>
+            )}
           </div>
 
           <div className="pg-editor2">
@@ -282,7 +358,7 @@ export default function Postgres() {
               )}
             </div>
 
-            {inspectorOpen && (
+            {inspectorOpen && activeTab.schema && activeTab.table && (
               <div className="pg-inspector">
                 <div className="pg-inspector-head">COLUMNS</div>
                 {schemaTable ? schemaTable.columns.map((c) => (
@@ -330,6 +406,10 @@ export default function Postgres() {
         </div>
       )}
 
+      {seedOpen && sel && db && <SeedDataModal server={sel} database={db} tables={tables} onClose={() => setSeedOpen(false)} />}
+      {createDbOpen && sel && (
+        <CreateDatabaseModal server={sel} onClose={() => setCreateDbOpen(false)} onCreated={(name) => { setCreateDbOpen(false); loadDbs(name); }} />
+      )}
       {addOpen && <PgServerModal onClose={() => setAddOpen(false)} onSaved={(id) => { setAddOpen(false); loadServers(id); }} />}
       {editingServer && (
         <PgServerModal editing={editingServer} onClose={() => setEditingServer(null)} onSaved={(id) => { setEditingServer(null); loadServers(id); }} />
@@ -379,7 +459,7 @@ function ServerPicker({ servers, value, loading, onChange, onAdd, onEdit, onRemo
   );
 }
 
-function DbPicker({ dbs, value, loading, onChange }: { dbs: string[]; value: string; loading: boolean; onChange: (d: string) => void }) {
+function DbPicker({ dbs, value, loading, onChange, onAdd }: { dbs: string[]; value: string; loading: boolean; onChange: (d: string) => void; onAdd: () => void }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const ref = useRef<HTMLDivElement>(null);
@@ -391,7 +471,7 @@ function DbPicker({ dbs, value, loading, onChange }: { dbs: string[]; value: str
   const filtered = dbs.filter((d) => d.toLowerCase().includes(q.toLowerCase()));
   return (
     <div className="pg-pick" ref={ref}>
-      <button className="pg-pickbtn mono" onClick={() => { setOpen((o) => !o); setQ(""); }} disabled={loading || dbs.length === 0}>
+      <button className="pg-pickbtn mono" onClick={() => { setOpen((o) => !o); setQ(""); }} disabled={loading}>
         <Icon name="db" size={13} />
         <span>{loading ? "Loading databases…" : (value || "No databases")}</span>
         <Icon name="chevD" size={11} />
@@ -410,6 +490,7 @@ function DbPicker({ dbs, value, loading, onChange }: { dbs: string[]; value: str
             ))}
             {filtered.length === 0 && <div className="pg-pickempty">No matches</div>}
           </div>
+          <button className="pg-pickadd" onClick={() => { setOpen(false); onAdd(); }}><Icon name="plus" size={13} />New database</button>
         </div>
       )}
     </div>

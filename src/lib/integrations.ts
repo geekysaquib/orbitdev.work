@@ -1,10 +1,12 @@
 import { supabase } from "./supabase";
 import { getUser } from "./auth";
+import { getOnline, OFFLINE_ERROR } from "./offline";
 
 export interface Integrations {
   zoho_client_id?: string | null; zoho_client_secret?: string | null; zoho_refresh_token?: string | null;
   zoho_dc?: string | null; zoho_team_id?: string | null; zoho_project_id?: string | null;
   gmail_user?: string | null; gmail_app_password?: string | null;
+  anthropic_api_key?: string | null;
 }
 
 export async function fetchIntegrations(): Promise<Integrations | null> {
@@ -14,9 +16,10 @@ export async function fetchIntegrations(): Promise<Integrations | null> {
 }
 
 export async function saveIntegrations(patch: Integrations): Promise<{ error?: string }> {
+  if (!getOnline()) return { error: OFFLINE_ERROR };
   const u = getUser();
   if (!u) return { error: "Not signed in" };
   const { error } = await supabase.from("integrations")
-    .upsert({ user_id: u.id, ...patch, updated_at: new Date().toISOString() } as never, { onConflict: "user_id" });
+    .upsert({ user_id: u.id, ...patch, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
   return { error: error?.message };
 }

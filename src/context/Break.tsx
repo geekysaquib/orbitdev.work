@@ -1,11 +1,13 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { fetchSettings, saveSettings } from "../lib/settings";
+import { TIMER_KEY, TIMER_PAUSE_KEY as PAUSE_KEY, TIMER_EVENT, ls, emitTimerChange } from "../lib/timer";
+import { useIdleDetection } from "../hooks/useIdleDetection";
 
-const TIMER_KEY = "orbit.timerStart";
-const PAUSE_KEY = "orbit.timerPausedSec";
 const BREAK_KEY = "orbit.onBreak";
 const BREAK_START_KEY = "orbit.breakStart";
-export const TIMER_EVENT = "orbit-timer-change";
+// Re-exported: TimeTracking has imported TIMER_EVENT from here since before the
+// timer state moved into lib/timer.ts.
+export { TIMER_EVENT };
 
 interface BreakShape {
   onBreak: boolean;
@@ -13,15 +15,15 @@ interface BreakShape {
   breakStartedAt: number | null;
   startBreak: () => void;
   endBreak: () => void;
+  /** Auto-paused by idle detection (distinct from a manual break — no "I'm refreshed" click needed, resumes on its own the moment activity is seen). */
+  idlePaused: boolean;
+  idleEnabled: boolean;
+  idleMinutes: number;
+  setIdlePrefs: (enabled: boolean, minutes: number) => void;
 }
 const Ctx = createContext<BreakShape | undefined>(undefined);
 
-function emit() { try { window.dispatchEvent(new Event(TIMER_EVENT)); } catch { /* noop */ } }
-const ls = {
-  get: (k: string) => { try { return localStorage.getItem(k); } catch { return null; } },
-  set: (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* noop */ } },
-  del: (k: string) => { try { localStorage.removeItem(k); } catch { /* noop */ } },
-};
+const emit = emitTimerChange;
 
 export function BreakProvider({ children }: { children: ReactNode }) {
   // hydrate instantly from localStorage so a refresh never drops the break
@@ -30,6 +32,9 @@ export function BreakProvider({ children }: { children: ReactNode }) {
   const [breakStartedAt, setBreakStartedAt] = useState<number | null>(() => {
     const v = ls.get(BREAK_START_KEY); return v ? Number(v) : null;
   });
+  const [idlePaused, setIdlePaused] = useState(false);
+  const [idleEnabled, setIdleEnabledState] = useState(false);
+  const [idleMinutes, setIdleMinutesState] = useState(10);
 
   // reconcile with Supabase (durable / cross-device) once, on mount
   useEffect(() => {
@@ -45,8 +50,40 @@ export function BreakProvider({ children }: { children: ReactNode }) {
       } else if (s.on_break === false && ls.get(BREAK_KEY) !== "1") {
         setOnBreak(false);
       }
+      if (s.idle_detection_enabled) setIdleEnabledState(true);
+      if (s.idle_minutes) setIdleMinutesState(s.idle_minutes);
     });
   }, []);
+
+  const pauseForIdle = () => {
+    if (onBreak) return; // already paused via a real break — don't double-pause
+    const start = Number(ls.get(TIMER_KEY) || 0);
+    if (start <= 0) return; // timer isn't running — nothing to pause
+    const elapsed = Math.max(0, Math.floor((Date.now() - start) / 1000));
+    ls.set(PAUSE_KEY, String(elapsed));
+    ls.del(TIMER_KEY);
+    emit();
+    setIdlePaused(true);
+  };
+  const resumeFromIdle = () => {
+    if (!idlePaused) return;
+    const paused = ls.get(PAUSE_KEY);
+    if (paused !== null) {
+      const sec = Number(paused) || 0;
+      ls.set(TIMER_KEY, String(Date.now() - sec * 1000));
+      ls.del(PAUSE_KEY);
+      emit();
+    }
+    setIdlePaused(false);
+  };
+  useIdleDetection(idleEnabled && !onBreak, idleMinutes, pauseForIdle, resumeFromIdle);
+
+  const setIdlePrefs = (enabled: boolean, minutes: number) => {
+    setIdleEnabledState(enabled);
+    setIdleMinutesState(minutes);
+    if (!enabled && idlePaused) resumeFromIdle();
+    saveSettings({ idle_detection_enabled: enabled, idle_minutes: minutes });
+  };
 
   const startBreak = () => {
     const now = Date.now();
@@ -87,7 +124,11 @@ export function BreakProvider({ children }: { children: ReactNode }) {
     saveSettings({ on_break: false, break_started_at: null, timer_paused: false });
   };
 
-  return <Ctx.Provider value={{ onBreak, timerPaused, breakStartedAt, startBreak, endBreak }}>{children}</Ctx.Provider>;
+  return (
+    <Ctx.Provider value={{ onBreak, timerPaused, breakStartedAt, startBreak, endBreak, idlePaused, idleEnabled, idleMinutes, setIdlePrefs }}>
+      {children}
+    </Ctx.Provider>
+  );
 }
 
 export function useBreak(): BreakShape {

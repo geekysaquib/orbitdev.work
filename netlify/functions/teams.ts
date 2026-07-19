@@ -1,6 +1,6 @@
 import type { Handler } from "@netlify/functions";
 import { randomBytes, createHash } from "node:crypto";
-import { dbSelect, dbInsert, dbUpdate, dbDelete } from "./_lib/db";
+import { dbSelect, dbInsert, dbUpdate, dbDelete, dbRpc } from "./_lib/db";
 import { sendMail } from "./_lib/mailer";
 import { teamInviteEmail } from "./_lib/email-templates";
 import { verifySession } from "./_lib/verifyToken";
@@ -27,9 +27,9 @@ import { verifySession } from "./_lib/verifyToken";
  */
 
 interface TeamRow { id: string; name: string; owner_id: string; created_at: string; }
-interface TeamMemberRow { team_id: string; user_id: string; role: "owner" | "admin" | "member"; joined_at: string; }
+interface TeamMemberRow { team_id: string; user_id: string; role: "owner" | "admin" | "member" | "viewer"; joined_at: string; }
 interface TeamInviteRow {
-  id: string; team_id: string; email: string; role: "admin" | "member"; token_hash: string;
+  id: string; team_id: string; email: string; role: "admin" | "member" | "viewer"; token_hash: string;
   invited_by: string; status: string; expires_at: string; accepted_at: string | null; created_at: string;
 }
 interface UserRow { id: string; email: string; full_name: string; }
@@ -38,6 +38,7 @@ const INVITE_TTL_DAYS = 7;
 const RESEND_COOLDOWN_SEC = 60;
 const TEAM_NAME_MAX = 60;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PUBLIC_SITE_URL = (process.env.PUBLIC_SITE_URL || "").replace(/\/+$/, "");
 
 const json = (statusCode: number, data: unknown) => ({
@@ -58,7 +59,11 @@ function maskEmail(email: string): string {
   return `${user.slice(0, 1)}${"*".repeat(Math.max(user.length - 1, 1))}@${domain}`;
 }
 
-async function membershipRole(teamId: string, userId: string): Promise<"owner" | "admin" | "member" | null> {
+// Defense in depth: every call site below validates its id fields as UUIDs
+// before calling these, but these shared helpers guard too — a non-UUID
+// value (e.g. containing `&`) must never reach a raw PostgREST filter string.
+async function membershipRole(teamId: string, userId: string): Promise<"owner" | "admin" | "member" | "viewer" | null> {
+  if (!UUID_RE.test(teamId) || !UUID_RE.test(userId)) return null;
   const rows = await dbSelect<TeamMemberRow>("team_members", `team_id=eq.${teamId}&user_id=eq.${userId}&limit=1`);
   return rows[0]?.role ?? null;
 }
@@ -69,6 +74,7 @@ async function findUserByEmail(email: string): Promise<UserRow | null> {
 }
 
 async function findUserById(id: string): Promise<UserRow | null> {
+  if (!UUID_RE.test(id)) return null;
   const rows = await dbSelect<UserRow>("users", `id=eq.${id}&limit=1&select=id,email,full_name`);
   return rows[0] ?? null;
 }
@@ -106,7 +112,7 @@ export const handler: Handler = async (event) => {
 
   if (event.httpMethod !== "POST") return json(405, { error: "Method not allowed" });
 
-  const session = verifySession(event.headers.authorization);
+  const session = await verifySession(event.headers.authorization);
   if (!session) return json(401, { error: "Sign in required." });
 
   let body: Record<string, unknown>;
@@ -118,20 +124,17 @@ export const handler: Handler = async (event) => {
         const name = String(body.name || "").trim();
         if (!name || name.length > TEAM_NAME_MAX) return json(400, { error: `Team name must be 1–${TEAM_NAME_MAX} characters.` });
 
-        const team = await dbInsert<TeamRow>("teams", { name, owner_id: session.userId });
-        try {
-          await dbInsert<TeamMemberRow>("team_members", { team_id: team.id, user_id: session.userId, role: "owner" });
-        } catch (e) {
-          await dbDelete("teams", `id=eq.${team.id}`).catch(() => {});
-          throw e;
-        }
+        // One atomic DB-function call (see create_team_with_owner in supabase/schema.sql)
+        // instead of insert-team-then-insert-member with a manual compensating delete.
+        const team = await dbRpc<TeamRow>("create_team_with_owner", { p_name: name, p_owner_id: session.userId });
         return json(200, { team, role: "owner" });
       }
 
       case "invite": {
         const teamId = String(body.team_id || "");
+        if (!UUID_RE.test(teamId)) return json(400, { error: "Invalid team id." });
         const email = String(body.email || "").trim().toLowerCase();
-        const role = body.role === "admin" ? "admin" : "member";
+        const role = body.role === "admin" ? "admin" : body.role === "viewer" ? "viewer" : "member";
         if (!EMAIL_RE.test(email)) return json(400, { error: "Enter a valid email address." });
 
         const callerRole = await membershipRole(teamId, session.userId);
@@ -175,6 +178,7 @@ export const handler: Handler = async (event) => {
 
       case "resend-invite": {
         const inviteId = String(body.invite_id || "");
+        if (!UUID_RE.test(inviteId)) return json(404, { error: "Invite not found." });
         const rows = await dbSelect<TeamInviteRow>("team_invites", `id=eq.${inviteId}&limit=1`);
         const invite = rows[0];
         if (!invite || invite.status !== "pending") return json(404, { error: "Invite not found." });
@@ -203,6 +207,7 @@ export const handler: Handler = async (event) => {
 
       case "revoke-invite": {
         const inviteId = String(body.invite_id || "");
+        if (!UUID_RE.test(inviteId)) return json(200, { ok: true });
         const rows = await dbSelect<TeamInviteRow>("team_invites", `id=eq.${inviteId}&limit=1`);
         const invite = rows[0];
         if (!invite) return json(200, { ok: true });
@@ -242,6 +247,7 @@ export const handler: Handler = async (event) => {
       case "remove-member": {
         const teamId = String(body.team_id || "");
         const targetId = String(body.user_id || "");
+        if (!UUID_RE.test(teamId) || !UUID_RE.test(targetId)) return json(400, { error: "Invalid id." });
         const callerRole = await membershipRole(teamId, session.userId);
         if (callerRole !== "owner" && callerRole !== "admin") return json(403, { error: "Only team owners/admins can remove members." });
 
@@ -257,7 +263,8 @@ export const handler: Handler = async (event) => {
       case "change-role": {
         const teamId = String(body.team_id || "");
         const targetId = String(body.user_id || "");
-        const role = body.role === "admin" ? "admin" : "member";
+        if (!UUID_RE.test(teamId) || !UUID_RE.test(targetId)) return json(400, { error: "Invalid id." });
+        const role = body.role === "admin" ? "admin" : body.role === "viewer" ? "viewer" : "member";
         const callerRole = await membershipRole(teamId, session.userId);
         if (callerRole !== "owner") return json(403, { error: "Only the team owner can change roles." });
 
@@ -272,20 +279,22 @@ export const handler: Handler = async (event) => {
       case "transfer-ownership": {
         const teamId = String(body.team_id || "");
         const newOwnerId = String(body.new_owner_user_id || "");
+        if (!UUID_RE.test(teamId) || !UUID_RE.test(newOwnerId)) return json(400, { error: "Invalid id." });
         const callerRole = await membershipRole(teamId, session.userId);
         if (callerRole !== "owner") return json(403, { error: "Only the current owner can transfer ownership." });
 
         const newOwnerRole = await membershipRole(teamId, newOwnerId);
         if (!newOwnerRole) return json(400, { error: "The new owner must already be a member of this team." });
 
-        await dbUpdate("team_members", `team_id=eq.${teamId}&user_id=eq.${newOwnerId}`, { role: "owner" });
-        await dbUpdate("team_members", `team_id=eq.${teamId}&user_id=eq.${session.userId}`, { role: "admin" });
-        await dbUpdate("teams", `id=eq.${teamId}`, { owner_id: newOwnerId });
+        // Atomic: promote/demote/re-point owner_id all in one DB-function call, so a
+        // mid-sequence failure can't leave two "owners" or an unset teams.owner_id.
+        await dbRpc("transfer_team_ownership", { p_team_id: teamId, p_old_owner_id: session.userId, p_new_owner_id: newOwnerId });
         return json(200, { ok: true });
       }
 
       case "leave": {
         const teamId = String(body.team_id || "");
+        if (!UUID_RE.test(teamId)) return json(200, { ok: true });
         const callerRole = await membershipRole(teamId, session.userId);
         if (!callerRole) return json(200, { ok: true });
         if (callerRole === "owner") return json(400, { error: "Transfer ownership or delete the team before leaving." });

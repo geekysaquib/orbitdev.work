@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import { getUser } from "./auth";
+import type { Json } from "./database.types";
 
 /**
  * Chore history for breaks. Requires:
@@ -40,9 +41,9 @@ export async function saveBreakLog(input: {
       ended_at: new Date().toISOString(),
       seconds: input.seconds,
       beverage: input.beverage,
-      rows: input.rows,
-      summary: input.summary,
-    } as never);
+      rows: input.rows as unknown as Json,
+      summary: input.summary as unknown as Json,
+    });
   } catch { /* table may not exist yet */ }
 }
 
@@ -59,6 +60,6 @@ export async function notify(kind: string, title: string, body?: string): Promis
   try {
     const u = getUser();
     if (!u) return;
-    await supabase.from("notifications").insert({ user_id: u.id, kind, title, body: body ?? null, read: false } as never);
+    await supabase.from("notifications").insert({ user_id: u.id, kind, title, body: body ?? null, read: false });
   } catch { /* noop */ }
 }

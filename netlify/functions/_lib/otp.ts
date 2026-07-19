@@ -6,6 +6,7 @@ export type OtpPurpose = "verify" | "reset";
 const TTL_MIN = 10;
 const RESEND_COOLDOWN_SEC = 45;
 const MAX_ATTEMPTS = 5;
+const DAILY_SEND_LIMIT = 8;
 
 interface OtpRow { id: string; code: string; attempts: number; expires_at: string; created_at: string; }
 
@@ -22,13 +23,26 @@ async function latestPending(email: string, purpose: OtpPurpose): Promise<OtpRow
 }
 
 /** Issues a fresh code, superseding any still-pending one. Rate-limited per email+purpose. */
-export async function issueOtp(email: string, purpose: OtpPurpose): Promise<{ code: string } | { error: "too_soon"; retryInSec: number }> {
+export async function issueOtp(
+  email: string,
+  purpose: OtpPurpose,
+): Promise<{ code: string } | { error: "too_soon"; retryInSec: number } | { error: "too_many" }> {
   const existing = await latestPending(email, purpose);
   if (existing) {
     const ageSec = (Date.now() - new Date(existing.created_at).getTime()) / 1000;
     if (ageSec < RESEND_COOLDOWN_SEC) return { error: "too_soon", retryInSec: Math.ceil(RESEND_COOLDOWN_SEC - ageSec) };
     await dbUpdate("otp_codes", `id=eq.${existing.id}`, { consumed: true });
   }
+
+  // Caps total volume (not just frequency) so a cooldown of 45s can't still add up
+  // to ~80 emails/day against one inbox.
+  const since = new Date(Date.now() - 24 * 3600_000).toISOString();
+  const recent = await dbSelect<{ id: string }>(
+    "otp_codes",
+    `email=eq.${encodeURIComponent(email)}&purpose=eq.${purpose}&created_at=gte.${since}&select=id`,
+  );
+  if (recent.length >= DAILY_SEND_LIMIT) return { error: "too_many" };
+
   const code = genCode();
   const expires_at = new Date(Date.now() + TTL_MIN * 60_000).toISOString();
   await dbInsert("otp_codes", { email, code, purpose, expires_at });

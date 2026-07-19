@@ -9,17 +9,16 @@
  *    stateless about servers: every call hands it the connection details for
  *    that one request, it never stores its own copy.
  */
-import { getAgentUrl } from "./agent";
-import { authHeader } from "./auth";
+import { agentCall } from "./agent";
 import { supabase } from "./supabase";
 import { getUser } from "./auth";
+import { getOnline, OFFLINE_ERROR } from "./offline";
 
-async function call(path: string, method: "GET" | "POST" | "DELETE" = "GET", body?: unknown): Promise<Response> {
-  return fetch(getAgentUrl() + path, {
-    method,
-    headers: { "Content-Type": "application/json", ...authHeader() },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+// Thin wrapper over the shared agentCall (see lib/agent.ts) — every call site
+// below is GET or POST (agentCall infers the method from whether a body is
+// given, so a bodyless POST still needs an explicit `{}` to send as POST).
+async function call(path: string, method: "GET" | "POST" = "GET", body?: unknown): Promise<Response> {
+  return agentCall(path, method === "GET" ? undefined : (body ?? {}));
 }
 
 export interface PgServer { id: string; name: string; host: string; port: number; user: string; password: string | null; database: string | null; ssl: boolean; }
@@ -47,20 +46,23 @@ export async function pgServers(): Promise<{ ok: boolean; servers: PgServer[]; e
   return { ok: true, servers: ((data ?? []) as PgServerRow[]).map(rowToServer) };
 }
 export async function pgAddServer(input: PgServerInput): Promise<{ ok: boolean; server?: PgServer; error?: string }> {
+  if (!getOnline()) return { ok: false, error: OFFLINE_ERROR };
   const u = getUser();
   if (!u) return { ok: false, error: "Not signed in" };
-  const { data, error } = await supabase.from("pg_servers").insert({ user_id: u.id, ...inputToRow(input) } as never).select().single();
+  const { data, error } = await supabase.from("pg_servers").insert({ user_id: u.id, ...inputToRow(input) }).select().single();
   if (error || !data) return { ok: false, error: error?.message || "Couldn't save server" };
   return { ok: true, server: rowToServer(data as PgServerRow) };
 }
 export async function pgUpdateServer(id: string, input: PgServerInput): Promise<{ ok: boolean; server?: PgServer; error?: string }> {
+  if (!getOnline()) return { ok: false, error: OFFLINE_ERROR };
   const { data, error } = await supabase.from("pg_servers")
-    .update({ ...inputToRow(input), updated_at: new Date().toISOString() } as never)
+    .update({ ...inputToRow(input), updated_at: new Date().toISOString() })
     .eq("id", id).select().single();
   if (error || !data) return { ok: false, error: error?.message || "Couldn't update server" };
   return { ok: true, server: rowToServer(data as PgServerRow) };
 }
 export async function pgDeleteServer(id: string): Promise<{ ok: boolean; error?: string }> {
+  if (!getOnline()) return { ok: false, error: OFFLINE_ERROR };
   const { error } = await supabase.from("pg_servers").delete().eq("id", id);
   return { ok: !error, error: error?.message };
 }
@@ -74,9 +76,30 @@ export async function pgDatabases(server: PgServer): Promise<{ ok: boolean; data
   try { const r = await call("/pg/databases", "POST", { server: connOf(server) }); const j = await r.json().catch(() => ({})); return r.ok ? { ok: true, databases: j.databases ?? [] } : { ok: false, databases: [], error: j.error }; }
   catch { return { ok: false, databases: [], error: "agent offline" }; }
 }
+export async function pgCreateDatabase(server: PgServer, name: string): Promise<{ ok: boolean; database?: string; error?: string }> {
+  try {
+    const r = await call("/pg/databases/create", "POST", { server: connOf(server), name });
+    const j = await r.json().catch(() => ({}));
+    return r.ok ? { ok: true, database: j.database } : { ok: false, error: j.error || `agent ${r.status}` };
+  } catch { return { ok: false, error: "agent offline" }; }
+}
 export async function pgTables(server: PgServer, database: string): Promise<{ ok: boolean; tables: PgTable[]; error?: string }> {
   try { const r = await call("/pg/tables", "POST", { server: connOf(server), database }); const j = await r.json().catch(() => ({})); return r.ok ? { ok: true, tables: j.tables ?? [] } : { ok: false, tables: [], error: j.error }; }
   catch { return { ok: false, tables: [], error: "agent offline" }; }
+}
+export async function pgBackupAvailable(): Promise<boolean> {
+  try { const r = await call("/pg/backup/available", "GET"); const j = await r.json().catch(() => ({})); return !!(j as { available?: boolean }).available; }
+  catch { return false; }
+}
+/** Returns the dump as a Blob for the caller to trigger a browser download with — no native picker involved, unlike dockerSave. */
+export async function pgBackup(server: PgServer, database: string): Promise<{ ok: boolean; blob?: Blob; filename?: string; error?: string }> {
+  try {
+    const r = await call("/pg/backup", "POST", { server: connOf(server), database });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); return { ok: false, error: (j as { error?: string }).error || `agent ${r.status}` }; }
+    const blob = await r.blob();
+    const match = /filename="([^"]+)"/.exec(r.headers.get("Content-Disposition") || "");
+    return { ok: true, blob, filename: match?.[1] || `${database}.sql` };
+  } catch { return { ok: false, error: "agent offline" }; }
 }
 export async function pgSchema(server: PgServer, database: string): Promise<{ ok: boolean; schema?: PgSchema; error?: string }> {
   try {
@@ -92,6 +115,40 @@ export async function pgQuery(server: PgServer, database: string, sql: string): 
     if (!r.ok) return { ok: false, error: j.error || `agent ${r.status}`, ms: j.ms };
     return { ok: true, result: j as PgResult };
   } catch { return { ok: false, error: "agent offline" }; }
+}
+
+// ---- Dummy-data seeding ----
+export const MAX_ROWS_PER_TABLE = 1000;
+export interface SeedTableRef { schema: string; name: string; }
+export interface SeedSkip { table: string; reason: string; }
+export interface SeedJobStatus {
+  jobId: string;
+  status: "running" | "done" | "cancelled" | "error";
+  overallDone: number;
+  overallTotal: number;
+  currentTable: string | null;
+  tableDone: number;
+  tableTotal: number;
+  result: { inserted: Record<string, number>; skipped: SeedSkip[] } | null;
+  error: string | null;
+}
+export async function pgStartSeed(server: PgServer, database: string, rowsPerTable: number, excludeTables: SeedTableRef[] = [], projectPrompt?: string, aiApiKey?: string): Promise<{ ok: boolean; jobId?: string; error?: string }> {
+  try {
+    const r = await call("/pg/seed/start", "POST", { server: connOf(server), database, rowsPerTable, excludeTables, projectPrompt, aiApiKey });
+    const j = await r.json().catch(() => ({}));
+    return r.ok ? { ok: true, jobId: j.jobId } : { ok: false, error: j.error || `agent ${r.status}` };
+  } catch { return { ok: false, error: "agent offline" }; }
+}
+export async function pgSeedStatus(jobId: string): Promise<{ ok: boolean; job?: SeedJobStatus; error?: string }> {
+  try {
+    const r = await call(`/pg/seed/status/${jobId}`, "GET");
+    const j = await r.json().catch(() => ({}));
+    return r.ok ? { ok: true, job: j.job } : { ok: false, error: j.error };
+  } catch { return { ok: false, error: "agent offline" }; }
+}
+export async function pgCancelSeed(jobId: string): Promise<{ ok: boolean; error?: string }> {
+  try { const r = await call(`/pg/seed/cancel/${jobId}`, "POST"); const j = await r.json().catch(() => ({})); return { ok: r.ok, error: j.error }; }
+  catch { return { ok: false, error: "agent offline" }; }
 }
 
 export interface PgHealth { ok: boolean; name: string; connections: number; longestSec: number; size: string; error?: string; }

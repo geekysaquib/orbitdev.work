@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { getToken } from "./auth";
+import type { Database } from "./database.types";
 
 const url = import.meta.env.VITE_SUPABASE_URL as string;
 const anon = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
@@ -15,7 +16,7 @@ if (!url || !anon) {
 // token over via `accessToken` keeps every existing RLS policy (`auth.uid()`)
 // working unchanged. Note: setting this option disables `supabase.auth.*` —
 // use src/lib/auth.ts for session state instead.
-export const supabase = createClient(url ?? "", anon ?? "", {
+export const supabase = createClient<Database>(url ?? "", anon ?? "", {
   auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   accessToken: async () => getToken(),
 });

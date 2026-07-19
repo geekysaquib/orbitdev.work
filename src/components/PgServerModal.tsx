@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { Icon } from "../lib/icons";
 import { useToast } from "../context/Toast";
+import { Modal } from "./Modal";
 import { pgAddServer, pgUpdateServer, pgTestServer, type PgServer, type PgServerInput } from "../lib/pg";
+import { recordAudit } from "../lib/audit";
 
 export function PgServerModal({ editing, onClose, onSaved }: { editing?: PgServer | null; onClose: () => void; onSaved: (id: string) => void }) {
   const toast = useToast();
@@ -24,43 +26,45 @@ export function PgServerModal({ editing, onClose, onSaved }: { editing?: PgServe
     setSaving(true);
     const r = editing ? await pgUpdateServer(editing.id, f) : await pgAddServer(f);
     setSaving(false);
-    if (r.ok && r.server) { toast(editing ? `Saved ${r.server.name}` : `Added ${r.server.name}`); onSaved(r.server.id); }
+    if (r.ok && r.server) {
+      toast(editing ? `Saved ${r.server.name}` : `Added ${r.server.name}`);
+      recordAudit({ action: editing ? "pg_server.update" : "pg_server.create", entityType: "pg_server", entityId: r.server.id, meta: { name: r.server.name } });
+      onSaved(r.server.id);
+    }
     else toast(`Couldn't ${editing ? "save" : "add"}: ${r.error}`);
   }
 
   return (
-    <div className="modal-bg">
-      <div className="modal" style={{ width: 460 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h3 style={{ display: "flex", alignItems: "center", gap: 9 }}><span style={{ color: "var(--mint)" }}><Icon name="db" size={18} /></span>{editing ? "Edit machine" : "Add Postgres server"}</h3>
-          <button className="iconbtn" onClick={onClose}><Icon name="x" size={16} /></button>
-        </div>
-        <div className="dk-field" style={{ marginTop: 16 }}>
-          <label>Name</label>
-          <input className="dk-in" value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="Local Postgres" />
-        </div>
-        <div className="dk-build-grid" style={{ marginTop: 12 }}>
-          <div className="dk-field"><label>Host</label><input className="dk-in mono" value={f.host} onChange={(e) => set("host", e.target.value)} placeholder="localhost" /></div>
-          <div className="dk-field"><label>Port</label><input className="dk-in mono" value={f.port} onChange={(e) => set("port", Number(e.target.value) || 5432)} placeholder="5432" /></div>
-        </div>
-        <div className="dk-build-grid" style={{ marginTop: 12 }}>
-          <div className="dk-field"><label>User</label><input className="dk-in mono" value={f.user} onChange={(e) => set("user", e.target.value)} placeholder="postgres" /></div>
-          <div className="dk-field"><label>Password</label><input className="dk-in mono" type="password" value={f.password} onChange={(e) => set("password", e.target.value)} placeholder="••••••" /></div>
-        </div>
-        <div className="dk-field" style={{ marginTop: 12 }}>
-          <label>Default database <span style={{ color: "var(--dim)" }}>· optional</span></label>
-          <input className="dk-in mono" value={f.database} onChange={(e) => set("database", e.target.value)} placeholder="postgres" />
-        </div>
-        <label className="pg-ssl">
-          <input type="checkbox" checked={!!f.ssl} onChange={(e) => set("ssl", e.target.checked)} />
-          Use SSL (required by many hosted providers)
-        </label>
-        <div style={{ display: "flex", gap: 8, marginTop: 18, justifyContent: "flex-end" }}>
-          <button className="btn ghost" disabled={testing} onClick={test}>{testing ? <><Icon name="loader" size={14} className="spin" />Testing…</> : <><Icon name="plug" size={14} />Test</>}</button>
-          <button className="btn accent" disabled={saving} onClick={save}>{saving ? "Saving…" : editing ? "Save changes" : "Save server"}</button>
-        </div>
-        <div style={{ fontSize: 11, color: "var(--dim)", marginTop: 12 }}>Saved to your ORBIT account, visible only to you. The local agent uses these details to connect when you browse or run a query — they're never stored on the machine running the agent.</div>
+    <Modal onClose={onClose} style={{ width: 460 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h3 style={{ display: "flex", alignItems: "center", gap: 9 }}><span style={{ color: "var(--mint)" }}><Icon name="db" size={18} /></span>{editing ? "Edit machine" : "Add Postgres server"}</h3>
+        <button className="iconbtn" onClick={onClose}><Icon name="x" size={16} /></button>
       </div>
-    </div>
+      <div className="dk-field" style={{ marginTop: 16 }}>
+        <label>Name</label>
+        <input className="dk-in" value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="Local Postgres" />
+      </div>
+      <div className="dk-build-grid" style={{ marginTop: 12 }}>
+        <div className="dk-field"><label>Host</label><input className="dk-in mono" value={f.host} onChange={(e) => set("host", e.target.value)} placeholder="localhost" /></div>
+        <div className="dk-field"><label>Port</label><input className="dk-in mono" value={f.port} onChange={(e) => set("port", Number(e.target.value) || 5432)} placeholder="5432" /></div>
+      </div>
+      <div className="dk-build-grid" style={{ marginTop: 12 }}>
+        <div className="dk-field"><label>User</label><input className="dk-in mono" value={f.user} onChange={(e) => set("user", e.target.value)} placeholder="postgres" /></div>
+        <div className="dk-field"><label>Password</label><input className="dk-in mono" type="password" value={f.password} onChange={(e) => set("password", e.target.value)} placeholder="••••••" /></div>
+      </div>
+      <div className="dk-field" style={{ marginTop: 12 }}>
+        <label>Default database <span style={{ color: "var(--dim)" }}>· optional</span></label>
+        <input className="dk-in mono" value={f.database} onChange={(e) => set("database", e.target.value)} placeholder="postgres" />
+      </div>
+      <label className="pg-ssl">
+        <input type="checkbox" checked={!!f.ssl} onChange={(e) => set("ssl", e.target.checked)} />
+        Use SSL (required by many hosted providers)
+      </label>
+      <div style={{ display: "flex", gap: 8, marginTop: 18, justifyContent: "flex-end" }}>
+        <button className="btn ghost" disabled={testing} onClick={test}>{testing ? <><Icon name="loader" size={14} className="spin" />Testing…</> : <><Icon name="plug" size={14} />Test</>}</button>
+        <button className="btn accent" disabled={saving} onClick={save}>{saving ? "Saving…" : editing ? "Save changes" : "Save server"}</button>
+      </div>
+      <div style={{ fontSize: 11, color: "var(--dim)", marginTop: 12 }}>Saved to your ORBIT account, visible only to you. The local agent uses these details to connect when you browse or run a query — they're never stored on the machine running the agent.</div>
+    </Modal>
   );
 }

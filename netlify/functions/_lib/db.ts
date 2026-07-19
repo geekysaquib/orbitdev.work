@@ -43,3 +43,13 @@ export async function dbDelete(table: string, query: string): Promise<void> {
   const r = await fetch(`${URL}/rest/v1/${table}?${query}`, { method: "DELETE", headers: headers() });
   if (!r.ok) throw new Error(`db delete ${table} failed: ${r.status} ${(await r.text().catch(() => "")).slice(0, 200)}`);
 }
+
+/** Calls a Postgres function via PostgREST's /rpc/ endpoint — its body runs as one atomic transaction. */
+export async function dbRpc<T = unknown>(fn: string, args: Record<string, unknown>): Promise<T> {
+  assertConfigured();
+  const r = await fetch(`${URL}/rest/v1/rpc/${fn}`, {
+    method: "POST", headers: headers({ Prefer: "return=representation" }), body: JSON.stringify(args),
+  });
+  if (!r.ok) throw new Error(`db rpc ${fn} failed: ${r.status} ${(await r.text().catch(() => "")).slice(0, 200)}`);
+  return r.json();
+}

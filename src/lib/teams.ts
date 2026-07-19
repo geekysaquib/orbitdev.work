@@ -5,27 +5,14 @@
  * holds the service-role key and does the authorization checks; see the
  * comment at the top of that file and in supabase/schema.sql for why.
  */
-import { authHeader } from "./auth";
 import { supabase } from "./supabase";
+import { postJson } from "./apiClient";
 import type { Team, TeamMember, TeamInvite, TeamRole } from "./types";
 
 const FN = "/.netlify/functions/teams";
 
-type ApiResult<T> = ({ ok: true } & T) | { ok: false; error: string };
-
-async function call<T = Record<string, never>>(action: string, payload: Record<string, unknown>): Promise<ApiResult<T>> {
-  try {
-    const r = await fetch(`${FN}?action=${action}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeader() },
-      body: JSON.stringify(payload),
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) return { ok: false, error: (j as { error?: string }).error || `Request failed (${r.status})` };
-    return { ok: true, ...(j as T) };
-  } catch {
-    return { ok: false, error: "Couldn't reach ORBIT — check your connection and try again." };
-  }
+function call<T = Record<string, never>>(action: string, payload: Record<string, unknown>) {
+  return postJson<T>(`${FN}?action=${action}`, payload);
 }
 
 // ---------- reads ----------

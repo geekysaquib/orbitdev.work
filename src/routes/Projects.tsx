@@ -2,20 +2,23 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Icon } from "../lib/icons";
 import { Select } from "../components/Select";
-import { Chip, Badge, ACCENT, Empty } from "../components/ui";
+import { Chip, Badge, ACCENT, Empty, OrbitLoader } from "../components/ui";
 import { useTable } from "../hooks/useTable";
+import { useProjectsGitStatus } from "../hooks/useProjectsGitStatus";
 import { useToast } from "../context/Toast";
 import { useAgent } from "../context/Agent";
-import { pickPath } from "../lib/agent";
+import { pickPath, type GitStatusResult } from "../lib/agent";
+import { recordAudit } from "../lib/audit";
 import type { Project } from "../lib/types";
 
 const FILTERS: [string, string][] = [["all", "All"], ["work", "Client work"], ["personal", "Personal"], ["active", "Active"], ["hold", "On hold"]];
 
 export default function Projects() {
   const nav = useNavigate();
-  const { rows, insert, error } = useTable<Project>("projects");
+  const { rows, insert, error, loading } = useTable<Project>("projects");
   const toast = useToast();
   const { status } = useAgent();
+  const { gitByProject, gitLoading, refreshGit } = useProjectsGitStatus(rows, status === "online");
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [modal, setModal] = useState(false);
@@ -47,6 +50,7 @@ export default function Projects() {
       name: form.name, client: form.client || null, fe_path: form.fe_path || null,
       sln_path: form.sln_path || null, stacks: [form.stack], status: "active", accent: ACCENT.mint,
     } as Partial<Project>);
+    recordAudit({ action: "project.create", entityType: "project", meta: { name: form.name } });
     setModal(false); setForm({ name: "", client: "", fe_path: "", sln_path: "", stack: "React" });
   }
 
@@ -63,7 +67,10 @@ export default function Projects() {
         {FILTERS.map(([k, l]) => (
           <button key={k} className={"fchip" + (filter === k ? " on" : "")} onClick={() => setFilter(k)}>{l}</button>
         ))}
-        <div className="bf-search" style={{ marginLeft: "auto" }}>
+        <button className="iconbtn" title="Recheck git status" disabled={gitLoading || status !== "online"} onClick={refreshGit} style={{ marginLeft: "auto" }}>
+          <Icon name="refresh" size={14} className={gitLoading ? "spin" : ""} />
+        </button>
+        <div className="bf-search">
           <Icon name="search" size={13} />
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search projects…" />
           {query && <button className="bf-clear" onClick={() => setQuery("")} style={{ marginLeft: 4 }}>Clear</button>}
@@ -73,18 +80,20 @@ export default function Projects() {
       <table className="tbl">
         <thead><tr><th>Project</th><th>Stack</th><th>Status</th><th>Branch</th><th>Port</th><th></th></tr></thead>
         <tbody>
+          {loading ? <tr><td colSpan={6}><div className="page-loader"><OrbitLoader label="Loading projects…" /></div></td></tr> : <>
           {list.map((p) => (
             <tr key={p.id} className="prow" onClick={() => nav(`/projects/${p.id}`)}>
               <td><div style={{ fontFamily: "var(--display)", fontWeight: 600 }}>{p.name}</div>
                 <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 2 }}>{p.client}</div></td>
               <td><div className="chips" style={{ margin: 0 }}>{p.stacks?.map((s) => <Chip key={s} name={s} />)}</div></td>
               <td>{p.status === "hold" ? <Badge text="On hold" color={ACCENT.violet} /> : <Badge text="Active" color={ACCENT.mint} />}</td>
-              <td className="mono" style={{ fontSize: 12, color: "var(--muted)" }}>{p.branch || "main"}</td>
+              <td className="mono" style={{ fontSize: 12 }}><GitBranchCell project={p} git={gitByProject[p.id]} /></td>
               <td className="mono" style={{ fontSize: 12, color: "var(--dim)" }}>{p.dev_port || "—"}</td>
               <td style={{ textAlign: "right" }}><Icon name="chevR" size={16} /></td>
             </tr>
           ))}
           {list.length === 0 && <tr><td colSpan={6}><Empty icon="boxes" title={rows.length === 0 ? "No projects yet" : "Nothing matches this filter"} sub={rows.length === 0 ? "Add your first project to launch it in one click." : "Try a different filter."} mini /></td></tr>}
+          </>}
         </tbody>
       </table>
       </div>
@@ -124,5 +133,22 @@ export default function Projects() {
         </div>
       )}
     </main>
+  );
+}
+
+/** Live git status when the agent has it; falls back to the static `branch` column otherwise. */
+function GitBranchCell({ project, git }: { project: Project; git?: GitStatusResult }) {
+  if (!git?.ok) return <span style={{ color: "var(--muted)" }}>{project.branch || "main"}</span>;
+  const dirty = git.dirty ?? 0;
+  const arrows = `${git.ahead ? `↑${git.ahead}` : ""}${git.behind ? `↓${git.behind}` : ""}`;
+  const title = git.lastCommit ? `${git.lastCommit.subject} — ${git.lastCommit.author}` : undefined;
+  return (
+    <span title={title} style={{ display: "inline-flex", flexDirection: "column", gap: 2 }}>
+      <span>
+        <span style={{ color: dirty > 0 ? "var(--amber)" : "var(--mint)" }}>{git.branch}</span>
+        {arrows && <span style={{ color: "var(--dim)", marginLeft: 6 }}>{arrows}</span>}
+      </span>
+      {dirty > 0 && <span style={{ fontSize: 10.5, color: "var(--dim)" }}>{dirty} uncommitted</span>}
+    </span>
   );
 }

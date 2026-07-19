@@ -81,6 +81,10 @@ execFileSync(process.execPath, ["--experimental-sea-config", seaConfigPath], { s
 console.log("[build] copying node binary ->", exePath);
 copyFileSync(process.execPath, exePath);
 
+// Not bundled into the SEA blob (it's Python, not JS) — must ship next to the
+// exe so ensureLocalAi()'s `join(__dir, "ai_local.py")` finds it at runtime.
+copyFileSync(join(agentDir, "ai_local.py"), join(distDir, "ai_local.py"));
+
 if (process.platform === "win32" && existsSync(iconPath)) {
   console.log("[build] branding exe (icon + version info)");
   await rcedit(exePath, {

@@ -1,12 +1,11 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Icon } from "../lib/icons";
 import { useAuth } from "../context/AuthContext";
-
-const RESEND_COOLDOWN = 45;
+import { useOtpResend } from "../hooks/useOtpResend";
 
 export default function ForgotPassword() {
-  const { forgotPassword, resendOtp, resetPassword } = useAuth();
+  const { forgotPassword, resetPassword } = useAuth();
   const nav = useNavigate();
   const [step, setStep] = useState<"request" | "reset">("request");
   const [email, setEmail] = useState("");
@@ -16,13 +15,7 @@ export default function ForgotPassword() {
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [cooldown, setCooldown] = useState(RESEND_COOLDOWN);
-
-  useEffect(() => {
-    if (step !== "reset" || cooldown <= 0) return;
-    const t = setTimeout(() => setCooldown((c) => c - 1), 1000);
-    return () => clearTimeout(t);
-  }, [step, cooldown]);
+  const { cooldown, resend: resendCode, resetCooldown } = useOtpResend("reset");
 
   async function requestCode() {
     if (!email.trim()) return;
@@ -30,17 +23,15 @@ export default function ForgotPassword() {
     await forgotPassword(email.trim());
     setBusy(false);
     setStep("reset");
-    setCooldown(RESEND_COOLDOWN);
+    resetCooldown();
     setNote("If that email has an ORBIT account, a code is on its way.");
   }
 
   async function resend() {
-    if (cooldown > 0) return;
     setErr(null); setNote(null);
-    const res = await resendOtp(email.trim(), "reset");
-    if (res.error) { setErr(res.error); return; }
-    setNote("New code sent — check your inbox.");
-    setCooldown(RESEND_COOLDOWN);
+    const r = await resendCode(email.trim());
+    if (r.error) setErr(r.error);
+    else if (r.note) setNote(r.note);
   }
 
   async function submitReset() {

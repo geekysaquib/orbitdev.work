@@ -2,27 +2,20 @@ import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams, Link } from "react-router-dom";
 import { Icon } from "../lib/icons";
 import { useAuth } from "../context/AuthContext";
-
-const RESEND_COOLDOWN = 45;
+import { useOtpResend } from "../hooks/useOtpResend";
 
 export default function VerifyEmail() {
   const [params] = useSearchParams();
   const email = params.get("email") || "";
   const next = params.get("next") || "";
   const isSignup = params.get("signup") === "1";
-  const { verifyOtp, resendOtp } = useAuth();
+  const { verifyOtp } = useAuth();
   const nav = useNavigate();
   const [code, setCode] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [cooldown, setCooldown] = useState(RESEND_COOLDOWN);
-
-  useEffect(() => {
-    if (cooldown <= 0) return;
-    const t = setTimeout(() => setCooldown((c) => c - 1), 1000);
-    return () => clearTimeout(t);
-  }, [cooldown]);
+  const { cooldown, resend: resendCode } = useOtpResend("verify");
 
   useEffect(() => { if (!email) nav("/login", { replace: true }); }, [email, nav]);
 
@@ -32,17 +25,15 @@ export default function VerifyEmail() {
     const res = await verifyOtp(email, code.trim());
     setBusy(false);
     if (res.error) { setErr(res.error); return; }
-    if (isSignup) { nav(`/get-started?next=${encodeURIComponent(next || "/app")}`); return; }
+    if (isSignup) { nav(`/onboarding?next=${encodeURIComponent(next || "/app")}`); return; }
     nav(next || "/app");
   }
 
   async function resend() {
-    if (cooldown > 0) return;
     setErr(null); setNote(null);
-    const res = await resendOtp(email, "verify");
-    if (res.error) { setErr(res.error); return; }
-    setNote("New code sent — check your inbox.");
-    setCooldown(RESEND_COOLDOWN);
+    const r = await resendCode(email);
+    if (r.error) setErr(r.error);
+    else if (r.note) setNote(r.note);
   }
 
   return (

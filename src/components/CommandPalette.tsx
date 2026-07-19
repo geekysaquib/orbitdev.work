@@ -4,7 +4,7 @@ import { Icon } from "../lib/icons";
 
 interface Cmd { label: string; icon: string; hint?: string; run: () => void; group: string; }
 
-export function CommandPalette({ onClose }: { onClose: () => void }) {
+export function CommandPalette({ onClose, onAskAi }: { onClose: () => void; onAskAi?: () => void }) {
   const nav = useNavigate();
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
@@ -14,18 +14,24 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
 
   const go = (to: string) => { nav(to); onClose(); };
   const commands: Cmd[] = useMemo(() => [
+    ...(onAskAi ? [{ group: "Actions", label: "Ask AI", icon: "sparkles", run: () => { onAskAi(); onClose(); } }] : []),
     { group: "Go to", label: "Dashboard", icon: "grid", run: () => go("/app") },
     { group: "Go to", label: "Projects", icon: "boxes", run: () => go("/projects") },
+    { group: "Go to", label: "Teams", icon: "users", run: () => go("/teams") },
     { group: "Go to", label: "Sprints", icon: "sprint", run: () => go("/sprints") },
+    { group: "Go to", label: "Tickets", icon: "ticket", run: () => go("/tickets") },
     { group: "Go to", label: "Tasks", icon: "layers", run: () => go("/tasks") },
+    { group: "Go to", label: "Mail", icon: "mail", run: () => go("/mail") },
+    { group: "Go to", label: "Postgres", icon: "db", run: () => go("/postgres") },
+    { group: "Go to", label: "Docker", icon: "container", run: () => go("/docker") },
     { group: "Go to", label: "Calendar", icon: "cal", run: () => go("/calendar") },
-    { group: "Go to", label: "Automation", icon: "zap", run: () => go("/automation") },
     { group: "Go to", label: "Time", icon: "timer", run: () => go("/time") },
     { group: "Go to", label: "Notifications", icon: "bell", run: () => go("/notifications") },
     { group: "Go to", label: "Docs", icon: "book", run: () => go("/docs") },
     { group: "Go to", label: "Settings", icon: "settings", run: () => go("/settings") },
     { group: "Actions", label: "New project", icon: "plus", run: () => go("/projects") },
-    { group: "Actions", label: "Start Work", icon: "zap", run: () => go("/automation") },
+    { group: "Actions", label: "Compose email", icon: "mail", run: () => go("/mail?compose=1") },
+    { group: "Actions", label: "New SQL query", icon: "terminal", run: () => go("/postgres?new=1") },
   ], []); // eslint-disable-line
 
   const filtered = useMemo(() => {

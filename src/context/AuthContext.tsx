@@ -1,23 +1,12 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { getToken, getUser, setSession, clearSession, isSessionValid, type OrbitUser } from "../lib/auth";
+import { AUTH_EVENT, getToken, getUser, setSession, clearSession, isSessionValid, type OrbitUser } from "../lib/auth";
+import { postJson } from "../lib/apiClient";
+import { recordAudit } from "../lib/audit";
 
 const FN = "/.netlify/functions/auth";
 
-type ApiResult<T> = ({ ok: true } & T) | { ok: false; error: string; code?: string };
-
-async function call<T = Record<string, never>>(action: string, payload: Record<string, unknown>): Promise<ApiResult<T>> {
-  try {
-    const r = await fetch(`${FN}?action=${action}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) return { ok: false, error: (j as { error?: string }).error || `Request failed (${r.status})`, code: (j as { error?: string }).error };
-    return { ok: true, ...(j as T) };
-  } catch {
-    return { ok: false, error: "Couldn't reach ORBIT — check your connection and try again." };
-  }
+function call<T = Record<string, never>>(action: string, payload: Record<string, unknown>) {
+  return postJson<T>(`${FN}?action=${action}`, payload);
 }
 
 interface AuthShape {
@@ -39,9 +28,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<OrbitUser | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Re-reads localStorage and syncs `user`. Only calls clearSession() (which
+  // itself emits AUTH_EVENT) when there's actually something to clear —
+  // otherwise, since this runs ON that same event, an already-clear session
+  // would re-trigger itself forever.
+  const sync = () => {
+    if (isSessionValid()) { setUser(getUser()); return; }
+    if (getToken() || getUser()) clearSession();
+    setUser(null);
+  };
+
   useEffect(() => {
-    setUser(isSessionValid() ? getUser() : (clearSession(), null));
+    sync();
     setLoading(false);
+  }, []);
+
+  // Keeps every open tab in sync: `storage` fires in OTHER tabs when one tab's
+  // localStorage changes (e.g. signing out there), and AUTH_EVENT covers
+  // same-tab changes made outside this provider's own methods.
+  useEffect(() => {
+    window.addEventListener(AUTH_EVENT, sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener(AUTH_EVENT, sync);
+      window.removeEventListener("storage", sync);
+    };
   }, []);
 
   const signIn: AuthShape["signIn"] = async (email, password) => {
@@ -49,6 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!res.ok) return res.error === "verify_required" ? { verifyRequired: true } : { error: res.error };
     setSession(res.token, res.user);
     setUser(res.user);
+    recordAudit({ action: "sign_in", entityType: "session" });
     return {};
   };
 
@@ -80,7 +92,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return res.ok ? {} : { error: res.error };
   };
 
-  const signOut = () => { clearSession(); setUser(null); };
+  const signOut = () => { recordAudit({ action: "sign_out", entityType: "session" }); clearSession(); setUser(null); };
 
   return (
     <Ctx.Provider value={{ session: !!user, user, loading, signIn, signUp, verifyOtp, resendOtp, forgotPassword, resetPassword, signOut }}>

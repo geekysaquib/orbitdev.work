@@ -10,7 +10,7 @@ interface AgentShape {
   disconnect: () => void;
   reconnect: () => void;
   updateUrl: (url: string) => void;
-  subscribe: (onEvent: (event: string) => void) => () => void;
+  subscribe: (onEvent: (event: string, payload?: unknown) => void) => () => void;
 }
 
 const Ctx = createContext<AgentShape | undefined>(undefined);
@@ -20,7 +20,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AgentStatus>("offline");
   const [url, setUrl] = useState(getAgentUrl());
   const disconnected = useRef(false);
-  const listeners = useRef(new Set<(event: string) => void>());
+  const listeners = useRef(new Set<(event: string, payload?: unknown) => void>());
 
   const check = useCallback(async () => {
     if (disconnected.current) return;               // user chose to disconnect — don't auto-reconnect
@@ -28,20 +28,32 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     setStatus(ok ? "online" : "offline");
   }, []);
 
+  // Polling is paused while the tab is hidden — no point hammering /ping when the
+  // user can't see the result, and the /events websocket (below) already carries
+  // its own liveness signal. Re-checks immediately on becoming visible again
+  // rather than waiting up to POLL_MS for a stale status to refresh.
   useEffect(() => {
     check();
-    const t = window.setInterval(check, POLL_MS);   // auto-reconnects the moment the agent comes up
-    return () => window.clearInterval(t);
+    let t: number | null = null;
+    const start = () => { if (t == null) t = window.setInterval(check, POLL_MS); };
+    const stop = () => { if (t != null) { window.clearInterval(t); t = null; } };
+    const onVisibility = () => {
+      if (document.hidden) stop();
+      else { check(); start(); }
+    };
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { stop(); document.removeEventListener("visibilitychange", onVisibility); };
   }, [check]);
 
   // Held open for as long as the app itself is mounted (i.e. the tab is open)
   // — the packaged agent watches this connection to know when to auto-quit,
   // so it must not be tied to any one route's lifetime.
   useEffect(() => {
-    return agentEvents((event) => { for (const fn of listeners.current) fn(event); });
+    return agentEvents((event, payload) => { for (const fn of listeners.current) fn(event, payload); });
   }, []);
 
-  const subscribe = useCallback((onEvent: (event: string) => void) => {
+  const subscribe = useCallback((onEvent: (event: string, payload?: unknown) => void) => {
     listeners.current.add(onEvent);
     return () => { listeners.current.delete(onEvent); };
   }, []);

@@ -9,6 +9,8 @@ import {
   fetchSprintProjects, fetchSprintBoard, fetchItemDetail, fetchThumbs,
   type SprintProject, type Board, type ZohoItem, type ItemDetail, type Thumb, type Attachment,
 } from "../lib/zoho";
+import { computeVelocity } from "../lib/velocity";
+import { VelocityChart } from "../components/VelocityChart";
 
 const typeStyle = (name: string): { color: string; icon: string } => {
   const n = (name || "").toLowerCase();
@@ -38,16 +40,44 @@ export default function Sprints() {
   const [fType, setFType] = useState("all");
   const [fPrio, setFPrio] = useState("all");
   const [fAssignee, setFAssignee] = useState("all");
+  const [showVelocity, setShowVelocity] = useState(false);
 
   const [searchParams] = useSearchParams();
   const wantProject = searchParams.get("project");
+  const wantSprint = searchParams.get("sprint");
+  const wantItem = searchParams.get("item");
 
   useEffect(() => {
     fetchSprintProjects()
-      .then((p) => { setProjects(p); const pre = wantProject && p.some((x) => x.id === wantProject) ? wantProject : p[0]?.id; if (pre) setSel(pre); })
+      .then((p) => {
+        setProjects(p);
+        // Defer to ?project= when it names a real one, rather than selecting the
+        // first and letting the effect below correct it — that would fetch a board
+        // nobody asked for and flash the wrong one on the way.
+        const pre = wantProject && p.some((x) => x.id === wantProject) ? wantProject : p[0]?.id;
+        if (pre) setSel(pre);
+      })
       .catch((e) => setErr((e as Error).message))
       .finally(() => setLoadingP(false));
-  }, []); // eslint-disable-line
+  }, []); // eslint-disable-line — first load only; ?project= changes are handled below
+
+  // ?project= has to be reactive, not read once at mount: navigating here from
+  // Ask AI or the command palette while already on /sprints only changes the
+  // query string, which wouldn't remount this route.
+  useEffect(() => {
+    if (wantProject && projects.some((p) => p.id === wantProject)) setSel(wantProject);
+  }, [wantProject, projects]);
+
+  // ?sprint=&item= opens an item directly. Keyed off `board` rather than `sel`
+  // because the effect below resets board/sprintIdx whenever `sel` changes —
+  // waiting for the board means we're never opening against stale sprints.
+  useEffect(() => {
+    if (!wantSprint || !wantItem || !board) return;
+    const idx = board.sprints.findIndex((s) => s.id === wantSprint);
+    if (idx < 0) return;
+    setSprintIdx(idx);
+    if (board.sprints[idx].items.some((it) => it.id === wantItem)) setOpen({ sprintId: wantSprint, itemId: wantItem });
+  }, [wantSprint, wantItem, board]);
 
   useEffect(() => {
     if (!sel) return;
@@ -61,6 +91,7 @@ export default function Sprints() {
   const selProject = projects.find((p) => p.id === sel);
   const sprint = board?.sprints[sprintIdx];
   const columns = board?.columns ?? [];
+  const velocity = useMemo(() => (board ? computeVelocity(board.sprints) : []), [board]);
 
   // lazily pull attachment thumbnails for the visible sprint
   useEffect(() => {
@@ -125,9 +156,21 @@ export default function Sprints() {
       {/* board */}
       <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", padding: "24px 26px 0" }}>
         {selProject && (
-          <div>
-            <div className="h1">{selProject.name}</div>
-            <div className="sub">{board ? `${board.sprints.length} sprints · ${board.sprints.reduce((a, s) => a + s.items.length, 0)} work items` : "Loading…"}</div>
+          <div className="rowhead" style={{ alignItems: "flex-start" }}>
+            <div>
+              <div className="h1">{selProject.name}</div>
+              <div className="sub">{board ? `${board.sprints.length} sprints · ${board.sprints.reduce((a, s) => a + s.items.length, 0)} work items` : "Loading…"}</div>
+            </div>
+            {board && board.sprints.length > 1 && (
+              <button className="btn ghost" onClick={() => setShowVelocity((v) => !v)}>
+                <Icon name={showVelocity ? "chevL" : "chevR"} size={13} />Velocity
+              </button>
+            )}
+          </div>
+        )}
+        {showVelocity && board && board.sprints.length > 1 && (
+          <div className="card" style={{ padding: 16, marginBottom: 16 }}>
+            <VelocityChart rows={velocity} />
           </div>
         )}
         {loadingB && <div className="page-loader"><OrbitLoader label="Loading board…" /></div>}
@@ -199,7 +242,11 @@ function Card({ it, thumb, onClick }: { it: ZohoItem; thumb?: Thumb; onClick: ()
   const ty = typeStyle(it.type || "");
   const attachCount = thumb?.count ?? (it.hasDocs ? 1 : 0);
   return (
-    <div className="zcard" style={{ borderLeftColor: ty.color }} onClick={onClick}>
+    <div
+      className="zcard" style={{ borderLeftColor: ty.color }} onClick={onClick}
+      role="button" tabIndex={0}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
+    >
       <div className="zt">
         <span className="ztype" style={{ color: ty.color, background: ty.color + "18" }}><Icon name={ty.icon} size={11} />{it.type || "Item"}</span>
         <span className="znum mono" style={{ marginLeft: "auto" }} title="Ticket ID">{it.ticketNumber || `#${it.id}`}</span>

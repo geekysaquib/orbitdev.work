@@ -24,6 +24,10 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
+import nodemailer from "nodemailer";
+import Anthropic from "@anthropic-ai/sdk";
+import { randomUUID } from "node:crypto";
+import { runSeedJob, MAX_ROWS_PER_TABLE } from "./seed.mjs";
 
 const sea = process.getBuiltinModule?.("node:sea");
 const isPackaged = !!sea?.isSea();
@@ -133,19 +137,35 @@ async function withImap(userId, fn) {
   catch (e) { resetClient(userId); throw e; } // drop a bad connection so the next call reconnects clean
 }
 
+// SMTP send — same Gmail app-password credentials as IMAP, one transporter per user (cached).
+const smtpTransporters = new Map(); // userId -> Transporter
+function getTransporter(userId) {
+  const c = gmailCreds(userId);
+  if (!c) throw new Error("Gmail not configured");
+  const existing = smtpTransporters.get(userId);
+  if (existing) return existing;
+  const t = nodemailer.createTransport({ host: "smtp.gmail.com", port: 465, secure: true, auth: { user: c.user, pass: c.pass } });
+  smtpTransporters.set(userId, t);
+  return t;
+}
+function resetTransporter(userId) { smtpTransporters.delete(userId); }
+
 const app = express();
 const PORT = process.env.PORT || 47600;
 
-// Restrict to your ORBIT origins.
+// Restrict to your ORBIT origins. Deliberately no `*.netlify.app` wildcard —
+// that would trust every site hosted on Netlify, not just this one.
 app.use(cors({
   origin: [
     /^https?:\/\/localhost(:\d+)?$/,
-    /\.netlify\.app$/,
     "https://orbitdev.work"
   ],
   credentials: false
 }));
-app.use(express.json());
+// Default 100kb is fine for every other route, but Gmail attachments (base64,
+// ~33% larger than the source file) need real headroom — 25MB matches Gmail's
+// own per-message attachment limit.
+app.use(express.json({ limit: "25mb" }));
 app.use(requireAuth);
 
 const isWin = platform() === "win32";
@@ -160,6 +180,10 @@ function runShell(cmdString) {
 function q(p) {
   if (!p) return "";
   let s = String(p).trim().replace(/^["']|["']$/g, "");
+  // A literal `"` in the remaining string would close the quoted argument early and let
+  // whatever follows run as a separate shell token. Windows already disallows `"` in real
+  // paths, so this only ever fires on bad/malicious input — refuse it rather than risk it.
+  if (s.includes('"')) return "";
   if (isWin) s = s.replace(/\//g, "\\");   // code/start dislike forward slashes on Windows
   return `"${s}"`;
 }
@@ -277,7 +301,7 @@ app.post("/gmail/config", (req, res) => {
   catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-app.delete("/gmail/config", (req, res) => { try { deleteGmailCreds(req.userId); } catch { /**/ } resetClient(req.userId); res.json({ ok: true }); });
+app.delete("/gmail/config", (req, res) => { try { deleteGmailCreds(req.userId); } catch { /**/ } resetClient(req.userId); resetTransporter(req.userId); res.json({ ok: true }); });
 
 app.get("/gmail/list", async (req, res) => {
   try {
@@ -315,11 +339,43 @@ app.get("/gmail/message", async (req, res) => {
       try {
         const msg = await client.fetchOne(uid, { source: true }, { uid: true });
         const p = await simpleParser(msg.source);
-        return { subject: p.subject || "(no subject)", from: p.from?.text || "", to: p.to?.text || "", date: p.date, text: p.text || "", html: typeof p.html === "string" ? p.html : "" };
+        return {
+          subject: p.subject || "(no subject)", from: p.from?.text || "", to: p.to?.text || "", date: p.date,
+          text: p.text || "", html: typeof p.html === "string" ? p.html : "",
+          messageId: p.messageId || "", references: [p.references || []].flat(),
+          // Metadata only — no binary content is read into memory here, this
+          // just powers the "create ticket from this email" attachments list.
+          attachments: (p.attachments || []).map((a) => ({ filename: a.filename || "attachment", contentType: a.contentType, size: a.size })),
+        };
       } finally { lock.release(); }
     });
     res.json({ ok: true, message });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Send a message (or a reply) through the same Gmail account as the inbox.
+// `html` is optional (Compose's rich-text editor) — text is always sent too,
+// as the plain-text alternative part. `attachments` are base64-encoded in the
+// browser (FileReader) and decoded back to Buffers here.
+app.post("/gmail/send", async (req, res) => {
+  const { to, subject, text, html, cc, bcc, inReplyTo, references, attachments } = req.body || {};
+  if (!to || !String(to).trim()) return res.status(400).json({ ok: false, error: "recipient required" });
+  if (!text || !String(text).trim()) return res.status(400).json({ ok: false, error: "message body required" });
+  try {
+    const c = gmailCreds(req.userId);
+    if (!c) return res.status(400).json({ ok: false, error: "Gmail not configured" });
+    const mail = {
+      from: c.user, to, cc: cc || undefined, bcc: bcc || undefined,
+      subject: subject || "(no subject)", text, html: html || undefined,
+      inReplyTo: inReplyTo || undefined,
+      references: Array.isArray(references) && references.length ? references.join(" ") : undefined,
+      attachments: Array.isArray(attachments) && attachments.length
+        ? attachments.map((a) => ({ filename: a.filename, contentType: a.contentType, content: Buffer.from(a.content, "base64") }))
+        : undefined,
+    };
+    await getTransporter(req.userId).sendMail(mail);
+    res.json({ ok: true });
+  } catch (e) { resetTransporter(req.userId); res.status(500).json({ ok: false, error: e.message }); }
 });
 
 // List running Docker containers (for the dashboard "Containers up" stat).
@@ -378,6 +434,128 @@ app.post("/docker/build", (req, res) => {
   });
 });
 
+// List every container (running + stopped) for the Docker page's lifecycle controls —
+// separate from GET /docker (running-only), which the dashboard stat depends on.
+app.get("/docker/all", (_req, res) => {
+  exec('docker ps -a --format "{{.Names}}|{{.Image}}|{{.Status}}|{{.State}}"', { timeout: 8000, windowsHide: true }, (err, stdout) => {
+    if (err) return res.json({ ok: true, available: false, containers: [] });
+    const containers = String(stdout).trim().split("\n").filter(Boolean).map((line) => {
+      const [name, image, status, state] = line.split("|");
+      return { name, image, status, state, running: state === "running" };
+    });
+    res.json({ ok: true, available: true, containers });
+  });
+});
+
+const DOCKER_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
+
+function dockerLifecycle(action) {
+  return (req, res) => {
+    const name = String(req.body?.name || "");
+    if (!DOCKER_NAME_RE.test(name)) return res.status(400).json({ ok: false, error: "invalid container name" });
+    execFile("docker", [action, name], { timeout: 30000, windowsHide: true }, (err, _stdout, stderr) => {
+      if (err) return res.status(500).json({ ok: false, error: (stderr || err.message || `${action} failed`).toString().trim().slice(-300) });
+      broadcast("docker:changed", { name, action });
+      res.json({ ok: true });
+    });
+  };
+}
+app.post("/docker/start", dockerLifecycle("start"));
+app.post("/docker/stop", dockerLifecycle("stop"));
+app.post("/docker/restart", dockerLifecycle("restart"));
+// Destructive — the UI confirms before calling this.
+app.post("/docker/rm", (req, res) => {
+  const name = String(req.body?.name || "");
+  if (!DOCKER_NAME_RE.test(name)) return res.status(400).json({ ok: false, error: "invalid container name" });
+  execFile("docker", ["rm", "-f", name], { timeout: 30000, windowsHide: true }, (err, _stdout, stderr) => {
+    if (err) return res.status(500).json({ ok: false, error: (stderr || err.message || "remove failed").toString().trim().slice(-300) });
+    broadcast("docker:changed", { name, action: "rm" });
+    res.json({ ok: true });
+  });
+});
+
+// Tail logs (stdout+stderr) for one container.
+app.get("/docker/logs", (req, res) => {
+  const name = String(req.query.name || "");
+  if (!DOCKER_NAME_RE.test(name)) return res.status(400).json({ ok: false, error: "invalid container name" });
+  const tail = Math.min(Math.max(Number(req.query.tail) || 200, 1), 2000);
+  execFile("docker", ["logs", "--tail", String(tail), "--timestamps", name], { timeout: 15000, maxBuffer: 1024 * 1024 * 8, windowsHide: true }, (err, stdout, stderr) => {
+    if (err && !stdout && !stderr) return res.status(500).json({ ok: false, error: err.message.slice(-300) });
+    res.json({ ok: true, logs: `${stdout || ""}${stderr || ""}` || "(no output)" });
+  });
+});
+
+// Live-tail a container's logs over /events (`docker:log`), instead of the
+// one-shot /docker/logs above. Keyed by user+name so a second start while one
+// is already running is a no-op rather than spawning a duplicate `docker
+// logs -f`; explicitly stopped via /docker/logs/unstream (the UI does this in
+// its cleanup effect) rather than tied to any single websocket connection.
+const dockerLogStreams = new Map(); // `${userId}:${name}` -> child process
+app.post("/docker/logs/stream", (req, res) => {
+  const name = String(req.body?.name || "");
+  if (!DOCKER_NAME_RE.test(name)) return res.status(400).json({ ok: false, error: "invalid container name" });
+  const key = `${req.userId}:${name}`;
+  if (dockerLogStreams.has(key)) return res.json({ ok: true, already: true });
+
+  const child = spawn("docker", ["logs", "-f", "--tail", "100", "--timestamps", name], { windowsHide: true });
+  dockerLogStreams.set(key, child);
+  const pushLine = (stream) => (chunk) => {
+    for (const line of chunk.toString().split(/\r?\n/).filter(Boolean)) sendToUser(req.userId, "docker:log", { name, stream, line });
+  };
+  child.stdout.on("data", pushLine("stdout"));
+  child.stderr.on("data", pushLine("stderr"));
+  child.on("exit", () => dockerLogStreams.delete(key));
+  res.json({ ok: true });
+});
+app.post("/docker/logs/unstream", (req, res) => {
+  const name = String(req.body?.name || "");
+  const key = `${req.userId}:${name}`;
+  const child = dockerLogStreams.get(key);
+  if (child) { child.kill(); dockerLogStreams.delete(key); }
+  res.json({ ok: true });
+});
+
+// One-shot `docker exec` — not an interactive shell, just runs a single command and returns its output.
+app.post("/docker/exec", (req, res) => {
+  const name = String(req.body?.name || "");
+  const cmd = String(req.body?.cmd || "").trim();
+  if (!DOCKER_NAME_RE.test(name)) return res.status(400).json({ ok: false, error: "invalid container name" });
+  if (!cmd) return res.status(400).json({ ok: false, error: "command required" });
+  execFile("docker", ["exec", name, "sh", "-c", cmd], { timeout: 20000, maxBuffer: 1024 * 1024 * 4, windowsHide: true }, (err, stdout, stderr) => {
+    if (err && !stdout && !stderr) return res.status(500).json({ ok: false, error: err.message.slice(-300) });
+    res.json({ ok: true, output: `${stdout || ""}${stderr || ""}` || "(no output)" });
+  });
+});
+
+// ---- Docker Compose ----
+app.get("/docker/compose/ls", (_req, res) => {
+  exec('docker compose ls -a --format json', { timeout: 10000, windowsHide: true }, (err, stdout) => {
+    if (err) return res.json({ ok: true, available: false, stacks: [] });
+    let stacks = [];
+    try { stacks = JSON.parse(stdout || "[]"); } catch { stacks = []; }
+    res.json({ ok: true, available: true, stacks: stacks.map((s) => ({ name: s.Name, status: s.Status, configFiles: s.ConfigFiles || "" })) });
+  });
+});
+app.post("/docker/compose/up", (req, res) => {
+  const file = String(req.body?.file || "").trim().replace(/^["']|["']$/g, "");
+  if (!file) return res.status(400).json({ ok: false, error: "compose file required" });
+  const dir = dirname(file);
+  execFile("docker", ["compose", "-f", file, "up", "-d"], { cwd: dir, timeout: 300000, maxBuffer: 1024 * 1024 * 8, windowsHide: true }, (err, stdout, stderr) => {
+    if (err) return res.status(500).json({ ok: false, error: (stderr || err.message || "compose up failed").toString().slice(-500) });
+    broadcast("docker:changed", { compose: file, action: "up" });
+    res.json({ ok: true, output: (stdout || stderr || "").toString().slice(-500) });
+  });
+});
+app.post("/docker/compose/down", (req, res) => {
+  const name = String(req.body?.name || "").trim();
+  if (!name) return res.status(400).json({ ok: false, error: "stack name required" });
+  execFile("docker", ["compose", "-p", name, "down"], { timeout: 120000, maxBuffer: 1024 * 1024 * 8, windowsHide: true }, (err, stdout, stderr) => {
+    if (err) return res.status(500).json({ ok: false, error: (stderr || err.message || "compose down failed").toString().slice(-500) });
+    broadcast("docker:changed", { compose: name, action: "down" });
+    res.json({ ok: true, output: (stdout || stderr || "").toString().slice(-500) });
+  });
+});
+
 // ---- PostgreSQL (via the local agent, using the `pg` driver) ----
 // The agent is stateless about servers — the saved list lives in Supabase
 // (`pg_servers`, RLS-scoped per user) and the browser hands over the
@@ -430,6 +608,24 @@ app.post("/pg/databases", async (req, res) => {
     client = await pgConnect(server, "postgres");
     const r = await client.query("SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname");
     res.json({ ok: true, databases: r.rows.map((x) => x.datname) });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+  finally { try { await client?.end(); } catch { /**/ } }
+});
+
+// Database names can't be parameterized in DDL, so this is the one place we
+// build SQL by hand — restrict to Postgres's own safe-identifier charset
+// (letters/digits/underscore, not leading with a digit) before quoting it.
+const SAFE_DB_NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+app.post("/pg/databases/create", async (req, res) => {
+  const server = readServer(req.body);
+  if (!server) return res.status(400).json({ ok: false, error: "server connection details are required" });
+  const name = (req.body.name || "").trim();
+  if (!SAFE_DB_NAME.test(name)) return res.status(400).json({ ok: false, error: "Database name must start with a letter or underscore and contain only letters, digits, and underscores." });
+  let client;
+  try {
+    client = await pgConnect(server, "postgres");
+    await client.query(`CREATE DATABASE "${name.replace(/"/g, '""')}"`);
+    res.json({ ok: true, database: name });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
   finally { try { await client?.end(); } catch { /**/ } }
 });
@@ -549,6 +745,32 @@ app.post("/pg/schema", async (req, res) => {
   finally { try { await client?.end(); } catch { /**/ } }
 });
 
+// pg_dump-based backup only (no restore this pass — that's a real destructive
+// operation triggered remotely and deserves its own explicit go-ahead later).
+// Shells out to the separate `pg_dump` client-tools binary, not the `pg` npm
+// driver pgConnect() uses above — same "not installed" detection pattern as
+// Docker's /docker endpoint (probe, degrade to unavailable rather than 500).
+app.get("/pg/backup/available", (_req, res) => {
+  execFile("pg_dump", ["--version"], { timeout: 5000, windowsHide: true }, (err) => res.json({ ok: true, available: !err }));
+});
+app.post("/pg/backup", (req, res) => {
+  const server = readServer(req.body);
+  if (!server) return res.status(400).json({ ok: false, error: "server connection details are required" });
+  const database = String(req.body.database || server.database || "postgres");
+  const env = { ...process.env, PGPASSWORD: server.password || "" };
+  if (server.ssl) env.PGSSLMODE = "require";
+  const args = ["-h", server.host, "-p", String(Number(server.port) || 5432), "-U", server.user, "-d", database, "--no-owner", "--no-privileges"];
+  execFile("pg_dump", args, { env, timeout: 300000, maxBuffer: 1024 * 1024 * 200, windowsHide: true }, (err, stdout, stderr) => {
+    if (err) {
+      const notInstalled = err.code === "ENOENT";
+      return res.status(500).json({ ok: false, error: notInstalled ? "pg_dump isn't installed on this machine." : (stderr || err.message || "pg_dump failed").toString().trim().slice(-500) });
+    }
+    res.setHeader("Content-Type", "application/sql");
+    res.setHeader("Content-Disposition", `attachment; filename="${database}-${new Date().toISOString().slice(0, 10)}.sql"`);
+    res.send(stdout);
+  });
+});
+
 app.post("/pg/query", async (req, res) => {
   const { database, sql } = req.body || {};
   const server = readServer(req.body);
@@ -626,6 +848,145 @@ app.post("/git/pull", async (req, res) => {
   res.json({ ok: true, root, branch, upstream: upstream.out, reason: "updated", updated: true, ahead, behind, dirty, files: Number(files) || 0, output: pulled.out.slice(-300) });
 });
 
+app.post("/git/status", async (req, res) => {
+  const { path } = req.body || {};
+  if (!path) return res.status(400).json({ ok: false, error: "path required" });
+  const dir = clean(path);
+
+  const top = await git(dir, "rev-parse --show-toplevel");
+  if (!top.ok) return res.status(400).json({ ok: false, reason: "not_a_repo", error: "not a git repository" });
+  const root = top.out || dir;
+
+  const branch = (await git(root, "rev-parse --abbrev-ref HEAD")).out || "HEAD";
+  const upstream = await git(root, "rev-parse --abbrev-ref --symbolic-full-name @{u}");
+  let ahead = 0, behind = 0;
+  if (upstream.ok) {
+    const counts = await git(root, "rev-list --left-right --count HEAD...@{u}");
+    const [a, b] = (counts.out || "0\t0").split(/\s+/);
+    ahead = Number(a) || 0; behind = Number(b) || 0;
+  }
+  const st = await git(root, "status --porcelain");
+  const dirtyFiles = st.out ? st.out.split("\n").filter(Boolean) : [];
+  const last = await git(root, "log -1 --format=%H%x1f%an%x1f%ad%x1f%s --date=iso-strict");
+  const [hash, author, date, subject] = (last.out || "").split("\x1f");
+
+  res.json({
+    ok: true, root, branch, upstream: upstream.ok ? upstream.out : null, ahead, behind,
+    dirty: dirtyFiles.length, dirtyFiles: dirtyFiles.slice(0, 50),
+    lastCommit: hash ? { hash, author, date, subject } : null,
+  });
+});
+
+// Git ref names (branches) and commit hashes both end up interpolated straight
+// into a shell string via git() — unlike `path` (which only ever becomes a
+// `cwd`, never part of the command line), these need a real allow-list, not
+// just quote-stripping. Same spirit as DOCKER_NAME_RE below.
+const GIT_REF_RE = /^[A-Za-z0-9][A-Za-z0-9/_.-]*$/;
+const GIT_HASH_RE = /^[0-9a-fA-F]{4,40}$/;
+
+app.post("/git/log", async (req, res) => {
+  const { path, limit, branch } = req.body || {};
+  if (!path) return res.status(400).json({ ok: false, error: "path required" });
+  const dir = clean(path);
+  if (branch && !GIT_REF_RE.test(branch)) return res.status(400).json({ ok: false, error: "invalid branch name" });
+
+  const top = await git(dir, "rev-parse --show-toplevel");
+  if (!top.ok) return res.status(400).json({ ok: false, reason: "not_a_repo", error: "not a git repository" });
+  const root = top.out || dir;
+
+  const n = Math.min(Math.max(Number(limit) || 20, 1), 100);
+  const ref = branch || "HEAD";
+  const log = await git(root, `log -${n} ${ref} --format=%H%x1f%an%x1f%ae%x1f%ad%x1f%s%x1f%P --date=iso-strict`);
+  if (!log.ok) return res.status(200).json({ ok: false, error: log.err.slice(-300) || "log failed" });
+  const commits = log.out.split("\n").filter(Boolean).map((l) => {
+    const [hash, author, email, date, subject, parents] = l.split("\x1f");
+    return { hash, author, email, date, subject, parents: parents ? parents.split(" ").filter(Boolean) : [] };
+  });
+  res.json({ ok: true, root, commits });
+});
+
+app.post("/git/branches", async (req, res) => {
+  const { path } = req.body || {};
+  if (!path) return res.status(400).json({ ok: false, error: "path required" });
+  const dir = clean(path);
+
+  const top = await git(dir, "rev-parse --show-toplevel");
+  if (!top.ok) return res.status(400).json({ ok: false, reason: "not_a_repo", error: "not a git repository" });
+  const root = top.out || dir;
+
+  // for-each-ref's format DSL is not git-log's pretty-format — it doesn't
+  // support the %x1f hex-literal escape the other endpoints use (verified:
+  // it prints "%x1f" literally), but it does support %09 (an actual tab).
+  const list = await git(root, `for-each-ref refs/heads/ --format=%(refname:short)%09%(objectname)%09%(committerdate:iso-strict)%09%(subject)%09%(HEAD)`);
+  if (!list.ok) return res.status(200).json({ ok: false, error: list.err.slice(-300) || "branch list failed" });
+  const branches = list.out.split("\n").filter(Boolean).map((l) => {
+    const [name, hash, date, subject, head] = l.split("\t");
+    return { name, hash, date, subject, current: head === "*" };
+  });
+  res.json({ ok: true, root, branches });
+});
+
+app.post("/git/show", async (req, res) => {
+  const { path, hash } = req.body || {};
+  if (!path) return res.status(400).json({ ok: false, error: "path required" });
+  if (!hash || !GIT_HASH_RE.test(hash)) return res.status(400).json({ ok: false, error: "invalid commit hash" });
+  const dir = clean(path);
+
+  const top = await git(dir, "rev-parse --show-toplevel");
+  if (!top.ok) return res.status(400).json({ ok: false, reason: "not_a_repo", error: "not a git repository" });
+  const root = top.out || dir;
+
+  const shown = await git(root, `show --format=%H%x1f%an%x1f%ae%x1f%ad%x1f%s%x1e --unified=3 --date=iso-strict ${hash}`, 30000);
+  if (!shown.ok) return res.status(200).json({ ok: false, error: shown.err.slice(-300) || "show failed" });
+  const sep = shown.out.indexOf("\x1e");
+  const header = sep === -1 ? shown.out : shown.out.slice(0, sep);
+  const patch = sep === -1 ? "" : shown.out.slice(sep + 1).replace(/^\n/, "");
+  const [h, author, email, date, subject] = header.split("\x1f");
+  res.json({ ok: true, root, commit: { hash: h, author, email, date, subject }, patch });
+});
+
+// Working-tree diff — staged and unstaged separately, so a caller (the AI
+// commit-message writer) can prefer staged when there is any, same as `git
+// commit` itself would. With an optional `base` ref, also returns the
+// three-dot range diff against it (base...HEAD) for the AI PR-description
+// writer. `base` goes through the same GIT_REF_RE allow-list /git/log uses
+// for `branch` — the only user-supplied ref here.
+app.post("/git/diff", async (req, res) => {
+  const { path, base } = req.body || {};
+  if (!path) return res.status(400).json({ ok: false, error: "path required" });
+  if (base && !GIT_REF_RE.test(base)) return res.status(400).json({ ok: false, error: "invalid base ref" });
+  const dir = clean(path);
+
+  const top = await git(dir, "rev-parse --show-toplevel");
+  if (!top.ok) return res.status(400).json({ ok: false, reason: "not_a_repo", error: "not a git repository" });
+  const root = top.out || dir;
+
+  const [staged, unstaged, range] = await Promise.all([
+    git(root, "diff --cached --unified=3"),
+    git(root, "diff --unified=3"),
+    base ? git(root, `diff --unified=3 ${base}...HEAD`) : Promise.resolve({ ok: true, out: "" }),
+  ]);
+  res.json({ ok: true, root, staged: staged.out, unstaged: unstaged.out, range: base ? range.out : undefined });
+});
+
+// One-shot project terminal — cwd is always the caller-supplied project path
+// (same trust model /git/*, /dev/start etc. already use: the client is the
+// one that resolved this from the project's saved fe_path/sln_path, not a
+// free-form value typed by whoever's driving the terminal). Deliberately not
+// a PTY/interactive shell, and the command itself is intentionally NOT
+// allow-listed (that's the point of a terminal) — the only thing this
+// endpoint constrains is where it runs, not what.
+app.post("/term/run", (req, res) => {
+  const { path, command } = req.body || {};
+  if (!path) return res.status(400).json({ ok: false, error: "path required" });
+  const cmd = String(command || "").trim();
+  if (!cmd) return res.status(400).json({ ok: false, error: "command required" });
+  const dir = clean(path);
+  exec(cmd, { cwd: dir, timeout: 300000, maxBuffer: 1024 * 1024 * 8, windowsHide: true }, (err, stdout, stderr) => {
+    res.json({ ok: true, code: err ? (typeof err.code === "number" ? err.code : 1) : 0, stdout: String(stdout || ""), stderr: String(stderr || "") });
+  });
+});
+
 app.get("/port/check", async (req, res) => {
   const port = Number(req.query.port);
   if (!port) return res.status(400).json({ ok: false, error: "port required" });
@@ -645,10 +1006,25 @@ app.post("/dev/start", async (req, res) => {
     }
   }
   try {
-    const child = spawn(command, { cwd: clean(path), shell: true, detached: true, stdio: "ignore", windowsHide: true });
+    // stdout/stderr piped (not "ignore") so /events can push live lines — see
+    // pushLog below. Still detached+unref so the dev server survives if the
+    // agent process itself exits (e.g. the packaged .exe's auto-quit), same
+    // as before this change; piping doesn't affect that.
+    const child = spawn(command, { cwd: clean(path), shell: true, detached: true, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     child.unref();
-    const rec = { pid: child.pid, port: port ? Number(port) : null, path: clean(path), command, project: project || null, startedAt: Date.now(), userId: req.userId };
+    const rec = { pid: child.pid, port: port ? Number(port) : null, path: clean(path), command, project: project || null, startedAt: Date.now(), userId: req.userId, log: [] };
     devServers.set(child.pid, rec);
+
+    const pushLog = (stream) => (chunk) => {
+      for (const line of chunk.toString().split(/\r?\n/).filter(Boolean)) {
+        rec.log.push(line);
+        if (rec.log.length > 500) rec.log.shift();
+        sendToUser(rec.userId, "dev:log", { pid: child.pid, stream, line });
+      }
+    };
+    child.stdout?.on("data", pushLog("stdout"));
+    child.stderr?.on("data", pushLog("stderr"));
+
     child.on("exit", () => { devServers.delete(child.pid); broadcast("dev:changed", { pid: child.pid, up: false }); });
     broadcast("dev:changed", { pid: child.pid, up: true, project: rec.project, port: rec.port });
     res.json({ ok: true, pid: child.pid, port: rec.port });
@@ -656,6 +1032,16 @@ app.post("/dev/start", async (req, res) => {
 });
 
 app.get("/dev/running", (req, res) => res.json({ ok: true, servers: [...devServers.values()].filter((d) => d.userId === req.userId) }));
+
+// Recent-history snapshot (ring buffer, last 500 lines) so a client that
+// opens the log panel after the server already started still sees context —
+// live lines after that arrive over /events as `dev:log`.
+app.get("/dev/log/:pid", (req, res) => {
+  const pid = Number(req.params.pid);
+  const rec = devServers.get(pid);
+  if (!rec || rec.userId !== req.userId) return res.status(404).json({ ok: false, error: "not found" });
+  res.json({ ok: true, lines: rec.log });
+});
 
 app.post("/dev/stop", (req, res) => {
   const pid = Number(req.body?.pid);
@@ -699,8 +1085,14 @@ function nativePick(type) {
   return new Promise((resolve) => {
     let cmd, args;
     if (isWin) {
+      // Folder picking deliberately does NOT use System.Windows.Forms.FolderBrowserDialog —
+      // that legacy dialog enumerates the whole shell namespace (This PC, every drive,
+      // Network) before it's usable, which can hang for many seconds if a mapped network
+      // drive is disconnected or a removable/optical drive is slow to respond. Using
+      // OpenFileDialog with CheckFileExists/ValidateNames off ("pick a folder" hack) reuses
+      // the same fast modern Explorer dialog as the .sln picker below, so it opens instantly.
       const ps = type === "folder"
-        ? "Add-Type -AssemblyName System.Windows.Forms;$d=New-Object System.Windows.Forms.FolderBrowserDialog;$d.ShowNewFolderButton=$true;if($d.ShowDialog() -eq 'OK'){[Console]::Out.Write($d.SelectedPath)}"
+        ? "Add-Type -AssemblyName System.Windows.Forms;$d=New-Object System.Windows.Forms.OpenFileDialog;$d.ValidateNames=$false;$d.CheckFileExists=$false;$d.CheckPathExists=$true;$d.FileName='Select Folder';$d.Title='Select a folder';if($d.ShowDialog() -eq 'OK'){[Console]::Out.Write([System.IO.Path]::GetDirectoryName($d.FileName))}"
         : "Add-Type -AssemblyName System.Windows.Forms;$d=New-Object System.Windows.Forms.OpenFileDialog;$d.Filter='Solution (*.sln)|*.sln|All files (*.*)|*.*';if($d.ShowDialog() -eq 'OK'){[Console]::Out.Write($d.FileName)}";
       cmd = "powershell"; args = ["-NoProfile", "-STA", "-Command", ps];
     } else if (platform() === "darwin") {
@@ -729,6 +1121,125 @@ app.post("/macro", (req, res) => {
   // Extend: git pull, docker compose up, dev server, etc.
   console.log(`[agent] macro: ${name} (user ${req.userId})`);
   res.json({ ok: true, ran: name });
+});
+
+// Normalizes either wire shape into a chat `messages` array: `messages` (Ask AI's
+// follow-up thread) wins, `prompt` (every other caller) is the single-turn form.
+// Returns [] when there's nothing usable, so callers do one emptiness check.
+const MAX_TURNS = 12; // ~6 exchanges — bounds both cost and the local model's 4k context
+function coerceTurns({ prompt, messages }) {
+  const turns = Array.isArray(messages) && messages.length
+    ? messages
+        .filter((m) => m && (m.role === "user" || m.role === "assistant") && String(m.content || "").trim())
+        .map((m) => ({ role: m.role, content: String(m.content).slice(0, 12000) }))
+        .slice(-MAX_TURNS)
+    : (prompt && String(prompt).trim() ? [{ role: "user", content: String(prompt).slice(0, 12000) }] : []);
+  // Anthropic requires the first turn to be `user`. Trimming to the last N can
+  // land on an assistant turn, so this has to run after the slice, not before.
+  if (turns.length && turns[0].role !== "user") turns.shift();
+  return turns;
+}
+
+// ---- Generic AI helper (schema Q&A, ticket triage, standup summaries, Ask AI) —
+// reuses the caller's own Anthropic key (stored in Supabase `integrations`, forwarded
+// per-request same as the seed feature's project hints; never persisted here). ----
+app.post("/ai/ask", async (req, res) => {
+  const { apiKey, system, prompt, messages } = req.body || {};
+  if (!apiKey) return res.status(400).json({ ok: false, error: "Anthropic API key required — add one in Settings" });
+  const turns = coerceTurns({ prompt, messages });
+  if (!turns.length) return res.status(400).json({ ok: false, error: "prompt or messages required" });
+  try {
+    const client = new Anthropic({ apiKey });
+    const response = await client.messages.create({
+      // Haiku, not Opus — these are short, bounded answers (triage lines, standup
+      // bullets, grounded Q&A), so the fastest tier is plenty and cuts latency a lot.
+      model: "claude-haiku-4-5-20251001",
+      // Ask AI's threaded answers carry prose plus an actions block; the other
+      // callers are far shorter and just don't use the headroom.
+      max_tokens: 900,
+      system: system ? String(system).slice(0, 6000) : undefined,
+      messages: turns,
+    });
+    if (response.stop_reason === "refusal") return res.json({ ok: false, error: "The model declined to answer that." });
+    const text = response.content.find((b) => b.type === "text")?.text || "";
+    res.json({ ok: true, text });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message.slice(0, 300) }); }
+});
+
+// ---- Local AI (llama-cpp-python via a persistent Python worker) — genuinely
+// free, no API key: needs Python 3 + `pip install llama-cpp-python` on this
+// machine. Pre-warmed at server startup (see app.listen below) so the model
+// loads once in the background, not on a user's first request; a crashed
+// worker is respawned on the next request. ----
+const LOCAL_AI_SCRIPT = join(__dir, "ai_local.py");
+let localAi = null; // { proc, model, ready: Promise<{ok,error?}> }
+let localAiPending = null; // resolver for the one in-flight request's response line
+let localAiQueue = Promise.resolve(); // the worker handles one request at a time
+
+function ensureLocalAi() {
+  if (localAi) return localAi.ready;
+  const proc = spawn(isWin ? "python" : "python3", [LOCAL_AI_SCRIPT], { windowsHide: true });
+  let buf = "", stderrBuf = "", readyResolved = false, resolveReady;
+  const ready = new Promise((res) => { resolveReady = res; });
+  const entry = { proc, model: null, device: null, ready };
+  localAi = entry;
+
+  proc.stdout.on("data", (chunk) => {
+    buf += chunk.toString();
+    let idx;
+    while ((idx = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, idx).trim(); buf = buf.slice(idx + 1);
+      if (!line) continue;
+      let msg; try { msg = JSON.parse(line); } catch { continue; }
+      if (!readyResolved) {
+        readyResolved = true;
+        if (msg.ok && msg.status === "ready") { entry.model = msg.model; entry.device = msg.device || null; resolveReady({ ok: true }); }
+        else resolveReady({ ok: false, error: msg.error || "local AI worker failed to start" });
+        continue;
+      }
+      if (localAiPending) { const r = localAiPending; localAiPending = null; r(msg); }
+    }
+  });
+  proc.stderr.on("data", (d) => { stderrBuf += d.toString(); });
+  proc.on("exit", (code) => {
+    if (!readyResolved) { readyResolved = true; resolveReady({ ok: false, error: stderrBuf.trim().slice(-300) || `python exited (${code})` }); }
+    if (localAiPending) { const r = localAiPending; localAiPending = null; r({ ok: false, error: "local AI worker exited" }); }
+    if (localAi === entry) localAi = null;
+  });
+  proc.on("error", (e) => {
+    if (!readyResolved) {
+      readyResolved = true;
+      resolveReady({ ok: false, error: e.code === "ENOENT" ? "Python not found on PATH — install Python 3, then `pip install llama-cpp-python`" : e.message });
+    }
+  });
+  return ready;
+}
+
+async function askLocalAi({ prompt, system, messages }) {
+  const started = await ensureLocalAi();
+  if (!started.ok) return started;
+  const entry = localAi;
+  const task = localAiQueue.then(() => new Promise((resolve) => {
+    localAiPending = resolve;
+    entry.proc.stdin.write(JSON.stringify({ prompt, system, messages }) + "\n");
+  }));
+  localAiQueue = task.then(() => {}, () => {});
+  const msg = await task;
+  return msg.ok ? { ok: true, text: msg.text } : { ok: false, error: msg.error || "local AI failed" };
+}
+
+app.get("/ai/local/status", async (_req, res) => {
+  if (!localAi) return res.json({ ok: true, state: "idle" });
+  const r = await localAi.ready;
+  res.json({ ok: true, state: r.ok ? "ready" : "error", model: localAi.model, device: localAi.device, error: r.error });
+});
+app.post("/ai/local/ask", async (req, res) => {
+  const turns = coerceTurns(req.body || {});
+  if (!turns.length) return res.status(400).json({ ok: false, error: "prompt or messages required" });
+  const system = req.body?.system ? String(req.body.system) : undefined;
+  const r = await askLocalAi({ system, messages: turns });
+  if (!r.ok) return res.status(500).json(r);
+  res.json(r);
 });
 
 // ---- npm chores: dependency drift + advisories (read-only) ----
@@ -767,6 +1278,22 @@ app.post("/npm/audit", async (req, res) => {
   res.json({ ok: true, total, critical: Number(v.critical) || 0, high: Number(v.high) || 0, moderate: Number(v.moderate) || 0, low: Number(v.low) || 0 });
 });
 
+// ---- Docker container resource usage (read-only, one-shot snapshot) ----
+// `docker stats` itself is snapshot-oriented even in its own `--no-stream`
+// mode, so this is polled client-side every few seconds rather than pushed
+// over /events — no persistent stream to manage server-side, unlike the log
+// tailing above.
+app.get("/docker/stats", (_req, res) => {
+  exec('docker stats --no-stream --format "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}"', { timeout: 10000, windowsHide: true }, (err, stdout) => {
+    if (err) return res.json({ ok: true, available: false, stats: [] });
+    const stats = String(stdout).trim().split("\n").filter(Boolean).map((line) => {
+      const [name, cpu, memUsage, memPerc] = line.split("|");
+      return { name, cpuPercent: parseFloat(cpu) || 0, memUsage: memUsage || "", memPercent: parseFloat(memPerc) || 0 };
+    });
+    res.json({ ok: true, available: true, stats });
+  });
+});
+
 // ---- Docker disk usage (read-only) + gated prune ----
 app.get("/docker/df", (_req, res) => {
   exec('docker system df --format "{{json .}}"', { timeout: 15000, windowsHide: true }, (err, stdout) => {
@@ -801,6 +1328,74 @@ app.post("/pg/health", async (req, res) => {
     res.json({ ok: true, connections: conns.rows[0]?.n ?? 0, longestSec: longest.rows[0]?.s ?? 0, size: size.rows[0]?.size || "—" });
   } catch (e) { res.status(200).json({ ok: false, error: e.message.slice(0, 160) }); }
   finally { try { await client?.end(); } catch { /**/ } }
+});
+
+// ---- Dummy-data seeding: introspects the schema and inserts realistic rows in
+// FK order in the background, reporting progress over the existing WS channel.
+// Append-only — never truncates or modifies existing rows. ----
+const seedJobs = new Map(); // jobId -> job state (scoped to the userId that started it)
+
+app.post("/pg/seed/start", async (req, res) => {
+  const server = readServer(req.body);
+  if (!server) return res.status(400).json({ ok: false, error: "server connection details are required" });
+  const database = req.body.database;
+  if (!database) return res.status(400).json({ ok: false, error: "database is required" });
+  const rowsPerTable = Math.min(Math.max(1, Number(req.body.rowsPerTable) || 0), MAX_ROWS_PER_TABLE);
+  if (!rowsPerTable) return res.status(400).json({ ok: false, error: "rowsPerTable must be at least 1" });
+  const excludeTables = Array.isArray(req.body.excludeTables) ? req.body.excludeTables : [];
+  const projectPrompt = typeof req.body.projectPrompt === "string" ? req.body.projectPrompt.slice(0, 2000) : "";
+  const aiApiKey = typeof req.body.aiApiKey === "string" ? req.body.aiApiKey.trim() : "";
+
+  const already = [...seedJobs.values()].find(
+    (j) => j.userId === req.userId && j.status === "running" && j.host === server.host && j.database === database
+  );
+  if (already) return res.status(409).json({ ok: false, error: "A seed job is already running for this database" });
+
+  let client;
+  try { client = await pgConnect(server, database); }
+  catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+
+  const jobId = randomUUID();
+  const job = {
+    jobId, userId: req.userId, host: server.host, database, status: "running",
+    overallDone: 0, overallTotal: 0, currentTable: null, tableDone: 0, tableTotal: 0,
+    startedAt: Date.now(), cancelled: false, result: null, error: null,
+  };
+  seedJobs.set(jobId, job);
+
+  runSeedJob({
+    client, rowsPerTable, excludeTables, projectPrompt, aiApiKey,
+    isCancelled: () => job.cancelled,
+    onProgress: (p) => {
+      job.currentTable = p.table; job.tableDone = p.tableDone; job.tableTotal = p.tableTotal;
+      job.overallDone = p.overallDone; job.overallTotal = p.overallTotal;
+      sendToUser(req.userId, "seed:progress", { jobId, ...p });
+    },
+  }).then((result) => {
+    job.status = job.cancelled ? "cancelled" : "done";
+    job.result = result;
+    sendToUser(req.userId, "seed:done", { jobId, status: job.status, result });
+  }).catch((e) => {
+    job.status = "error";
+    job.error = e.message;
+    sendToUser(req.userId, "seed:error", { jobId, error: e.message });
+  }).finally(() => { try { client.end(); } catch { /**/ } });
+
+  res.json({ ok: true, jobId });
+});
+
+app.get("/pg/seed/status/:jobId", (req, res) => {
+  const job = seedJobs.get(req.params.jobId);
+  if (!job || job.userId !== req.userId) return res.status(404).json({ ok: false, error: "job not found" });
+  const { jobId, status, overallDone, overallTotal, currentTable, tableDone, tableTotal, result, error } = job;
+  res.json({ ok: true, job: { jobId, status, overallDone, overallTotal, currentTable, tableDone, tableTotal, result, error } });
+});
+
+app.post("/pg/seed/cancel/:jobId", (req, res) => {
+  const job = seedJobs.get(req.params.jobId);
+  if (!job || job.userId !== req.userId) return res.status(404).json({ ok: false, error: "job not found" });
+  job.cancelled = true;
+  res.json({ ok: true });
 });
 
 // ---- Routine checkup: is everything this user depends on actually reachable? ----
@@ -885,6 +1480,9 @@ setInterval(async () => {
 const server = app.listen(PORT, () => {
   console.log(`ORBIT agent listening on http://localhost:${PORT}`);
   if (isPackaged) openBrowser(PORT);
+  // Kick off the local AI worker now so model load (or first-run download) happens
+  // in the background instead of stalling a user's first Ask — see ensureLocalAi().
+  ensureLocalAi();
 });
 
 (async () => {
@@ -895,17 +1493,27 @@ const server = app.listen(PORT, () => {
     // with) connects on /presence purely so its tab is counted below.
     wss = new WebSocketServer({ server });
     wss.on("connection", (c, req) => {
-      const { pathname, searchParams } = new URL(req.url, "http://agent");
+      const { pathname } = new URL(req.url, "http://agent");
       if (pathname === "/presence") return; // unauthenticated — presence-only, no push events
       if (pathname !== "/events") { c.close(1008, "unknown path"); return; }
-      try {
-        c.userId = verifyToken(searchParams.get("token") || "");
-      } catch {
-        c.close(4001, "unauthorized");
-        return;
-      }
-      try { c.send(JSON.stringify({ event: "hello", payload: { agent: "orbit" }, at: Date.now() })); } catch { /**/ }
-      runHealthCheck(c.userId).then((h) => { try { c.send(JSON.stringify({ event: "health:update", payload: h, at: Date.now() })); } catch { /**/ } }).catch(() => {});
+
+      // Auth arrives as the first message instead of a `?token=` query param, so
+      // the session token never lands in a proxy/access log. Give the client a
+      // few seconds to send it before dropping the connection.
+      const authTimeout = setTimeout(() => c.close(4001, "auth timeout"), 5000);
+      c.once("message", (raw) => {
+        clearTimeout(authTimeout);
+        let token = "";
+        try { token = JSON.parse(raw.toString()).token || ""; } catch { /* not JSON */ }
+        try {
+          c.userId = verifyToken(token);
+        } catch {
+          c.close(4001, "unauthorized");
+          return;
+        }
+        try { c.send(JSON.stringify({ event: "hello", payload: { agent: "orbit" }, at: Date.now() })); } catch { /**/ }
+        runHealthCheck(c.userId).then((h) => { try { c.send(JSON.stringify({ event: "health:update", payload: h, at: Date.now() })); } catch { /**/ } }).catch(() => {});
+      });
     });
     console.log(`[agent] websocket events on ws://localhost:${PORT}/events`);
   } catch {

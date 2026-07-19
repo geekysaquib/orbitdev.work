@@ -28,7 +28,16 @@ export interface Board { project: string; columns: BoardColumn[]; sprints: Board
 export interface Attachment { name: string; ext?: string; size?: number; owner?: string; uploaded?: number; contentType?: string; thumb?: string; large?: string; previewUrl?: string; downloadUrl?: string; }
 export interface ItemDetail { item: ZohoItem | null; attachments: Attachment[]; }
 
+/** Shared bug classification — used by BreakView.tsx. */
+export const isOpenBug = (it: ZohoItem): boolean =>
+  (it.type || "").toLowerCase().includes("bug") && !/done|closed|resolved|complete/i.test(it.status || "");
+
+/** Any not-yet-closed sprint item, regardless of type — used by Dashboard's "Open items" widget. */
+export const isOpenItem = (it: ZohoItem): boolean =>
+  !/done|closed|resolved|complete/i.test(it.status || "");
+
 import { authHeader as authHdr } from "./auth";
+import { postJson } from "./apiClient";
 
 const fn = "/.netlify/functions/zoho-sprints";
 
@@ -83,4 +92,17 @@ export interface Timesheet {
 }
 export async function fetchTimesheet(): Promise<Timesheet> {
   return get<Timesheet>("?mode=timesheet");
+}
+
+/**
+ * Exchanges a Zoho Self Client grant code for a refresh token server-side —
+ * the piece that otherwise needs a terminal + curl. See netlify/functions/zoho-exchange.ts.
+ */
+export async function exchangeZohoCode(args: { clientId: string; clientSecret: string; code: string; dc: string }): Promise<{ refreshToken?: string; error?: string }> {
+  const res = await postJson<{ refresh_token?: string; access_token?: string; expires_in?: number }>(
+    "/.netlify/functions/zoho-exchange",
+    { clientId: args.clientId, clientSecret: args.clientSecret, code: args.code, dc: args.dc },
+  );
+  if (!res.ok) return { error: res.error };
+  return { refreshToken: res.refresh_token };
 }

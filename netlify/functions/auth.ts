@@ -24,11 +24,16 @@ import { clientIp, lookupGeo, parseUserAgent } from "./_lib/geo";
  *   reset    { email, code, password }      -> sets a new password
  */
 
-interface DbUser { id: string; email: string; password_hash: string; full_name: string; email_verified: boolean; }
+interface DbUser {
+  id: string; email: string; password_hash: string; full_name: string; email_verified: boolean;
+  failed_login_attempts: number; lockout_until: string | null;
+}
 
 const JWT_SECRET = process.env.SUPABASE_JWT_SECRET || "";
 const TOKEN_TTL_DAYS = Number(process.env.AUTH_TOKEN_TTL_DAYS) || 30;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MAX_LOGIN_ATTEMPTS = 8;
+const LOCKOUT_MIN = 15;
 
 const json = (statusCode: number, data: unknown) => ({
   statusCode,
@@ -46,6 +51,12 @@ function sign(user: DbUser): string {
 }
 
 const publicUser = (u: DbUser) => ({ id: u.id, email: u.email, full_name: u.full_name, email_verified: u.email_verified });
+
+function otpErrorMessage(res: { error: "too_soon"; retryInSec: number } | { error: "too_many" }): string {
+  return res.error === "too_many"
+    ? "Too many codes requested for this email today — try again tomorrow."
+    : `Please wait ${res.retryInSec}s before requesting another code.`;
+}
 
 async function findUser(email: string): Promise<DbUser | null> {
   const rows = await dbSelect<DbUser>("users", `email=eq.${encodeURIComponent(email)}&limit=1`);
@@ -97,7 +108,7 @@ export const handler: Handler = async (event) => {
         }
 
         const res = await issueOtp(email, "verify");
-        if ("error" in res) return json(429, { error: `Please wait ${res.retryInSec}s before requesting another code.` });
+        if ("error" in res) return json(429, { error: otpErrorMessage(res) });
         const tpl = verifyEmail(fullName, res.code);
         await sendMail(email, tpl.subject, tpl.html, tpl.text);
         return json(200, { ok: true, email });
@@ -111,7 +122,7 @@ export const handler: Handler = async (event) => {
         if (purpose === "verify" && user.email_verified) return json(400, { error: "This account is already verified — sign in instead." });
 
         const res = await issueOtp(email, purpose);
-        if ("error" in res) return json(429, { error: `Please wait ${res.retryInSec}s before requesting another code.` });
+        if ("error" in res) return json(429, { error: otpErrorMessage(res) });
         const tpl = purpose === "verify" ? verifyEmail(user.full_name, res.code) : resetEmail(user.full_name, res.code);
         await sendMail(email, tpl.subject, tpl.html, tpl.text);
         return json(200, { ok: true });
@@ -137,10 +148,30 @@ export const handler: Handler = async (event) => {
       case "login": {
         const password = String(body.password || "");
         const user = await findUser(email);
-        if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+
+        if (user?.lockout_until && new Date(user.lockout_until).getTime() > Date.now()) {
+          const waitMin = Math.ceil((new Date(user.lockout_until).getTime() - Date.now()) / 60_000);
+          return json(429, { error: `Too many failed attempts — try again in ${waitMin} minute${waitMin === 1 ? "" : "s"}.` });
+        }
+
+        const valid = user ? await bcrypt.compare(password, user.password_hash) : false;
+        if (!user || !valid) {
+          if (user) {
+            const attempts = (user.failed_login_attempts || 0) + 1;
+            const patch: Record<string, unknown> = { failed_login_attempts: attempts };
+            if (attempts >= MAX_LOGIN_ATTEMPTS) {
+              patch.lockout_until = new Date(Date.now() + LOCKOUT_MIN * 60_000).toISOString();
+              patch.failed_login_attempts = 0;
+            }
+            await dbUpdate("users", `id=eq.${user.id}`, patch).catch((e) => console.error("[auth] lockout update failed:", e));
+          }
           return json(401, { error: "Invalid email or password." });
         }
         if (!user.email_verified) return json(403, { error: "verify_required", email });
+
+        if (user.failed_login_attempts || user.lockout_until) {
+          await dbUpdate("users", `id=eq.${user.id}`, { failed_login_attempts: 0, lockout_until: null }).catch(() => {});
+        }
 
         const token = sign(user);
         await sendLoginAlert(user, event);
@@ -173,7 +204,12 @@ export const handler: Handler = async (event) => {
         if (!v.ok) return json(400, { error: v.error });
 
         const password_hash = await bcrypt.hash(password, 10);
-        await dbUpdate("users", `id=eq.${user.id}`, { password_hash });
+        // Bumping password_changed_at revokes any session token issued before this
+        // reset — see verifySession in _lib/verifyToken.ts.
+        await dbUpdate("users", `id=eq.${user.id}`, {
+          password_hash, password_changed_at: new Date().toISOString(),
+          failed_login_attempts: 0, lockout_until: null,
+        });
         return json(200, { ok: true });
       }
 

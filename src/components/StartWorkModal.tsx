@@ -3,11 +3,13 @@ import { Icon } from "../lib/icons";
 import { useToast } from "../context/Toast";
 import { useAgent } from "../context/Agent";
 import { useTable } from "../hooks/useTable";
+import { Modal } from "./Modal";
 import { gitPull, checkPort, devStart } from "../lib/agent";
+import { DevLogsModal } from "./DevLogsModal";
 import type { Project } from "../lib/types";
 
 type Stage = "queued" | "pulling" | "checking" | "starting" | "running" | "skipped" | "error";
-interface RunState { stage: Stage; message?: string; pull?: string; }
+interface RunState { stage: Stage; message?: string; pull?: string; pid?: number; }
 
 function detectRun(p: Project): { command: string; port: number } {
   const s = (p.stacks || []).map((x) => x.toLowerCase()).join(" ");
@@ -37,6 +39,7 @@ export function StartWorkModal({ onClose }: { onClose: () => void }) {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [runs, setRuns] = useState<Record<string, RunState>>({});
   const [busy, setBusy] = useState(false);
+  const [logsFor, setLogsFor] = useState<{ pid: number; project: string } | null>(null);
 
   const toggle = (id: string) => setPicked((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const setRun = (id: string, patch: RunState) => setRuns((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
@@ -68,7 +71,7 @@ export function StartWorkModal({ onClose }: { onClose: () => void }) {
       }
       setRun(p.id, { stage: "starting", pull: pullMsg });
       const ds = await devStart(path, command, port, p.name);
-      if (ds.ok) setRun(p.id, { stage: "running", pull: pullMsg, message: `${command} · http://localhost:${ds.port ?? port} · pid ${ds.pid}` });
+      if (ds.ok) setRun(p.id, { stage: "running", pull: pullMsg, pid: ds.pid, message: `${command} · http://localhost:${ds.port ?? port} · pid ${ds.pid}` });
       else setRun(p.id, { stage: "error", pull: pullMsg, message: ds.error });
     }
     setBusy(false);
@@ -78,70 +81,74 @@ export function StartWorkModal({ onClose }: { onClose: () => void }) {
   const chosen = projects.filter((p) => picked.has(p.id));
 
   return (
-    <div className="modal-bg">
-      <div className="modal sw-modal">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h3 style={{ display: "flex", alignItems: "center", gap: 9 }}><span style={{ color: "var(--mint)" }}><Icon name="zap" size={18} fill /></span>Start Work</h3>
-          <button className="iconbtn" onClick={onClose}><Icon name="x" size={16} /></button>
-        </div>
-
-        {step === "select" ? (
-          <>
-            <div className="sw-sub">Pick the projects you're working on. ORBIT will <b>git pull</b> each, check its dev port, then start the UI based on its stack.</div>
-            {agentDown && <div className="sw-warn"><Icon name="plug" size={14} />The local agent is offline — start it to pull and run projects.</div>}
-            <div className="sw-list">
-              {projects.length === 0 && <div className="sw-empty">No active projects. Mark a project active to work on it.</div>}
-              {projects.map((p) => {
-                const { command, port } = detectRun(p);
-                const on = picked.has(p.id);
-                return (
-                  <button key={p.id} className={"sw-row" + (on ? " on" : "")} onClick={() => toggle(p.id)}>
-                    <span className={"sw-check" + (on ? " on" : "")}>{on && <Icon name="check" size={12} />}</span>
-                    <span className="sw-dot" style={{ background: p.accent || "var(--mint)" }} />
-                    <div className="sw-info">
-                      <div className="sw-name">{p.name}</div>
-                      <div className="sw-meta mono">{(p.stacks || []).slice(0, 3).join(" · ") || "no stack"}{p.branch ? ` · ${p.branch}` : ""}</div>
-                    </div>
-                    <div className="sw-cmd mono">{command}<span className="sw-port">:{port}</span></div>
-                  </button>
-                );
-              })}
-            </div>
-            <div className="sw-foot">
-              <span className="sw-count">{picked.size} selected</span>
-              <button className="btn accent" disabled={picked.size === 0 || agentDown} onClick={start}><Icon name="play" size={13} fill />Pull &amp; start</button>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="sw-sub">{busy ? "Working through your projects…" : "Done. Dev servers keep running in the background."}</div>
-            <div className="sw-list">
-              {chosen.map((p) => {
-                const r = runs[p.id] || { stage: "queued" as Stage };
-                const m = STAGE_META[r.stage];
-                return (
-                  <div key={p.id} className="sw-runrow">
-                    <span className="sw-dot" style={{ background: p.accent || "var(--mint)" }} />
-                    <div className="sw-info">
-                      <div className="sw-name">{p.name}</div>
-                      {r.message && <div className="sw-runmsg mono" style={r.stage === "error" ? { color: "var(--red)" } : r.stage === "skipped" ? { color: "var(--amber)" } : {}}>{r.message}</div>}
-                      {!r.message && r.pull && <div className="sw-runmsg mono">{r.pull}</div>}
-                    </div>
-                    <span className="sw-stage" style={{ color: m.color }}>
-                      {m.spin ? <Icon name="loader" size={13} className="spin" /> : r.stage === "running" ? <Icon name="check" size={13} /> : null}
-                      {m.label}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="sw-foot">
-              <button className="btn ghost" onClick={() => { setStep("select"); setRuns({}); }} disabled={busy}>Back</button>
-              <button className="btn accent" onClick={onClose} disabled={busy}>Done</button>
-            </div>
-          </>
-        )}
+    <Modal onClose={onClose} className="sw-modal">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h3 style={{ display: "flex", alignItems: "center", gap: 9 }}><span style={{ color: "var(--mint)" }}><Icon name="zap" size={18} fill /></span>Start Work</h3>
+        <button className="iconbtn" onClick={onClose}><Icon name="x" size={16} /></button>
       </div>
-    </div>
+
+      {step === "select" ? (
+        <>
+          <div className="sw-sub">Pick the projects you're working on. ORBIT will <b>git pull</b> each, check its dev port, then start the UI based on its stack.</div>
+          {agentDown && <div className="sw-warn"><Icon name="plug" size={14} />The local agent is offline — start it to pull and run projects.</div>}
+          <div className="sw-list">
+            {projects.length === 0 && <div className="sw-empty">No active projects. Mark a project active to work on it.</div>}
+            {projects.map((p) => {
+              const { command, port } = detectRun(p);
+              const on = picked.has(p.id);
+              return (
+                <button key={p.id} className={"sw-row" + (on ? " on" : "")} onClick={() => toggle(p.id)}>
+                  <span className={"sw-check" + (on ? " on" : "")}>{on && <Icon name="check" size={12} />}</span>
+                  {/* Live theme accent, not p.accent — see Dashboard.tsx's bay-card comment; same frozen-value issue. */}
+                  <span className="sw-dot" style={{ background: "var(--mint)" }} />
+                  <div className="sw-info">
+                    <div className="sw-name">{p.name}</div>
+                    <div className="sw-meta mono">{(p.stacks || []).slice(0, 3).join(" · ") || "no stack"}{p.branch ? ` · ${p.branch}` : ""}</div>
+                  </div>
+                  <div className="sw-cmd mono">{command}<span className="sw-port">:{port}</span></div>
+                </button>
+              );
+            })}
+          </div>
+          <div className="sw-foot">
+            <span className="sw-count">{picked.size} selected</span>
+            <button className="btn accent" disabled={picked.size === 0 || agentDown} onClick={start}><Icon name="play" size={13} fill />Pull &amp; start</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="sw-sub">{busy ? "Working through your projects…" : "Done. Dev servers keep running in the background."}</div>
+          <div className="sw-list">
+            {chosen.map((p) => {
+              const r = runs[p.id] || { stage: "queued" as Stage };
+              const m = STAGE_META[r.stage];
+              return (
+                <div key={p.id} className="sw-runrow">
+                  {/* Live theme accent, not p.accent — see Dashboard.tsx's bay-card comment; same frozen-value issue. */}
+                  <span className="sw-dot" style={{ background: "var(--mint)" }} />
+                  <div className="sw-info">
+                    <div className="sw-name">{p.name}</div>
+                    {r.message && <div className="sw-runmsg mono" style={r.stage === "error" ? { color: "var(--red)" } : r.stage === "skipped" ? { color: "var(--amber)" } : {}}>{r.message}</div>}
+                    {!r.message && r.pull && <div className="sw-runmsg mono">{r.pull}</div>}
+                  </div>
+                  {r.stage === "running" && r.pid && (
+                    <button className="btn ghost sm" onClick={() => setLogsFor({ pid: r.pid!, project: p.name })}><Icon name="terminal" size={12} />Logs</button>
+                  )}
+                  <span className="sw-stage" style={{ color: m.color }}>
+                    {m.spin ? <Icon name="loader" size={13} className="spin" /> : r.stage === "running" ? <Icon name="check" size={13} /> : null}
+                    {m.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="sw-foot">
+            <button className="btn ghost" onClick={() => { setStep("select"); setRuns({}); }} disabled={busy}>Back</button>
+            <button className="btn accent" onClick={onClose} disabled={busy}>Done</button>
+          </div>
+        </>
+      )}
+      {logsFor && <DevLogsModal pid={logsFor.pid} project={logsFor.project} onClose={() => setLogsFor(null)} />}
+    </Modal>
   );
 }

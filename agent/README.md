@@ -116,7 +116,8 @@ the agent's terminal output if Docker/Postgres/Gmail panels stay empty.
 ## Postgres: stateless by design
 
 Saved Postgres servers ("machines") live in Supabase (`pg_servers`, RLS-scoped
-per user) — see `supabase/schema.sql` / `supabase/add_pg_servers.sql` — and
+per user) — see `supabase/schema.sql` (fresh installs) / `supabase/migrations.sql`
+(existing installs) — and
 are managed straight from the browser via the Supabase client, no agent
 involved. The agent itself stores nothing about them and never did a lookup
 by id: every `/pg/*` route (`test`, `databases`, `tables`, `schema`, `query`,

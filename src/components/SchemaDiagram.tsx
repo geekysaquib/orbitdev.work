@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } from "react";
 import { toPng } from "html-to-image";
 import { jsPDF } from "jspdf";
 import { Icon } from "../lib/icons";
 import { OrbitLoader, Empty } from "./ui";
 import { pgSchema, type PgSchema, type PgSchemaTable, type PgForeignKey, type PgServer } from "../lib/pg";
+import { explainTable, type TableExplanation } from "../lib/explainTable";
 
 const CARD_W = 264;
 const HEADER_H = 40;
@@ -186,6 +187,7 @@ export function SchemaDiagram({ server, database }: { server: PgServer; database
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [hoverKey, setHoverKey] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [view, setView] = useState({ scale: 1, tx: 40, ty: 40 });
   const [panning, setPanning] = useState(false);
   const [exportBusy, setExportBusy] = useState<"png" | "pdf" | null>(null);
@@ -194,6 +196,12 @@ export function SchemaDiagram({ server, database }: { server: PgServer; database
   const dragRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   const reqRef = useRef(0);
   const savedFilterRef = useRef<{ query: string; hoverKey: string | null } | null>(null);
+
+  // Stable across renders (unlike inline arrow functions per card) so TableCard's
+  // React.memo actually skips re-rendering every card on a single card's hover.
+  const handleCardEnter = setHoverKey;
+  const handleCardLeave = useCallback((key: string) => setHoverKey((k) => (k === key ? null : k)), []);
+  const handleCardClick = setSelectedKey;
 
   function load() {
     if (!server || !database) return;
@@ -205,10 +213,23 @@ export function SchemaDiagram({ server, database }: { server: PgServer; database
       setLoading(false);
     });
   }
-  useEffect(() => { setSchema(null); setQuery(""); setHoverKey(null); load(); }, [server?.id, database]); // eslint-disable-line
+  useEffect(() => { setSchema(null); setQuery(""); setHoverKey(null); setSelectedKey(null); load(); }, [server?.id, database]); // eslint-disable-line
+
+  useEffect(() => {
+    if (!selectedKey) return;
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape") setSelectedKey(null); }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedKey]);
 
   const diagram = useMemo(() => schema ? buildDiagram(schema) : null, [schema]);
   const tableCount = diagram ? diagram.cards.length + diagram.standaloneCards.length : 0;
+
+  const selectedTable = useMemo(() => {
+    if (!schema || !selectedKey) return null;
+    return schema.tables.find((t) => keyOf(t.schema, t.name) === selectedKey) ?? null;
+  }, [schema, selectedKey]);
+  const explanation = useMemo(() => (selectedTable && schema ? explainTable(selectedTable, schema) : null), [selectedTable, schema]);
 
   function fit() {
     const wrap = wrapRef.current;
@@ -342,70 +363,91 @@ export function SchemaDiagram({ server, database }: { server: PgServer; database
       {tableCount === 0 ? (
         <Empty icon="db" title="No tables in this database" mini />
       ) : (
-        <div
-          className={"sdiag-canvas-wrap" + (panning ? " panning" : "")}
-          ref={wrapRef}
-          onWheel={onWheel}
-          onMouseDown={onMouseDown}
-        >
-          <div className="sdiag-canvas" ref={canvasRef} style={{ transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`, width: diagram.width, height: diagram.height }}>
-            {diagram.hasGraph && (
-              <svg className="sdiag-svg" width={diagram.width} height={diagram.height}>
-                <defs>
-                  <marker id="sdiag-arrow" markerWidth="7" markerHeight="7" refX="5.4" refY="3" orient="auto">
-                    <path d="M0,0 L6,3 L0,6 Z" fill="context-stroke" />
-                  </marker>
-                </defs>
-                {diagram.edges.map((e) => {
-                  const hi = hoverKey ? e.fromKey === hoverKey || e.toKey === hoverKey : false;
-                  const dim = activeKeys ? !(activeKeys.has(e.fromKey) && activeKeys.has(e.toKey)) : false;
-                  return <path key={e.id} className={"sdiag-edge" + (hi ? " hi" : "") + (dim ? " dim" : "")} d={e.d} markerEnd={e.self ? undefined : "url(#sdiag-arrow)"} />;
-                })}
-              </svg>
-            )}
-            {diagram.showStandaloneLabel && (
-              <div className="sdiag-section-label" style={{ left: PAD, top: diagram.standaloneY - LABEL_H }}>
-                Standalone tables ({diagram.standaloneCards.length}) — no foreign keys in or out
-              </div>
-            )}
-            {diagram.cards.map((c) => (
-              <TableCard
-                key={c.key}
-                table={c.table}
-                fkColSet={diagram.fkColSet}
-                style={{ left: c.x, top: c.y }}
-                dim={!!activeKeys && !activeKeys.has(c.key)}
-                hi={hoverKey === c.key}
-                onEnter={() => setHoverKey(c.key)}
-                onLeave={() => setHoverKey((k) => (k === c.key ? null : k))}
-              />
-            ))}
-            {diagram.standaloneCards.map((c) => (
-              <TableCard
-                key={c.key}
-                table={c.table}
-                fkColSet={diagram.fkColSet}
-                style={{ left: c.x, top: c.y }}
-                dim={!!activeKeys && !activeKeys.has(c.key)}
-                hi={hoverKey === c.key}
-                onEnter={() => setHoverKey(c.key)}
-                onLeave={() => setHoverKey((k) => (k === c.key ? null : k))}
-              />
-            ))}
+        <div className="sdiag-body">
+          <div
+            className={"sdiag-canvas-wrap" + (panning ? " panning" : "")}
+            ref={wrapRef}
+            onWheel={onWheel}
+            onMouseDown={onMouseDown}
+          >
+            <div className="sdiag-canvas" ref={canvasRef} style={{ transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`, width: diagram.width, height: diagram.height }}>
+              {diagram.hasGraph && (
+                <svg className="sdiag-svg" width={diagram.width} height={diagram.height}>
+                  <defs>
+                    <marker id="sdiag-arrow" markerWidth="7" markerHeight="7" refX="5.4" refY="3" orient="auto">
+                      <path d="M0,0 L6,3 L0,6 Z" fill="context-stroke" />
+                    </marker>
+                  </defs>
+                  {diagram.edges.map((e) => {
+                    const hi = hoverKey ? e.fromKey === hoverKey || e.toKey === hoverKey : false;
+                    const dim = activeKeys ? !(activeKeys.has(e.fromKey) && activeKeys.has(e.toKey)) : false;
+                    return <path key={e.id} className={"sdiag-edge" + (hi ? " hi" : "") + (dim ? " dim" : "")} d={e.d} markerEnd={e.self ? undefined : "url(#sdiag-arrow)"} />;
+                  })}
+                </svg>
+              )}
+              {diagram.showStandaloneLabel && (
+                <div className="sdiag-section-label" style={{ left: PAD, top: diagram.standaloneY - LABEL_H }}>
+                  Standalone tables ({diagram.standaloneCards.length}) — no foreign keys in or out
+                </div>
+              )}
+              {diagram.cards.map((c) => (
+                <TableCard
+                  key={c.key}
+                  cardKey={c.key}
+                  table={c.table}
+                  fkColSet={diagram.fkColSet}
+                  left={c.x}
+                  top={c.y}
+                  dim={!!activeKeys && !activeKeys.has(c.key)}
+                  hi={hoverKey === c.key}
+                  sel={selectedKey === c.key}
+                  onEnter={handleCardEnter}
+                  onLeave={handleCardLeave}
+                  onClick={handleCardClick}
+                />
+              ))}
+              {diagram.standaloneCards.map((c) => (
+                <TableCard
+                  key={c.key}
+                  cardKey={c.key}
+                  table={c.table}
+                  fkColSet={diagram.fkColSet}
+                  left={c.x}
+                  top={c.y}
+                  dim={!!activeKeys && !activeKeys.has(c.key)}
+                  hi={hoverKey === c.key}
+                  sel={selectedKey === c.key}
+                  onEnter={handleCardEnter}
+                  onLeave={handleCardLeave}
+                  onClick={handleCardClick}
+                />
+              ))}
+            </div>
           </div>
+          {selectedTable && explanation && (
+            <TableExplainPanel table={selectedTable} explanation={explanation} onClose={() => setSelectedKey(null)} />
+          )}
         </div>
       )}
     </div>
   );
 }
 
-function TableCard({ table, fkColSet, style, dim, hi, onEnter, onLeave }: {
-  table: PgSchemaTable; fkColSet: Set<string>; style?: CSSProperties; dim: boolean; hi: boolean;
-  onEnter: () => void; onLeave: () => void;
+const TableCard = memo(function TableCard({ cardKey, table, fkColSet, left, top, dim, hi, sel, onEnter, onLeave, onClick }: {
+  cardKey: string; table: PgSchemaTable; fkColSet: Set<string>; left: number; top: number; dim: boolean; hi: boolean; sel: boolean;
+  onEnter: (key: string) => void; onLeave: (key: string) => void; onClick: (key: string) => void;
 }) {
-  const key = keyOf(table.schema, table.name);
+  const key = cardKey;
+  // left/top are passed as primitives (not a `style` object) so memo's shallow prop
+  // comparison actually works — a fresh `{left, top}` literal from the parent's
+  // .map() would otherwise look "changed" on every render regardless of value.
   return (
-    <div className={"sdiag-card" + (hi ? " hi" : "") + (dim ? " dim" : "")} style={style} onMouseEnter={onEnter} onMouseLeave={onLeave}>
+    <div
+      className={"sdiag-card" + (hi ? " hi" : "") + (dim ? " dim" : "") + (sel ? " sel" : "")} style={{ left, top }}
+      onMouseEnter={() => onEnter(key)} onMouseLeave={() => onLeave(key)} onClick={() => onClick(key)}
+      role="button" tabIndex={0}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(key); } }}
+    >
       <div className="sdiag-card-head">
         <Icon name="boxes" size={13} />
         <span className="sc">{table.schema}.</span><span className="nm">{table.name}</span>
@@ -422,6 +464,67 @@ function TableCard({ table, fkColSet, style, dim, hi, onEnter, onLeave }: {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+});
+
+function TableExplainPanel({ table, explanation, onClose }: {
+  table: PgSchemaTable; explanation: TableExplanation; onClose: () => void;
+}) {
+  const e = explanation;
+  return (
+    <div className="sdiag-explain" key={keyOf(table.schema, table.name)}>
+      <div className="sdiag-explain-head">
+        <Icon name="sparkles" size={14} className="glow" />
+        <div className="ttl">
+          <div className="nm">{table.schema}.{table.name}</div>
+          <div className="sub">Instant explain · generated locally from your schema</div>
+        </div>
+        <button className="sdiag-explain-close" onClick={onClose} title="Close"><Icon name="x" size={14} /></button>
+      </div>
+      <div className="sdiag-explain-body">
+        <div className="sdiag-explain-headline">{e.headline}</div>
+        <p className="sdiag-explain-summary">{e.summary}</p>
+
+        <div className="sdiag-explain-facts">
+          {e.facts.map((f, i) => <div key={i} className="fact"><Icon name="check" size={11} />{f}</div>)}
+        </div>
+
+        {(e.outgoing.length > 0 || e.incoming.length > 0) && (
+          <div className="sdiag-explain-section">
+            <div className="lbl">Relationships</div>
+            {e.outgoing.map((r, i) => (
+              <div key={"o" + i} className="rel">
+                <Icon name="chevR" size={11} /><span className="mono">{r.via}</span> → <b>{r.text}</b>
+              </div>
+            ))}
+            {e.incoming.map((r, i) => (
+              <div key={"i" + i} className="rel">
+                <Icon name="chevL" size={11} /><b>{r.text}</b> <span className="mono">{r.via}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {e.columns.length > 0 && (
+          <div className="sdiag-explain-section">
+            <div className="lbl">Notable columns</div>
+            {e.columns.map((c) => (
+              <div key={c.name} className="col">
+                <span className="cn mono">{c.name}</span>
+                <span className="note">{c.note}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {e.notes.length > 0 && (
+          <div className="sdiag-explain-section">
+            <div className="lbl">Notes</div>
+            {e.notes.map((n, i) => <div key={i} className="note-line">{n}</div>)}
+          </div>
+        )}
       </div>
     </div>
   );

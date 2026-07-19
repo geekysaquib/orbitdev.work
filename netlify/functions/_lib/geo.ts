@@ -22,8 +22,10 @@ export async function lookupGeo(ip: string): Promise<GeoInfo> {
   const isPrivate = !ip || PRIVATE_RANGES.some((re) => re.test(ip));
   const url = isPrivate ? "https://ipwho.is/" : `https://ipwho.is/${encodeURIComponent(ip)}`;
   try {
+    // Kept short: login/verify await this (see sendLoginAlert in auth.ts), so a slow
+    // or unresponsive geo provider shouldn't add much latency to every sign-in.
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 3000);
+    const t = setTimeout(() => ctrl.abort(), 1200);
     const r = await fetch(url, { signal: ctrl.signal });
     clearTimeout(t);
     if (!r.ok) return { ip: isPrivate ? "unknown" : ip };

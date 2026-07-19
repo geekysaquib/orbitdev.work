@@ -1,4 +1,5 @@
 import type { Handler, HandlerEvent } from "@netlify/functions";
+import { verifySession } from "./_lib/verifyToken";
 
 /**
  * Zoho SPRINTS proxy. Credentials are read strictly from the caller's own row
@@ -18,20 +19,31 @@ async function loadCreds(event: HandlerEvent): Promise<Partial<Creds>> {
   const auth = event.headers.authorization || event.headers.Authorization;
   const url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
   const anon = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
-  if (auth && url && anon) {
-    try {
-      const r = await fetch(`${url}/rest/v1/integrations?select=*`, { headers: { apikey: anon, Authorization: auth } });
-      if (r.ok) {
-        const rows = await r.json();
-        const row = Array.isArray(rows) ? rows[0] : null;
-        if (row) return {
-          clientId: row.zoho_client_id, clientSecret: row.zoho_client_secret, refreshToken: row.zoho_refresh_token,
-          dc: row.zoho_dc, teamId: row.zoho_team_id, projectId: row.zoho_project_id,
-        };
-      }
-    } catch { /* fall through to env */ }
+  if (!url || !anon) throw new Error("Server misconfigured — SUPABASE_URL/SUPABASE_ANON_KEY are not set for zoho-sprints.");
+
+  const r = await fetch(`${url}/rest/v1/integrations?select=*`, { headers: { apikey: anon, Authorization: auth || "" } });
+  if (!r.ok) throw new Error(`Could not load your integration settings (${r.status}).`);
+  const rows = await r.json();
+  const row = Array.isArray(rows) ? rows[0] : null;
+  if (!row) return {};
+  return {
+    clientId: row.zoho_client_id, clientSecret: row.zoho_client_secret, refreshToken: row.zoho_refresh_token,
+    dc: row.zoho_dc, teamId: row.zoho_team_id, projectId: row.zoho_project_id,
+  };
+}
+
+/** Runs `fn` over `items` with at most `limit` in flight at once, preserving output order. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
   }
-  return {};
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
 function buildCfg(creds: Partial<Creds>): Cfg {
@@ -171,6 +183,9 @@ async function listSprints(c: Cfg, teamId: string, projectId: string, token: str
 const ok = (data: unknown) => ({ statusCode: 200, headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
 
 export const handler: Handler = async (event) => {
+  const session = await verifySession(event.headers.authorization || event.headers.Authorization);
+  if (!session) return { statusCode: 401, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: "Sign in required." }) };
+
   try {
     const c = buildCfg(await loadCreds(event));
     if (!c.refreshToken) return { statusCode: 400, body: JSON.stringify({ error: "Zoho not configured — add your keys in Settings." }) };
@@ -217,11 +232,17 @@ export const handler: Handler = async (event) => {
       const projectId = q.project || c.projectId; const sprintId = q.sprint;
       if (!projectId || !sprintId) return { statusCode: 400, body: JSON.stringify({ error: "project and sprint required" }) };
       const { items } = await sprintItems(c, teamId, projectId, sprintId, token);
-      const thumbs: Record<string, { thumb: string; count: number; preview: string }> = {}; let calls = 0;
-      for (const it of items) {
-        if (!truthy(it.isDocsAdded)) continue; if (calls >= 60) break; calls++;
-        try { const j = await getJson(`${c.API}/team/${teamId}/projects/${projectId}/sprints/${sprintId}/item/${it.itemId}/attachments/?action=notes`, token); const a = j?.itemAttachments?.[it.itemId]; if (Array.isArray(a) && a.length) thumbs[it.itemId] = { thumb: a[0].THUMBNAIL_URL || "", preview: a[0].PREVIEW_URL || "", count: a.length }; } catch { /**/ }
-      }
+      const docItems = items.filter((it) => truthy(it.isDocsAdded)).slice(0, 60);
+      const fetched = await mapLimit(docItems, 8, async (it) => {
+        try {
+          const j = await getJson(`${c.API}/team/${teamId}/projects/${projectId}/sprints/${sprintId}/item/${it.itemId}/attachments/?action=notes`, token);
+          const a = j?.itemAttachments?.[it.itemId];
+          if (Array.isArray(a) && a.length) return { id: it.itemId as string, thumb: a[0].THUMBNAIL_URL || "", preview: a[0].PREVIEW_URL || "", count: a.length };
+        } catch { /**/ }
+        return null;
+      });
+      const thumbs: Record<string, { thumb: string; count: number; preview: string }> = {};
+      for (const r of fetched) if (r) thumbs[r.id] = { thumb: r.thumb, preview: r.preview, count: r.count };
       return ok({ thumbs });
     }
 
@@ -230,10 +251,12 @@ export const handler: Handler = async (event) => {
       if (!projectId) return { statusCode: 400, body: JSON.stringify({ error: "project id required" }) };
       const maps = await loadMaps(c, teamId, projectId, token);
       const sprints = await listSprints(c, teamId, projectId, token);
+      const fetched = await mapLimit(sprints, 5, async (s) => {
+        try { const r = await sprintItems(c, teamId, projectId, s.sprintId, token); return { s, items: r.items, users: r.users }; }
+        catch { return { s, items: [] as any[], users: {} as Record<string, string> }; }
+      });
       const out = []; let total = 0;
-      for (const s of sprints) {
-        let items: any[] = [], users: Record<string, string> = {};
-        try { const r = await sprintItems(c, teamId, projectId, s.sprintId, token); items = r.items; users = r.users; } catch { items = []; }
+      for (const { s, items, users } of fetched) {
         out.push({ id: s.sprintId, name: pick(s, ["sprintName", "name"], "Sprint"), status: pick(s, ["sprintStatus", "status", "statusName"], ""), startDate: pick(s, ["startDate"], ""), endDate: pick(s, ["endDate"], ""), items: items.map((it) => mapItem(it, { ...maps, users })) });
         total += items.length; if (total >= 600) break;
       }
@@ -257,15 +280,31 @@ export const handler: Handler = async (event) => {
     if (!projectId) return ok({ data: [] });
     const maps = await loadMaps(c, teamId, projectId, token);
     const sprints = await listSprints(c, teamId, projectId, token);
+    const targetSprints = sprints.slice(0, 12);
+    const fetched = await mapLimit(targetSprints, 5, async (s) => {
+      try { return { s, items: (await sprintItems(c, teamId, projectId, s.sprintId, token)).items }; }
+      catch { return { s, items: [] as any[] }; }
+    });
     const data: any[] = [];
-    for (const s of sprints.slice(0, 12)) {
-      let items: any[] = [];
-      try { items = (await sprintItems(c, teamId, projectId, s.sprintId, token)).items; } catch { continue; }
-      for (const it of items) { const m = mapItem(it, maps) as any; m.sprint = pick(s, ["sprintName", "name"], ""); data.push(m); if (data.length >= 200) break; }
-      if (data.length >= 200) break;
+    outer: for (const { s, items } of fetched) {
+      for (const it of items) {
+        const m = mapItem(it, maps) as any; m.sprint = pick(s, ["sprintName", "name"], "");
+        data.push(m);
+        if (data.length >= 200) break outer;
+      }
     }
     return ok({ data, meta: { teamId, projectId, sprints: sprints.length } });
   } catch (e) {
-    return { statusCode: 500, body: JSON.stringify({ error: (e as Error).message }) };
+    console.error("[zoho-sprints]", e);
+    const msg = (e as Error).message || "";
+    // A handful of errors above are written to guide the user to a fix (bad/missing
+    // keys, unresolved team) — safe to show as-is. Everything else (raw upstream
+    // URLs/status codes from getJson, network errors) stays server-side only.
+    const safe = /Check your Zoho keys in Settings|set it in Settings|not configured|Server misconfigured/i.test(msg);
+    return {
+      statusCode: 500,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ error: safe ? msg : "Something went wrong talking to Zoho. Please try again." }),
+    };
   }
 };

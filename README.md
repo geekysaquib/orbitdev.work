@@ -95,12 +95,15 @@ and how to swap in a .NET agent.
 You're on Zoho **Sprints**, not Desk, so the Tickets screen pulls Sprints work items.
 This is **per-account, not shared** — there's no environment-variable fallback, so
 every ORBIT account (including yours) links its own Zoho keys or sees "not configured."
-In the Zoho API Console (matching your DC, e.g. `api-console.zoho.in`) create a
-**Self Client**, Generate Code with scope
-`ZohoSprints.teams.READ,ZohoSprints.projects.READ,ZohoSprints.sprints.READ,ZohoSprints.items.READ`,
-exchange it for a refresh token, then paste Client ID / Secret / Refresh Token into
-ORBIT → Settings → Zoho Sprints and hit **Save & connect**. The function auto-discovers
-your team and project; pin the Team ID / Project ID there once you know them for speed.
+ORBIT → Settings → Zoho Sprints walks through this: in the Zoho API Console (matching
+your DC, e.g. `api-console.zoho.in`) create a **Self Client**, Generate Code with the
+scope shown in the Settings page, then paste the Client ID / Secret / grant code back
+into ORBIT and hit **Exchange for tokens** — the grant-code-for-refresh-token exchange
+happens server-side (`netlify/functions/zoho-exchange.ts`), so nobody needs a terminal
+or curl. Hit **Save & connect** once the Refresh Token field is filled. The function
+auto-discovers your team and project; pin the Team ID / Project ID there only if you
+want to skip that lookup. Once connected, ORBIT reconnects automatically on future
+sign-ins — no reconnect step after logout.
 
 ## 7. Deploy (Netlify)
 

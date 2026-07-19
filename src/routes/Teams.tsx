@@ -2,17 +2,108 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Icon } from "../lib/icons";
 import { Select } from "../components/Select";
-import { ACCENT, Empty } from "../components/ui";
+import { ACCENT, Empty, OrbitLoader } from "../components/ui";
 import { useToast } from "../context/Toast";
 import { useAuth } from "../context/AuthContext";
+import { useTeamPresence } from "../context/Presence";
 import {
   listMyTeams, listMembers, listInvites, createTeam, inviteMember,
   resendInvite, revokeInvite, removeMember, changeRole, leaveTeam,
 } from "../lib/teams";
-import type { Team, TeamMember, TeamInvite, TeamRole } from "../lib/types";
+import { recordAudit } from "../lib/audit";
+import { fetchTeamActivity, subscribeTeamActivity, activityMeta, activityDetail } from "../lib/activity";
+import { notifAgo } from "../lib/notifications";
+import type { Team, TeamMember, TeamInvite, TeamRole, TeamActivity } from "../lib/types";
 
-const ROLE_COLOR: Record<TeamRole, string> = { owner: ACCENT.violet, admin: ACCENT.blue, member: "var(--dim)" };
+const ROLE_COLOR: Record<TeamRole, string> = { owner: ACCENT.violet, admin: ACCENT.blue, member: "var(--dim)", viewer: ACCENT.amber };
 const TEAM_DOT_COLORS = [ACCENT.mint, ACCENT.blue, ACCENT.violet, ACCENT.amber];
+
+function agoSince(iso: string): string {
+  const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m`;
+  if (m < 1440) return `${Math.floor(m / 60)}h`;
+  return `${Math.floor(m / 1440)}d`;
+}
+
+function LivePanel({ teamId }: { teamId: string | null }) {
+  const present = useTeamPresence(teamId);
+  return (
+    <>
+      <div className="eyebrow" style={{ margin: "32px 0 16px" }}>Live now</div>
+      {present.length === 0 ? (
+        <div className="tm-live-empty">No one else is online right now.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {present.map((p) => (
+            <div className="tm-live-row" key={p.user_id}>
+              <span className="tm-live-dot" />
+              <span className="tm-nm">{p.full_name}</span>
+              <span className="tm-live-label">{p.label}</span>
+              <span className="mono tm-live-since">since {agoSince(p.since)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function ActivityPanel({ teamId }: { teamId: string | null }) {
+  const [rows, setRows] = useState<TeamActivity[]>([]);
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const PAGE_SIZE = 30;
+
+  const load = (p: number) => {
+    if (!teamId) return;
+    setLoading(true);
+    fetchTeamActivity(teamId, { page: p, pageSize: PAGE_SIZE }).then((res) => {
+      setRows((prev) => (p === 0 ? res.rows : [...prev, ...res.rows]));
+      setTotal(res.total);
+      setLoading(false);
+    });
+  };
+  useEffect(() => { setPage(0); load(0); }, [teamId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!teamId) return;
+    return subscribeTeamActivity(teamId, () => load(0));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teamId]);
+
+  return (
+    <>
+      <div className="eyebrow" style={{ margin: "32px 0 16px" }}>Activity</div>
+      {loading && rows.length === 0 ? (
+        <div className="tm-live-empty">Loading…</div>
+      ) : rows.length === 0 ? (
+        <div className="tm-live-empty">Nothing's happened here yet.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {rows.map((r) => {
+            const m = activityMeta(r.action);
+            const detail = activityDetail(r);
+            return (
+              <div className="tm-activity-row" key={r.id}>
+                <span className="tm-activity-ic" style={{ color: m.color }}><Icon name={m.icon} size={15} /></span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="tm-activity-text"><b>{r.full_name || r.email || "Someone"}</b> {m.verb}{detail ? ` "${detail}"` : ""}</div>
+                </div>
+                <span className="mono tm-live-since">{notifAgo(r.created_at)}</span>
+              </div>
+            );
+          })}
+          {rows.length < total && (
+            <button className="btn ghost" style={{ alignSelf: "flex-start", marginTop: 4 }} disabled={loading} onClick={() => { setPage((p) => p + 1); load(page + 1); }}>
+              {loading ? "Loading…" : "Load more"}
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
 function RoleBadge({ role }: { role: TeamRole }) {
   return <span className="tm-rolelabel" style={{ color: ROLE_COLOR[role] }}>{role.toUpperCase()}</span>;
 }
@@ -23,6 +114,7 @@ export default function Teams() {
   const [params, setParams] = useSearchParams();
 
   const [teams, setTeams] = useState<Team[]>([]);
+  const [loadingTeams, setLoadingTeams] = useState(true);
   const [teamId, setTeamId] = useState<string | null>(null);
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [invites, setInvites] = useState<TeamInvite[]>([]);
@@ -40,6 +132,7 @@ export default function Teams() {
       const want = selectId ?? params.get("team") ?? cur;
       return want && t.some((x) => x.id === want) ? want : (t[0]?.id ?? null);
     });
+    setLoadingTeams(false);
   };
   useEffect(() => { loadTeams(); }, []); // eslint-disable-line
 
@@ -81,6 +174,7 @@ export default function Teams() {
     setInviting(false);
     if (!res.ok) { toast(`Couldn't send invite: ${res.error}`); return; }
     setInviteEmail("");
+    recordAudit({ action: "team.invite", entityType: "team", entityId: teamId, teamId, meta: { email } });
     toast(`Invite sent to ${email}`);
     listInvites(teamId).then(setInvites);
   }
@@ -100,7 +194,7 @@ export default function Teams() {
     if (!teamId) return;
     const res = await removeMember(teamId, userId);
     toast(res.ok ? "Member removed" : `Couldn't remove member: ${res.error}`);
-    if (res.ok) listMembers(teamId).then(setMembers);
+    if (res.ok) { recordAudit({ action: "team.remove_member", entityType: "team", entityId: teamId, teamId, meta: { userId } }); listMembers(teamId).then(setMembers); }
   }
 
   async function handleChangeRole(userId: string, role: Exclude<TeamRole, "owner">) {
@@ -125,7 +219,9 @@ export default function Teams() {
         <button className="tm-addbtn" onClick={() => setNewModal(true)}><Icon name="plus" size={14} />New team</button>
       </div>
 
-      {teams.length === 0 ? (
+      {loadingTeams ? (
+        <div className="page-loader"><OrbitLoader label="Loading teams…" /></div>
+      ) : teams.length === 0 ? (
         <div style={{ marginTop: 22 }}>
           <Empty icon="users" title="No teams yet" sub="Create one to invite teammates by email and start sharing tasks &amp; projects." />
         </div>
@@ -174,6 +270,7 @@ export default function Teams() {
                             <Select className="tm-role-select" chevron={false} value={m.role} onChange={(e) => handleChangeRole(m.user_id, e.target.value as Exclude<TeamRole, "owner">)}>
                               <option value="member">Member</option>
                               <option value="admin">Admin</option>
+                              <option value="viewer">Viewer</option>
                             </Select>
                           )}
                           {canRemove && <button className="tm-remove" onClick={() => handleRemoveMember(m.user_id)}>Remove</button>}
@@ -184,6 +281,9 @@ export default function Teams() {
                   );
                 })}
 
+                <LivePanel teamId={teamId} />
+                <ActivityPanel teamId={teamId} />
+
                 {canManageTeam && (
                   <>
                     <div className="eyebrow" style={{ margin: "32px 0 16px" }}>Invite someone</div>
@@ -192,6 +292,7 @@ export default function Teams() {
                       <Select className="tm-usel" chevron={false} value={inviteRole} onChange={(e) => setInviteRole(e.target.value as Exclude<TeamRole, "owner">)}>
                         <option value="member">Member</option>
                         <option value="admin">Admin</option>
+                        <option value="viewer">Viewer</option>
                       </Select>
                       <button className="btn accent" disabled={inviting || !inviteEmail.trim()} onClick={handleInvite}>{inviting ? "Sending…" : "Send invite"}</button>
                     </div>

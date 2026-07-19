@@ -1,8 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { Icon } from "../lib/icons";
-import { Chip, Stat, Eyebrow, ACCENT, prColor, Empty, OrbitLoader } from "../components/ui";
+import { Chip, Stat, Eyebrow, ACCENT, alpha, prColor, Empty, OrbitLoader } from "../components/ui";
+import { Select } from "../components/Select";
+import { BreakView } from "../components/BreakView";
+import { Modal } from "../components/Modal";
+import { AiThinking, formatDuration } from "../components/AiThinking";
 import { useTable } from "../hooks/useTable";
+import { useDashboardLayout } from "../hooks/useDashboardLayout";
+import { useIntegrationHealth, type HealthState } from "../hooks/useIntegrationHealth";
+import { useProjectsGitStatus } from "../hooks/useProjectsGitStatus";
+import { allowedSizesOf, type TileSize } from "../lib/dashboardLayout";
 import { useToast } from "../context/Toast";
 import { useAuth } from "../context/AuthContext";
 import { useZoho } from "../context/Zoho";
@@ -10,20 +18,26 @@ import { useTimezone, tzHour, tzDate } from "../context/Timezone";
 import { useBreak } from "../context/Break";
 import { useWeather } from "../hooks/useWeather";
 import { useAgent } from "../context/Agent";
-import { launch, fetchDocker, fetchDockerImages, gitPull, devRunning, npmOutdated, npmAudit, dockerDf, dockerPrune, portsMap, gmailUnread, type DockerContainer } from "../lib/agent";
-import { pgServers, pgHealth } from "../lib/pg";
-import { cachedChores, loadChores, type ChoreSettings, type ChoreId } from "../lib/chores";
-import { saveBreakLog, notify } from "../lib/breakLog";
-import { fetchZohoTickets, fetchTimesheet, fetchSprintBoard, fetchSprintProjects, type ZohoItem } from "../lib/zoho";
+import { launch, fetchDocker, type DockerContainer } from "../lib/agent";
+import { fetchZohoTickets, fetchTimesheet, fetchSprintBoard, type Board, type ZohoItem } from "../lib/zoho";
 import { fetchOrbitHours, type OrbitHours } from "../lib/orbitHours";
+import { readTimer } from "../lib/timer";
+import { fetchIntegrations } from "../lib/integrations";
+import { ask, type AiSource } from "../lib/ai";
 import { supabase } from "../lib/supabase";
 import type { Project, Ticket, Task, Notification } from "../lib/types";
 
-interface BugRow { item: ZohoItem; project: string; spid: string; }
-const isOpenBug = (it: ZohoItem) =>
-  (it.type || "").toLowerCase().includes("bug") && !/done|closed|resolved|complete/i.test(it.status || "");
+const STANDUP_SYSTEM = `You write short daily standup updates for a solo developer. Given raw task/ticket/hours data,
+write a concise standup in three short sections: "Done", "In progress", "Blockers/notes" — each 1-4 bullet points,
+plain text bullets starting with "-", no markdown headers, no preamble.`;
 
-const TIMER_KEY = "orbit.timerStart";
+/** Mirrors Sprints.tsx's local `typeStyle` — kept small and duplicated rather than exported cross-route. */
+const itemTypeStyle = (name: string): { color: string; icon: string } => {
+  const n = (name || "").toLowerCase();
+  if (n.includes("bug")) return { color: ACCENT.red, icon: "bolt" };
+  if (n.includes("story")) return { color: ACCENT.mint, icon: "book" };
+  return { color: ACCENT.blue, icon: "check2" };
+};
 
 export default function Dashboard() {
   const nav = useNavigate();
@@ -33,19 +47,113 @@ export default function Dashboard() {
   const { tz } = useTimezone();
   const { onBreak, timerPaused, breakStartedAt, startBreak, endBreak } = useBreak();
   const weather = useWeather();
-  const { rows: projects } = useTable<Project>("projects");
+  const { rows: projects, loading: projectsLoading } = useTable<Project>("projects");
   const { rows: tickets } = useTable<Ticket>("tickets");
   const { rows: tasks } = useTable<Task>("tasks");
   const [bugs, setBugs] = useState<number | null>(null);
   const [hoursToday, setHoursToday] = useState<number | null>(null);
   const [orbit, setOrbit] = useState<OrbitHours>({ todayH: 0, totalH: 0 });
   const [containers, setContainers] = useState<DockerContainer[] | null>(null);
-  const [latestBugs, setLatestBugs] = useState<BugRow[] | null>(null);
-  const [bugsLoading, setBugsLoading] = useState(false);
+  const [boardProjectId, setBoardProjectId] = useState<string | null>(null);
+  const [board, setBoard] = useState<Board | null>(null);
+  const [boardLoading, setBoardLoading] = useState(false);
   const [flash, setFlash] = useState<Notification | null>(null);
   const [tick, setTick] = useState(Date.now());
   const { status: agentStatus } = useAgent();
   const agentDown = agentStatus !== "online";
+  const { gitByProject } = useProjectsGitStatus(projects, agentStatus === "online");
+  const { health } = useIntegrationHealth();
+  const [aiApiKey, setAiApiKey] = useState<string | null>(null);
+  const [standup, setStandup] = useState<string | null>(null);
+  const [standupSource, setStandupSource] = useState<AiSource | null>(null);
+  const [standupDurationMs, setStandupDurationMs] = useState(0);
+  const [standupBusy, setStandupBusy] = useState(false);
+  const { layout, move, toggleHidden, setSize, cycleTileSize, reset, isDefault: layoutIsDefault } = useDashboardLayout();
+  const [editingLayout, setEditingLayout] = useState(false);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  // Sprint board's kanban content can be arbitrarily tall (more items = more
+  // height); System health can't (a fixed 10 checks). Rather than growing
+  // Health to match whatever height Sprint board happens to be, cap Sprint
+  // board to Health's own natural height and let its content scroll inside
+  // that instead — measured live so it keeps tracking Health's real size
+  // (theme/density changes, window resizes) rather than a guessed constant.
+  const healthCardRef = useRef<HTMLDivElement>(null);
+  const [sprintMaxH, setSprintMaxH] = useState<number | null>(null);
+  useEffect(() => {
+    const el = healthCardRef.current;
+    if (!el) return;
+    // getBoundingClientRect(), not ResizeObserver's own contentRect — the
+    // border-box (padding+border included) is what a border-box max-height
+    // needs to match; contentRect is content-only and came out ~38px short
+    // (this card's own padding+border), undershooting Health's real height.
+    const ro = new ResizeObserver(() => setSprintMaxH(el.getBoundingClientRect().height));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Drag-to-resize: hold the handle on a tile's right border and drag to snap
+  // between its allowed widths. The live preview is done by mutating the
+  // tile's own classList directly (NOT React state) — Dashboard renders a lot
+  // (project bays, sprint board, health widget...), so routing every pixel of
+  // drag movement through setState here forced a full re-render on each tick
+  // (verified via a `pointermove handler took ~200ms` DevTools violation),
+  // which made the drag feel like it wasn't working at all. React only gets
+  // touched once, on release, to persist the final size.
+  function beginResize(e: React.PointerEvent<HTMLDivElement>, id: string, currentSize: TileSize) {
+    e.preventDefault();
+    e.stopPropagation();
+    const grid = gridRef.current;
+    const tileEl = e.currentTarget.parentElement;
+    if (!grid || !tileEl) return;
+    const rect = grid.getBoundingClientRect();
+    const cols = getComputedStyle(grid).gridTemplateColumns.split(" ").length || 4;
+    const gap = parseFloat(getComputedStyle(grid).columnGap) || 14;
+    const colWidth = (rect.width - (cols - 1) * gap) / cols;
+    const allowed = allowedSizesOf(id);
+    const startX = e.clientX;
+    let moved = false;
+    let preview: TileSize = currentSize;
+    tileEl.classList.add("resizing");
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    // Tracked on window rather than the 20px handle itself (and without relying
+    // on setPointerCapture) — the pointer moves far outside that sliver the
+    // instant a real drag starts, so the listener has to keep hearing it
+    // regardless of what's under the cursor.
+    const onMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX;
+      if (Math.abs(dx) > 3) moved = true;
+      const target = currentSize + dx / (colWidth + gap);
+      let snapped = allowed[0];
+      let bestDist = Infinity;
+      for (const s of allowed) {
+        const d = Math.abs(s - target);
+        if (d < bestDist) { bestDist = d; snapped = s; }
+      }
+      if (snapped !== preview) {
+        preview = snapped;
+        tileEl.classList.remove("s1", "s2", "s4");
+        tileEl.classList.add("s" + snapped);
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      tileEl.classList.remove("resizing");
+      if (moved) { if (preview !== currentSize) setSize(id, preview); }
+      else cycleTileSize(id);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  useEffect(() => { fetchIntegrations().then((i) => setAiApiKey(i?.anthropic_api_key || null)); }, []);
 
   // 1s tick drives the live Orbit timer
   useEffect(() => { const t = setInterval(() => setTick(Date.now()), 1000); return () => clearInterval(t); }, []);
@@ -60,30 +168,31 @@ export default function Dashboard() {
     fetchTimesheet().then((t) => { const k = new Date().toISOString().slice(0, 10); setHoursToday(t.byDate[k] ?? 0); }).catch(() => setHoursToday(null));
   }, [zoho.status]);
 
-  // Latest open bugs pulled from the sprints of active, Zoho-linked projects.
+  // The Sprints board for a chosen Zoho-linked project. `linkedProjects` is
+  // recomputed fresh each render (cheap) — the effect below depends on the
+  // stable `projects`/`zoho.status` values, not this derived array, so it
+  // doesn't refire on every unrelated re-render (e.g. the 1s timer tick).
+  const linkedProjects = projects.filter((p) => p.status === "active" && p.sprint_project_id);
+
+  // Default to the first linked project, and fall back to it if the chosen
+  // one stops being linked (e.g. unlinked from Zoho, or put on hold).
   useEffect(() => {
-    if (zoho.status !== "connected") { setLatestBugs(null); setBugsLoading(false); return; }
-    const linked = projects.filter((p) => p.status === "active" && p.sprint_project_id);
-    if (linked.length === 0) { setLatestBugs([]); setBugsLoading(false); return; }
-    let cancelled = false;
-    setBugsLoading(true);
-    (async () => {
-      const rows: BugRow[] = [];
-      await Promise.all(linked.slice(0, 4).map(async (p) => {
-        try {
-          const board = await fetchSprintBoard(p.sprint_project_id!);
-          for (const s of board.sprints)
-            for (const it of s.items)
-              if (isOpenBug(it)) rows.push({ item: it, project: p.name, spid: p.sprint_project_id! });
-        } catch { /* skip this project */ }
-      }));
-      if (cancelled) return;
-      rows.sort((a, b) => (b.item.modifiedTime || "").localeCompare(a.item.modifiedTime || ""));
-      setLatestBugs(rows.slice(0, 7));
-      setBugsLoading(false);
-    })();
-    return () => { cancelled = true; };
+    if (linkedProjects.length === 0) { setBoardProjectId(null); return; }
+    setBoardProjectId((cur) => (cur && linkedProjects.some((p) => p.id === cur) ? cur : linkedProjects[0].id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoho.status, projects]);
+
+  useEffect(() => {
+    const p = boardProjectId ? projects.find((x) => x.id === boardProjectId) : null;
+    if (!p?.sprint_project_id) { setBoard(null); return; }
+    let cancelled = false;
+    setBoardLoading(true);
+    fetchSprintBoard(p.sprint_project_id)
+      .then((b) => { if (!cancelled) setBoard(b); })
+      .catch(() => { if (!cancelled) setBoard(null); })
+      .finally(() => { if (!cancelled) setBoardLoading(false); });
+    return () => { cancelled = true; };
+  }, [boardProjectId, projects]);
 
   // Surface the most recent unread notification. It stays put until dismissed —
   // a break digest shouldn't evaporate before it's been read.
@@ -100,13 +209,14 @@ export default function Dashboard() {
     if (!flash) return;
     const id = flash.id;
     setFlash(null);
-    await supabase.from("notifications").update({ read: true } as never).eq("id", id);
+    await supabase.from("notifications").update({ read: true }).eq("id", id);
   }
 
-  // live timer: if a session is running (started in Time module), tick it here too
-  const startRaw = typeof localStorage !== "undefined" ? localStorage.getItem(TIMER_KEY) : null;
-  const running = !!startRaw && Number(startRaw) > 0;
-  const liveSec = running ? Math.max(0, Math.floor((tick - Number(startRaw)) / 1000)) : 0;
+  // live timer: if a session is running (started in Time module, or by Ask AI), tick it here too.
+  // `tick` isn't read directly — it's the 1s re-render that makes this re-read the timer.
+  void tick;
+  const { startedAt, seconds: liveSec } = readTimer();
+  const running = startedAt !== null;
   const liveClock = `${String(Math.floor(liveSec / 3600)).padStart(2, "0")}:${String(Math.floor((liveSec % 3600) / 60)).padStart(2, "0")}:${String(liveSec % 60).padStart(2, "0")}`;
   const orbitTodayLive = +(orbit.todayH + liveSec / 3600).toFixed(2);
 
@@ -118,10 +228,280 @@ export default function Dashboard() {
   const active = projects.filter((p) => p.status === "active");
   const todo = tasks.filter((t) => t.status !== "done").length;
 
+  // The board's first sprint, grouped into its columns — same idiom as Sprints.tsx.
+  const boardSprint = board?.sprints[0];
+  const boardColumns = board?.columns ?? [];
+  const boardGrouped: Record<string, ZohoItem[]> = {};
+  for (const c of boardColumns) boardGrouped[c.id] = [];
+  const boardExtra: ZohoItem[] = [];
+  for (const it of boardSprint?.items ?? []) {
+    if (it.statusId && boardGrouped[it.statusId]) boardGrouped[it.statusId].push(it);
+    else boardExtra.push(it);
+  }
+  const boardChosenProject = boardProjectId ? projects.find((p) => p.id === boardProjectId) : undefined;
+
   async function doLaunch(kind: "vscode" | "visualstudio" | "all", p: Project) {
     const res = await launch(kind, { fe_path: p.fe_path, sln_path: p.sln_path, dev_port: p.dev_port, name: p.name });
     toast(res.ok ? `Opening ${res.opened?.join(", ") || kind} · ${p.name}` : (res.error === "agent offline" ? "Local agent offline — start it to launch apps" : res.error || "Couldn't launch"));
   }
+
+  function buildWorkContext(): string {
+    const done = tasks.filter((t) => t.status === "done").map((t) => t.title);
+    const inProgress = tasks.filter((t) => t.status !== "done").map((t) => `${t.title} (${t.status})`);
+    const openTickets = tickets.filter((t) => !/resolved|closed/i.test(t.status)).map((t) => `${t.title} — ${t.status}`);
+    return [
+      `Active projects: ${active.length ? active.map((p) => p.name).join(", ") : "none"}`,
+      `Orbit hours today: ${orbitTodayLive}h (${orbit.totalH}h all-time)`,
+      `Open bugs across linked sprints: ${bugs ?? "unknown"}`,
+      `Done tasks: ${done.length ? done.join("; ") : "none"}`,
+      `Tasks in progress / to do: ${inProgress.length ? inProgress.join("; ") : "none"}`,
+      `Open tickets: ${openTickets.length ? openTickets.join("; ") : "none"}`,
+    ].join("\n");
+  }
+
+  async function generateStandup() {
+    if (standupBusy) return;
+    setStandupBusy(true); setStandup(null);
+    const started = Date.now();
+    const r = await ask(buildWorkContext(), STANDUP_SYSTEM, aiApiKey);
+    setStandupBusy(false);
+    setStandupSource(r.source);
+    setStandupDurationMs(Date.now() - started);
+    if (!r.ok) { toast(`Couldn't generate standup: ${r.error}${r.source === "local" ? " — set up local AI in Settings, or add an Anthropic key" : ""}`); return; }
+    setStandup(r.text || "");
+  }
+
+  // Every integration the full Health page tracks (src/routes/Health.tsx),
+  // condensed to one line each — same useIntegrationHealth() source of truth,
+  // so this widget and that page can't silently disagree. "Local AI" is the
+  // one Health-page tile left out: it's a manual on-demand test button with no
+  // persisted state to plot, not a connection status.
+  const cloudProviders = [health.providers.netlify, health.providers.vercel, health.providers.aws];
+  const cloudOkCount = cloudProviders.filter((p) => p.state === "ok").length;
+  const cloudState: HealthState = cloudOkCount > 0 ? "ok" : cloudProviders.every((p) => p.state === "unknown") ? "unknown" : "warn";
+  const healthRows: { id: string; icon: string; label: string; state: HealthState; status: string }[] = [
+    { id: "agent", icon: "plug", label: "Local agent", state: health.agent.state, status: health.agent.label },
+    { id: "zoho", icon: "sprint", label: "Zoho Sprints", state: health.zoho.state, status: health.zoho.label },
+    { id: "gmail", icon: "mail", label: "Gmail", state: health.gmail.state, status: health.gmail.configured ? "Configured" : "Not set up" },
+    { id: "github", icon: "github", label: "GitHub", state: health.providers.github.state, status: health.providers.github.label },
+    { id: "gitlab", icon: "gitlab", label: "GitLab", state: health.providers.gitlab.state, status: health.providers.gitlab.label },
+    { id: "azuredevops", icon: "azuredevops", label: "Azure DevOps", state: health.providers.azuredevops.state, status: health.providers.azuredevops.label },
+    { id: "msteams", icon: "msteams", label: "Microsoft Teams", state: health.providers.msteams.state, status: health.providers.msteams.label },
+    { id: "sentry", icon: "alert", label: "Sentry", state: health.providers.sentry.state, status: health.providers.sentry.label },
+    { id: "cloud", icon: "cloud", label: "Cloud", state: cloudState, status: cloudOkCount > 0 ? `${cloudOkCount}/3 connected` : cloudState === "unknown" ? "Not set up" : "Disconnected" },
+    { id: "docker", icon: "container", label: "Docker", state: health.docker.state, status: agentDown ? "Agent offline" : health.docker.available ? `${health.docker.count} running` : "Not detected" },
+    { id: "postgres", icon: "db", label: "Postgres", state: health.postgres.state, status: health.postgres.servers.length === 0 ? "No servers" : `${health.postgres.servers.filter((s) => s.ok).length}/${health.postgres.servers.length} reachable` },
+    { id: "anthropic", icon: "key", label: "Anthropic key", state: health.anthropic.state, status: health.anthropic.state === "ok" ? "Set" : "Not set" },
+  ];
+  const healthWarnCount = healthRows.filter((r) => r.state === "warn").length;
+  const healthOkCount = healthRows.filter((r) => r.state === "ok").length;
+  // Each check gets its own equal-sized donut slice, colored by its own status
+  // (never by magnitude — this is identity/part-to-whole, not a comparison of
+  // close values). A small angular gap between slices stands in for the usual
+  // 2px surface gap between touching stacked segments.
+  const HEALTH_CX = 50, HEALTH_CY = 50, HEALTH_OUTER_R = 42, HEALTH_INNER_R = 27, HEALTH_GAP_DEG = 3;
+  const HEALTH_STATE_COLOR: Record<HealthState, string> = { ok: ACCENT.mint, warn: ACCENT.red, unknown: ACCENT.dim };
+  const donutSlices = healthRows.map((r, i) => {
+    const step = 360 / healthRows.length;
+    return { ...r, start: i * step + HEALTH_GAP_DEG / 2, end: (i + 1) * step - HEALTH_GAP_DEG / 2 };
+  });
+  function healthPolar(r: number, deg: number) {
+    const rad = ((deg - 90) * Math.PI) / 180;
+    return { x: HEALTH_CX + r * Math.cos(rad), y: HEALTH_CY + r * Math.sin(rad) };
+  }
+  function healthSlicePath(startDeg: number, endDeg: number) {
+    const o1 = healthPolar(HEALTH_OUTER_R, startDeg);
+    const o2 = healthPolar(HEALTH_OUTER_R, endDeg);
+    const i1 = healthPolar(HEALTH_INNER_R, endDeg);
+    const i2 = healthPolar(HEALTH_INNER_R, startDeg);
+    const large = endDeg - startDeg > 180 ? 1 : 0;
+    return `M ${o1.x} ${o1.y} A ${HEALTH_OUTER_R} ${HEALTH_OUTER_R} 0 ${large} 1 ${o2.x} ${o2.y} L ${i1.x} ${i1.y} A ${HEALTH_INNER_R} ${HEALTH_INNER_R} 0 ${large} 0 ${i2.x} ${i2.y} Z`;
+  }
+
+  // Tile bodies, keyed by the ids in DASH_TILES. The dashboard renders these in
+  // the user's saved order rather than the order written here.
+  const TILES: Record<string, ReactNode> = {
+    projects: <Stat icon="activity" label="Active projects" value={String(active.length)} sub={`${projects.length} total`} tone={ACCENT.mint} />,
+    // Orbit hours — ticks live when a timer is running in the Time module
+    orbit: (
+      <div className="card stat fade orbit-stat" onClick={() => !editingLayout && nav("/time")} style={{ cursor: editingLayout ? "inherit" : "pointer" }}>
+        <div className="lab"><span style={{ color: ACCENT.mint }}><Icon name="orbit" size={15} /></span>Orbit hours{running && <span className="rec-dot" title="Timer running" />}</div>
+        <div className="val">{running ? liveClock : `${orbit.todayH}h`}</div>
+        <div className="subv">{running ? `recording · ${orbit.totalH}h all-time` : `${orbit.totalH}h all-time`}</div>
+      </div>
+    ),
+    zoho: <Stat icon="clock" label="Zoho hours today" value={hoursToday !== null ? `${hoursToday}h` : "—"} sub={hoursToday !== null ? "logged in Sprints" : "connect Zoho"} tone={ACCENT.blue} />,
+    containers: (
+      <Stat icon="cpu" label="Containers up"
+        value={containers === null ? "—" : String(containers.length)}
+        sub={containers === null ? "agent offline" : containers.length ? containers.map((c) => c.name).slice(0, 2).join(", ") : "none running"}
+        tone={ACCENT.violet} />
+    ),
+    bays: (
+      <div className="widget-panel">
+        <Eyebrow>Project bays</Eyebrow>
+        {projectsLoading ? <div className="page-loader"><OrbitLoader label="Loading projects…" /></div> : <div className="bays">
+          {projects.map((p, i) => {
+            // Always the live theme accent, not p.accent — that field is only ever
+            // written once at project-creation time (Projects.tsx) and there's no
+            // UI to actually customize it per project, so it just silently freezes
+            // whatever the accent color was back then instead of tracking changes.
+            const bayAccent = ACCENT.mint;
+            const held = p.status === "hold";
+            return (
+              <div
+                key={p.id} className="bay fade" style={{ animationDelay: `${i * 0.05}s` }} onClick={() => !editingLayout && nav(`/projects/${p.id}`)}
+                role="button" tabIndex={0}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); nav(`/projects/${p.id}`); } }}
+              >
+                <div className="accentline" style={{ background: `linear-gradient(90deg,${bayAccent},transparent)` }} />
+                <div className="top">
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                      <span className="nm">{p.name}</span>
+                      {held ? <span className="hold">ON HOLD</span> : <span className="live-dot" />}
+                    </div>
+                    <div className="cl">{p.client}</div>
+                  </div>
+                  {p.sprint_project_id && <span style={{ color: ACCENT.mint, opacity: .8 }} title="Linked to Zoho Sprints"><Icon name="sprint" size={14} /></span>}
+                </div>
+                <div className="chips">{p.stacks?.map((s) => <Chip key={s} name={s} />)}</div>
+                <div className="instruments">
+                  {(() => {
+                    const git = gitByProject[p.id];
+                    const live = git?.ok;
+                    const dirty = (git?.dirty ?? 0) > 0;
+                    const color = live ? (dirty ? ACCENT.amber : ACCENT.mint) : (p.branch ? ACCENT.amber : ACCENT.muted);
+                    const title = live && git?.lastCommit ? `${git.lastCommit.subject} — ${git.lastCommit.author}` : undefined;
+                    return <span className="inst" style={{ color }} title={title}><Icon name="git" size={13} />{(live ? git?.branch : null) || p.branch || "main"}</span>;
+                  })()}
+                  <span className="inst" style={{ color: ACCENT.dim }}><Icon name="clock" size={13} />{p.dev_port ? `:${p.dev_port}` : "—"}</span>
+                </div>
+                <div className="launch-row" onClick={(e) => e.stopPropagation()}>
+                  {p.fe_path && <button className="lbtn" disabled={agentDown} onClick={() => doLaunch("vscode", p)}><span style={{ color: ACCENT.blue }}><Icon name="code" size={14} /></span>Open UI</button>}
+                  {p.sln_path && <button className="lbtn" disabled={agentDown} onClick={() => doLaunch("visualstudio", p)}><span style={{ color: ACCENT.violet }}><Icon name="server" size={14} /></span>Backend</button>}
+                  <button className="lbtn" disabled={agentDown} style={{ marginLeft: "auto", borderColor: alpha(bayAccent, 27), background: alpha(bayAccent, 8), color: bayAccent }} onClick={() => doLaunch("all", p)}><Icon name="play" size={12} fill />All</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>}
+        {!projectsLoading && projects.length === 0 && <Empty icon="boxes" title="No projects yet" sub="Add your first project from the Projects tab to launch it in one click." />}
+      </div>
+    ),
+    openItems: (
+      <div
+        className="card widget-panel"
+        style={sprintMaxH ? { maxHeight: sprintMaxH, display: "flex", flexDirection: "column", overflow: "hidden" } : undefined}
+      >
+        <div className="rowhead" style={{ marginBottom: 12, flexShrink: 0 }}>
+          <Eyebrow>Sprint board</Eyebrow>
+          {linkedProjects.length > 0 && (
+            <Select
+              value={boardProjectId ?? ""}
+              onChange={(e) => setBoardProjectId(e.target.value)}
+              style={{ minWidth: 160 }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {linkedProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </Select>
+          )}
+        </div>
+        {linkedProjects.length === 0 ? (
+          <Empty icon="sprint" title="Connect Zoho Sprints" sub="Link a project to Zoho to show its board here." mini />
+        ) : boardLoading ? (
+          <div style={{ padding: "20px 0" }}><OrbitLoader label="Loading board…" size={22} /></div>
+        ) : !boardSprint ? (
+          <Empty icon="sprint" title="No sprints" sub={`${boardChosenProject?.name || "This project"} has no sprints in scope.`} mini />
+        ) : (
+          <div className="dboard" style={sprintMaxH ? { overflowY: "auto", minHeight: 0 } : undefined} onClick={(e) => e.stopPropagation()}>
+            {boardColumns.map((c) => {
+              const items = boardGrouped[c.id] ?? [];
+              return (
+                <div key={c.id} className="dcol">
+                  <div className="dcolhead">
+                    <span className="zcoldot" style={{ background: c.color }} />
+                    <span className="zcolname">{c.name}</span>
+                    <span className="cnt">{items.length}</span>
+                  </div>
+                  <div className="dcards">
+                    {items.map((it) => {
+                      const ty = itemTypeStyle(it.type || "");
+                      return (
+                        <div key={it.id} className="zcard" style={{ borderLeftColor: ty.color }}
+                          onClick={() => !editingLayout && boardChosenProject?.sprint_project_id && nav(`/sprints?project=${encodeURIComponent(boardChosenProject.sprint_project_id)}&sprint=${encodeURIComponent(boardSprint.id)}&item=${encodeURIComponent(it.id)}`)}>
+                          <div className="zt">
+                            <span className="ztype" style={{ color: ty.color, background: alpha(ty.color, 12) }}><Icon name={ty.icon} size={11} />{it.type || "Item"}</span>
+                            <span className="znum mono" style={{ marginLeft: "auto" }}>{it.ticketNumber || `#${it.id}`}</span>
+                          </div>
+                          <div className="zsub">{it.subject}</div>
+                          <div className="zfoot"><span className="prdot" style={{ background: prColor(it.priority) }} /></div>
+                        </div>
+                      );
+                    })}
+                    {items.length === 0 && <div className="zempty">No items</div>}
+                  </div>
+                </div>
+              );
+            })}
+            {boardExtra.length > 0 && (
+              <div className="dcol">
+                <div className="dcolhead"><span className="zcoldot" style={{ background: ACCENT.dim }} /><span className="zcolname">Other</span><span className="cnt">{boardExtra.length}</span></div>
+                <div className="dcards">
+                  {boardExtra.map((it) => (
+                    <div key={it.id} className="zcard"
+                      onClick={() => !editingLayout && boardChosenProject?.sprint_project_id && nav(`/sprints?project=${encodeURIComponent(boardChosenProject.sprint_project_id)}&sprint=${encodeURIComponent(boardSprint.id)}&item=${encodeURIComponent(it.id)}`)}>
+                      <div className="zsub">{it.subject}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    ),
+    health: (
+      <div className="card widget-panel" ref={healthCardRef}>
+        <div className="rowhead" style={{ marginBottom: 4 }}>
+          <Eyebrow>System health</Eyebrow>
+          <button className="dash-more" onClick={(e) => { e.stopPropagation(); if (!editingLayout) nav("/health"); }}>View all<Icon name="chevR" size={12} /></button>
+        </div>
+        <div className="health-orbit">
+          <div className="health-meter">
+            <svg viewBox="0 0 100 100">
+              {donutSlices.map((s) => (
+                <path
+                  key={s.id}
+                  className="hm-slice"
+                  d={healthSlicePath(s.start, s.end)}
+                  fill={HEALTH_STATE_COLOR[s.state]}
+                  onClick={() => !editingLayout && nav("/health")}
+                >
+                  <title>{s.label}: {s.status}</title>
+                </path>
+              ))}
+              <text x="50" y="50" textAnchor="middle" dominantBaseline="central" className="hm-val">{healthOkCount}/{healthRows.length}</text>
+            </svg>
+          </div>
+          <div className="hgrid">
+            {healthRows.map((r) => (
+              <div key={r.id} className="hchip" onClick={() => !editingLayout && nav("/health")} title={r.status}>
+                <span className="hc-ic" style={{ color: HEALTH_STATE_COLOR[r.state] }}><Icon name={r.icon} size={14} /></span>
+                <div className="hc-body">
+                  <div className="hc-label">{r.label}</div>
+                  <div className="hc-status">{r.status}</div>
+                </div>
+                {r.state !== "unknown" && <span className={"sn-dot " + r.state} />}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    ),
+  };
+  // Hidden tiles stay on screen (dimmed) while editing, so they can be brought back.
+  const visibleTiles = layout.order.filter((id) => editingLayout || !layout.hidden.includes(id));
 
   return (
     <>
@@ -147,733 +527,85 @@ export default function Dashboard() {
               {bugs !== null && <><span className="greet-sep" /><span className="greet-chip" style={{ color: bugs > 0 ? "var(--red)" : "var(--muted)" }}><Icon name="bolt" size={14} />{bugs} open bug{bugs === 1 ? "" : "s"}</span></>}
             </div>
           </div>
-          <button className="break-btn" onClick={startBreak} title="Take a break"><span className="bb-cup">☕</span>Take a break</button>
-        </div>
-
-        <div className="grid-stats">
-          <Stat icon="activity" label="Active projects" value={String(active.length)} sub={`${projects.length} total`} tone={ACCENT.mint} />
-          {/* Orbit hours — ticks live when a timer is running in the Time module */}
-          <div className="card stat fade orbit-stat" onClick={() => nav("/time")} style={{ cursor: "pointer" }}>
-            <div className="lab"><span style={{ color: ACCENT.mint }}><Icon name="orbit" size={15} /></span>Orbit hours{running && <span className="rec-dot" title="Timer running" />}</div>
-            <div className="val">{running ? liveClock : `${orbit.todayH}h`}</div>
-            <div className="subv">{running ? `recording · ${orbit.totalH}h all-time` : `${orbit.totalH}h all-time`}</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            {editingLayout ? (
+              <>
+                {!layoutIsDefault && <button className="btn ghost" onClick={() => { reset(); toast("Layout reset"); }}><Icon name="refresh" size={14} />Reset</button>}
+                <button className="btn accent" onClick={() => setEditingLayout(false)}><Icon name="check" size={14} />Done</button>
+              </>
+            ) : (
+              <button className="btn ghost" onClick={() => setEditingLayout(true)} title="Rearrange or hide dashboard tiles"><Icon name="grip" size={14} />Customise</button>
+            )}
+            <button className="btn ghost" disabled={standupBusy} onClick={generateStandup}>
+              {standupBusy ? <><Icon name="loader" size={14} className="spin" />Generating…</> : <><Icon name="sparkles" size={14} />Standup summary</>}
+            </button>
+            <button className="break-btn" onClick={startBreak} title="Take a break"><span className="bb-cup">☕</span>Take a break</button>
           </div>
-          <Stat icon="clock" label="Zoho hours today" value={hoursToday !== null ? `${hoursToday}h` : "—"} sub={hoursToday !== null ? "logged in Sprints" : "connect Zoho"} tone={ACCENT.blue} />
-          <Stat icon="cpu" label="Containers up"
-            value={containers === null ? "—" : String(containers.length)}
-            sub={containers === null ? "agent offline" : containers.length ? containers.map((c) => c.name).slice(0, 2).join(", ") : "none running"}
-            tone={ACCENT.violet} />
         </div>
 
-        <Eyebrow>Project bays</Eyebrow>
-        <div className="bays">
-          {projects.map((p, i) => {
-            const accent = p.accent || ACCENT.mint;
-            const held = p.status === "hold";
+        <div className="grid-stats" ref={gridRef}>
+          {visibleTiles.map((id) => {
+            const size = layout.sizes[id] ?? 1;
+            const resizable = allowedSizesOf(id).length > 1;
             return (
-              <div key={p.id} className="bay fade" style={{ animationDelay: `${i * 0.05}s` }} onClick={() => nav(`/projects/${p.id}`)}>
-                <div className="accentline" style={{ background: `linear-gradient(90deg,${accent},transparent)` }} />
-                <div className="top">
-                  <div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-                      <span className="nm">{p.name}</span>
-                      {held ? <span className="hold">ON HOLD</span> : <span className="live-dot" />}
-                    </div>
-                    <div className="cl">{p.client}</div>
+              <div
+                key={id}
+                className={"tile s" + size + (editingLayout ? " editing" : "") + (dragId === id ? " dragging" : "") + (overId === id && dragId !== id ? " over" : "") + (layout.hidden.includes(id) ? " off" : "")}
+                draggable={editingLayout}
+                onDragStart={(e) => {
+                  setDragId(id);
+                  e.dataTransfer.effectAllowed = "move";
+                  e.dataTransfer.setData("text/plain", id); // Firefox won't start a drag without it
+                }}
+                onDragEnd={() => { setDragId(null); setOverId(null); }}
+                onDragOver={(e) => { if (!editingLayout || !dragId) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; setOverId(id); }}
+                onDragLeave={() => setOverId((o) => (o === id ? null : o))}
+                onDrop={(e) => { e.preventDefault(); if (dragId) move(dragId, id); setDragId(null); setOverId(null); }}
+              >
+                {editingLayout && (
+                  <div className="tile-bar">
+                    <span className="tile-grip" title="Drag to rearrange"><Icon name="grip" size={13} /></span>
+                    <button className="tile-eye" title={layout.hidden.includes(id) ? "Show tile" : "Hide tile"} onClick={() => toggleHidden(id)}>
+                      <Icon name={layout.hidden.includes(id) ? "eyeOff" : "eye"} size={13} />
+                    </button>
                   </div>
-                  {p.sprint_project_id && <span style={{ color: ACCENT.mint, opacity: .8 }} title="Linked to Zoho Sprints"><Icon name="sprint" size={14} /></span>}
-                </div>
-                <div className="chips">{p.stacks?.map((s) => <Chip key={s} name={s} />)}</div>
-                <div className="instruments">
-                  <span className="inst" style={{ color: p.branch ? ACCENT.amber : ACCENT.muted }}><Icon name="git" size={13} />{p.branch || "main"}</span>
-                  <span className="inst" style={{ color: ACCENT.dim }}><Icon name="clock" size={13} />{p.dev_port ? `:${p.dev_port}` : "—"}</span>
-                </div>
-                <div className="launch-row" onClick={(e) => e.stopPropagation()}>
-                  {p.fe_path && <button className="lbtn" disabled={agentDown} onClick={() => doLaunch("vscode", p)}><span style={{ color: ACCENT.blue }}><Icon name="code" size={14} /></span>Open UI</button>}
-                  {p.sln_path && <button className="lbtn" disabled={agentDown} onClick={() => doLaunch("visualstudio", p)}><span style={{ color: ACCENT.violet }}><Icon name="server" size={14} /></span>Backend</button>}
-                  <button className="lbtn" disabled={agentDown} style={{ marginLeft: "auto", borderColor: accent + "45", background: accent + "14", color: accent }} onClick={() => doLaunch("all", p)}><Icon name="play" size={12} fill />All</button>
-                </div>
+                )}
+                {resizable && (
+                  <div
+                    className="tile-resize-handle"
+                    title={`Width ${size}/4 — drag to resize, click to cycle`}
+                    draggable={false}
+                    onPointerDown={(e) => beginResize(e, id, size)}
+                  />
+                )}
+                {TILES[id]}
               </div>
             );
           })}
         </div>
-        {projects.length === 0 && <Empty icon="boxes" title="No projects yet" sub="Add your first project from the Projects tab to launch it in one click." />}
       </main>
 
-      <aside className="aside">
-        <div className="rowhead" style={{ marginBottom: 12 }}>
-          <Eyebrow>Latest bugs</Eyebrow>
-          {latestBugs && latestBugs.length > 0 && (
-            <span className="badge" style={{ color: ACCENT.red, background: ACCENT.red + "16", border: `1px solid ${ACCENT.red}30` }}>{latestBugs.length}</span>
+      {(standupBusy || standup !== null) && (
+        <Modal onClose={() => setStandup(null)} style={{ width: 520 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h3 style={{ display: "flex", alignItems: "center", gap: 9 }}><span style={{ color: "var(--mint)" }}><Icon name="sparkles" size={18} /></span>Standup summary</h3>
+            <button className="iconbtn" onClick={() => setStandup(null)}><Icon name="x" size={16} /></button>
+          </div>
+          {standupBusy ? (
+            <AiThinking active={standupBusy} />
+          ) : (
+            <>
+              <div className="ai-answer">{standup}</div>
+              <div className="ai-source">
+                <span>via {standupSource === "local" ? "local model (free)" : "Claude"} · {formatDuration(standupDurationMs)}</span>
+                <button className="btn ghost sm" onClick={() => { navigator.clipboard.writeText(standup || ""); toast("Copied"); }}><Icon name="copy" size={12} />Copy</button>
+              </div>
+            </>
           )}
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 9, margin: "0 0 26px" }}>
-          {bugsLoading ? (
-            <div style={{ padding: "20px 0" }}><OrbitLoader label="Scanning sprints for bugs…" size={22} /></div>
-          ) : latestBugs === null ? (
-            <Empty icon="bolt" title="Connect Zoho Sprints" sub="Link a project to Zoho to surface its open bugs here." mini />
-          ) : latestBugs.length === 0 ? (
-            <Empty icon="bolt" title="No open bugs" sub="Active linked sprints are clear right now." mini />
-          ) : latestBugs.map(({ item, project, spid }) => (
-            <button key={item.id} className="trow" onClick={() => nav(`/sprints?project=${encodeURIComponent(spid)}`)}>
-              <div className="meta">
-                <span className="prdot" style={{ background: prColor(item.priority) }} />
-                <span className="id">{item.ticketNumber || `#${item.id}`}</span>
-                <span className="age">{item.status}</span>
-              </div>
-              <div className="title">{item.subject}</div>
-              <div style={{ fontSize: 11, color: "var(--dim)", marginTop: 4, display: "flex", alignItems: "center", gap: 5 }}>
-                <Icon name="sprint" size={11} />{project}
-              </div>
-            </button>
-          ))}
-        </div>
+        </Modal>
+      )}
 
-        <Eyebrow>Zoho — assigned to me</Eyebrow>
-        <div style={{ display: "flex", flexDirection: "column", gap: 9, margin: "12px 0 26px" }}>
-          {tickets.slice(0, 6).map((t) => (
-            <button key={t.id} className="trow" onClick={() => nav("/sprints")}>
-              <div className="meta"><span className="prdot" style={{ background: prColor(t.priority) }} />
-                <span className="id">{t.zoho_id || "—"}</span><span className="age">{t.status}</span></div>
-              <div className="title">{t.title}</div>
-            </button>
-          ))}
-          {tickets.length === 0 && <Empty icon="ticket" title="No work items" sub="Sync your Zoho Sprints items from the Sprints screen." mini />}
-        </div>
-      </aside>
     </>
   );
 }
 
-const BREAK_LINES = [
-  "Step away from the keyboard for a minute.",
-  "Stretch, breathe, let the tests run.",
-  "The bugs will still be here. Sip slowly.",
-  "Rest your eyes — look at something far away.",
-  "You've earned this cup.",
-  "Roll your shoulders back. Unclench your jaw.",
-];
-
-// ---- Coffee/tea break: brew-sync + simulated agent feed ----
-type Tone = "add" | "ok" | "dim" | "info" | "warn";
-interface AgentTask {
-  icon: string; title: string; meta: string; delta: string; tone: Tone;
-  add: number; del: number; tests: number; files: number; isPr?: boolean; isDeploy?: boolean;
-}
-const AGENT_TASKS: AgentTask[] = [
-  { icon: "co", title: "Guard null session in auth middleware", meta: "core-api · main", delta: "+18 −4", tone: "add", add: 18, del: 4, tests: 0, files: 1 },
-  { icon: "✓", title: "Suite green: 104 passed, 0 failed", meta: "api-gateway", delta: "104 ✓", tone: "ok", add: 0, del: 0, tests: 104, files: 0 },
-  { icon: "co", title: "Extract useBrewTimer hook", meta: "web · feat/brew-sync", delta: "+96 −140", tone: "add", add: 96, del: 140, tests: 0, files: 4 },
-  { icon: "↑", title: "Bumped 3 deps · 0 advisories", meta: "web", delta: "3 ↑", tone: "dim", add: 0, del: 0, tests: 0, files: 1 },
-  { icon: "ci", title: "Pipeline #482 green in 2m14s", meta: "orbit/ci", delta: "2m14s", tone: "ok", add: 0, del: 0, tests: 0, files: 0 },
-  { icon: "pr", title: "Opened PR #219 · ready for review", meta: "feat/brew-sync", delta: "#219", tone: "info", add: 0, del: 0, tests: 0, files: 0, isPr: true },
-  { icon: "↗", title: "Preview deploy is live", meta: "orbit-pr-219.netlify.app", delta: "↑ live", tone: "info", add: 0, del: 0, tests: 0, files: 0, isDeploy: true },
-  { icon: "dc", title: "Updated brew-sync docs", meta: "docs · main", delta: "+42 −3", tone: "add", add: 42, del: 3, tests: 0, files: 2 },
-  { icon: "✓", title: "Snapshot tests refreshed", meta: "web", delta: "12 ✓", tone: "ok", add: 0, del: 0, tests: 12, files: 3 },
-  { icon: "co", title: "Cache brew levels in localStorage", meta: "web · feat/brew-sync", delta: "+31 −6", tone: "add", add: 31, del: 6, tests: 0, files: 2 },
-  { icon: "co", title: "Fix flaky timezone rollover test", meta: "core-api", delta: "+9 −22", tone: "add", add: 9, del: 22, tests: 0, files: 1 },
-  { icon: "pr", title: "Opened PR #221 · dependency bumps", meta: "chore/deps", delta: "#221", tone: "info", add: 0, del: 0, tests: 0, files: 0, isPr: true },
-];
-const SHIP_EVERY = 6.5; // seconds between simulated ships
-const BREW_TARGET = 480; // seconds to a full brew
-
-const BEV: Record<"coffee" | "tea", { body: string; crema: string; label: string; other: string }> = {
-  coffee: { body: "#6f4326", crema: "#8a5a34", label: "Coffee", other: "Switch to tea" },
-  tea: { body: "#7fbf8f", crema: "#a6d8b5", label: "Tea", other: "Switch to coffee" },
-};
-const TONE_COLOR: Record<Tone, string> = { add: "#3fe08b", ok: "#43e392", dim: "#8a908a", info: "#7aa6ff", warn: "#e2a24a" };
-const TONE_BG: Record<Tone, string> = { add: "rgba(63,224,139,.10)", ok: "rgba(63,224,139,.10)", dim: "rgba(140,150,140,.10)", info: "rgba(122,166,255,.12)", warn: "rgba(226,162,74,.12)" };
-
-// A real chore the agent runs during a break
-interface LiveRow { key: number; icon: string; title: string; meta: string; delta: string; tone: Tone; at: number; href?: string; }
-
-const fmtDur = (sec: number) => `${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(sec % 60).padStart(2, "0")}`;
-const strengthLabel = (pct: number) =>
-  pct >= 100 ? "Fully brewed" : pct >= 88 ? "Strong" : pct >= 66 ? "Bold brew" : pct >= 42 ? "Medium roast" : pct >= 18 ? "Light roast" : "Warming up";
-
-function BrewCup({ pct, variant }: { pct: number; variant: "coffee" | "tea" }) {
-  const bev = BEV[variant];
-  const C = 2 * Math.PI * 150;
-  const offset = C * (1 - pct / 100);
-  const liquidY = 250 - 112 * (pct / 100);
-  const liquidH = Math.max(0, 252 - liquidY);
-  return (
-    <svg width="100%" height="100%" viewBox="0 0 360 360" style={{ display: "block" }} aria-hidden>
-      <defs><clipPath id="bvCupClip"><path d="M132 130 L132 236 Q132 256 152 256 L208 256 Q228 256 228 236 L228 130 Z" /></clipPath></defs>
-      <g className="bv-ring">
-        <circle cx="180" cy="180" r="150" fill="none" stroke="rgba(63,224,139,.12)" strokeWidth="2" />
-        <circle cx="180" cy="180" r="150" fill="none" stroke="#3fe08b" strokeWidth="4" strokeLinecap="round"
-          strokeDasharray={C} strokeDashoffset={offset} transform="rotate(-90 180 180)"
-          style={{ transition: "stroke-dashoffset .9s cubic-bezier(.34,.1,.2,1)" }} />
-      </g>
-      <g style={{ opacity: 0.9 }}>
-        <path d="M164 112 q-8 -10 0 -20 q8 -10 0 -20" fill="none" stroke="rgba(190,215,200,.5)" strokeWidth="3" strokeLinecap="round" style={{ animation: "bvSteam 3.2s ease-in-out infinite" }} />
-        <path d="M182 108 q-8 -10 0 -20 q8 -10 0 -20" fill="none" stroke="rgba(190,215,200,.5)" strokeWidth="3" strokeLinecap="round" style={{ animation: "bvSteam 3.2s ease-in-out infinite 1s" }} />
-        <path d="M198 112 q-8 -10 0 -20 q8 -10 0 -20" fill="none" stroke="rgba(190,215,200,.5)" strokeWidth="3" strokeLinecap="round" style={{ animation: "bvSteam 3.2s ease-in-out infinite 2s" }} />
-      </g>
-      <ellipse cx="180" cy="266" rx="54" ry="8" fill="rgba(0,0,0,.4)" />
-      <g clipPath="url(#bvCupClip)">
-        <rect x="130" y={liquidY} width="100" height={liquidH} fill={bev.body} style={{ transition: "y .9s cubic-bezier(.34,.1,.2,1),height .9s cubic-bezier(.34,.1,.2,1)" }} />
-        <ellipse cx="180" cy={liquidY} rx="48" ry="7" fill={bev.crema} style={{ transition: "cy .9s cubic-bezier(.34,.1,.2,1)" }} />
-      </g>
-      <path d="M132 130 L132 236 Q132 256 152 256 L208 256 Q228 256 228 236 L228 130" fill="none" stroke="#9fb0b6" strokeWidth="3" strokeLinejoin="round" opacity="0.6" />
-      <path d="M228 148 C266 150 266 200 228 202" fill="none" stroke="#9fb0b6" strokeWidth="9" strokeLinecap="round" opacity="0.55" />
-      <ellipse cx="180" cy="130" rx="48" ry="11" fill="none" stroke="#9fb0b6" strokeWidth="3" opacity="0.7" />
-      <ellipse cx="180" cy="130" rx="42" ry="8" fill="rgba(0,0,0,.35)" />
-    </svg>
-  );
-}
-
-interface Stats { shipped: number; commits: number; tests: number; prs: number; deploys: number; add: number; del: number; files: number; }
-function foldStats(log: AgentTask[]): Stats {
-  return log.reduce<Stats>((a, t) => ({
-    shipped: a.shipped + 1,
-    commits: a.commits + (t.icon === "co" ? 1 : 0),
-    tests: a.tests + t.tests,
-    prs: a.prs + (t.isPr ? 1 : 0),
-    deploys: a.deploys + (t.isDeploy ? 1 : 0),
-    add: a.add + t.add, del: a.del + t.del, files: a.files + t.files,
-  }), { shipped: 0, commits: 0, tests: 0, prs: 0, deploys: 0, add: 0, del: 0, files: 0 });
-}
-const dueCount = (elapsedSec: number) => Math.min(AGENT_TASKS.length * 3, Math.floor(elapsedSec / SHIP_EVERY));
-const buildLog = (n: number) => Array.from({ length: n }, (_, i) => AGENT_TASKS[i % AGENT_TASKS.length]);
-
-function BreakView({ onEnd, timerPaused, startedAt, projects, tasks, zohoConnected, agentOnline }:
-  { onEnd: () => void; timerPaused: boolean; startedAt: number | null; projects: Project[]; tasks: Task[]; zohoConnected: boolean; agentOnline: boolean }) {
-  const nav = useNavigate();
-  const [variant, setVariant] = useState<"coffee" | "tea">("coffee");
-  const [line, setLine] = useState(() => BREAK_LINES[Math.floor(Math.random() * BREAK_LINES.length)]);
-  const start = startedAt ?? Date.now();
-  const [elapsed, setElapsed] = useState(Math.max(0, Math.floor((Date.now() - start) / 1000)));
-  const [count, setCount] = useState(() => dueCount(Math.max(0, Math.floor((Date.now() - start) / 1000))));
-  const [pourKey, setPourKey] = useState(0);
-  const [mode, setMode] = useState<"live" | "digest">("live");
-  const [feed, setFeed] = useState<LiveRow[]>([]);
-  const [lastCheck, setLastCheck] = useState<number | null>(null);
-  const [bugTotal, setBugTotal] = useState(0);
-  const [cfg, setCfg] = useState<ChoreSettings>(() => cachedChores());
-
-  const runnable = projects.filter((p) => !!p.fe_path);
-  const real = agentOnline && (runnable.length > 0 || zohoConnected);
-  const ctxRef = useRef({ projects, tasks, zohoConnected, cfg });
-  ctxRef.current = { projects, tasks, zohoConnected, cfg };
-  const feedRef = useRef<LiveRow[]>([]);
-  feedRef.current = feed;
-  // These must outlive an effect re-mount (React StrictMode runs effects twice
-  // in dev), otherwise each run gets a fresh map and every row posts again.
-  const sigsRef = useRef(new Map<string, string>());
-  const notifiedRef = useRef(new Set<string>());
-  const runningRef = useRef(false);
-  const { subscribe } = useAgent();
-
-  useEffect(() => { loadChores().then(setCfg); }, []);
-
-  useEffect(() => {
-    const t = setInterval(() => setElapsed(Math.max(0, Math.floor((Date.now() - start) / 1000))), 1000);
-    const l = setInterval(() => setLine(BREAK_LINES[Math.floor(Math.random() * BREAK_LINES.length)]), 11000);
-    return () => { clearInterval(t); clearInterval(l); };
-  }, [start]);
-
-  // simulated ships (only when we can't run real chores)
-  useEffect(() => {
-    if (real) return;
-    const due = dueCount(elapsed);
-    if (due > count) { setCount(due); setPourKey((k) => k + 1); }
-  }, [elapsed, count, real]);
-
-  // ---- REAL chores. Registry-driven, de-duplicated, re-run on an interval
-  // and immediately when the agent pushes a change over the websocket.
-  useEffect(() => {
-    if (!real) return;
-    let alive = true; let k = 0;
-    const sigs = sigsRef.current;
-    const notified = notifiedRef.current;
-    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-    const push = (id: string, sig: string, r: Omit<LiveRow, "key" | "at">) => {
-      if (!alive || sigs.get(id) === sig) return;
-      const first = !sigs.has(id);
-      sigs.set(id, sig);
-      k += 1;
-      setFeed((f) => [...f, { ...r, key: Date.now() + k, at: Date.now() }]);
-      if (!first) setPourKey((p) => p + 1);
-      // escalate warnings so they outlive the break screen
-      if (r.tone === "warn" && ctxRef.current.cfg.notifyWarnings && !notified.has(id)) {
-        notified.add(id);
-        notify("chore", r.title, r.meta);
-      }
-    };
-    const on = (id: ChoreId) => ctxRef.current.cfg.enabled[id];
-
-    async function cycle() {
-      if (runningRef.current) return;   // a cycle is already in flight
-      runningRef.current = true;
-      try {
-        const { projects: projs, tasks: tks, zohoConnected: zc } = ctxRef.current;
-        const withPath = projs.filter((p) => p.fe_path);
-
-        // 1) git: fetch + fast-forward
-        if (on("git.pull")) for (const p of withPath) {
-          if (!alive) return;
-          const r = await gitPull(p.fe_path as string);
-          if (!alive) return;
-          const br = r.branch || p.branch || "main";
-          const href = `/projects/${p.id}`;
-          const dirty = r.dirty ? ` · ${r.dirty} uncommitted` : "";
-          if (r.ok && r.reason === "updated")
-            push(`git:${p.id}`, `u${r.behind}`, { icon: "co", title: `${p.name}: pulled ${r.behind} commit${r.behind === 1 ? "" : "s"}`, meta: `${br} · ${r.files || 0} files${dirty}`, delta: `+${r.behind}`, tone: "add", href });
-          else if (r.ok && r.reason === "up_to_date")
-            push(`git:${p.id}`, `ok${r.ahead}${r.dirty}`, { icon: "co", title: `${p.name}: already up to date`, meta: `${br}${r.ahead ? ` · ${r.ahead} ahead` : ""}${dirty}`, delta: "no-op", tone: "dim", href });
-          else if (r.reason === "no_upstream")
-            push(`git:${p.id}`, "noup", { icon: "co", title: `${p.name}: no upstream branch`, meta: `${br} · nothing to pull`, delta: "skipped", tone: "dim", href });
-          else if (r.reason === "conflict")
-            push(`git:${p.id}`, "conf", { icon: "co", title: `${p.name}: needs a manual merge`, meta: `${br} · diverged from remote`, delta: "conflict", tone: "warn", href });
-          else if (r.reason === "auth")
-            push(`git:${p.id}`, "auth", { icon: "co", title: `${p.name}: git needs credentials`, meta: "fetch blocked — no prompt allowed", delta: "auth", tone: "warn", href });
-          else if (r.reason === "not_a_repo")
-            push(`git:${p.id}`, "norepo", { icon: "co", title: `${p.name}: path isn't a git repo`, meta: (p.fe_path || "").slice(-38), delta: "skipped", tone: "dim", href });
-          else
-            push(`git:${p.id}`, `e${r.error}`, { icon: "co", title: `${p.name}: pull failed`, meta: (r.error || "git error").slice(0, 44), delta: "error", tone: "warn", href });
-          await sleep(700);
-        }
-
-        // 2) npm outdated / audit (slow, opt-in)
-        if (on("npm.outdated")) for (const p of withPath) {
-          if (!alive) return;
-          const o = await npmOutdated(p.fe_path as string);
-          if (!alive) return;
-          if (o.ok) push(`npm.o:${p.id}`, `${o.total}/${o.major}`, {
-            icon: "np", title: o.total ? `${p.name}: ${o.total} package${o.total === 1 ? "" : "s"} behind${o.major ? ` · ${o.major} major` : ""}` : `${p.name}: dependencies current`,
-            meta: o.packages.slice(0, 3).map((x) => x.name).join(", ") || "npm outdated",
-            delta: o.total ? `${o.total} old` : "current", tone: o.major ? "warn" : o.total ? "info" : "ok", href: `/projects/${p.id}`,
-          });
-          await sleep(700);
-        }
-        if (on("npm.audit")) for (const p of withPath) {
-          if (!alive) return;
-          const a = await npmAudit(p.fe_path as string);
-          if (!alive) return;
-          const bad = a.critical + a.high;
-          if (a.ok) push(`npm.a:${p.id}`, `${a.total}/${bad}`, {
-            icon: "np", title: a.total ? `${p.name}: ${a.total} advisor${a.total === 1 ? "y" : "ies"}${bad ? ` · ${bad} high/critical` : ""}` : `${p.name}: no known vulnerabilities`,
-            meta: "npm audit", delta: bad ? `${bad} severe` : a.total ? `${a.total} low` : "clean",
-            tone: bad ? "warn" : a.total ? "info" : "ok", href: `/projects/${p.id}`,
-          });
-          await sleep(700);
-        }
-
-        // 3) Zoho: bugs, burndown, review, blocked
-        if (alive && zc) {
-          // Prefer projects explicitly linked in Orbit. If none are linked, ask Zoho
-          // what projects exist — otherwise this scans an empty list and reports "0 of 0".
-          let linked: { id: string; name: string }[] = projs
-            .filter((p) => p.sprint_project_id)
-            .map((p) => ({ id: p.sprint_project_id as string, name: p.name }));
-          let fromZoho = false;
-          if (!linked.length) {
-            try {
-              const sp = await fetchSprintProjects();
-              linked = sp
-                .filter((x) => !/complet|closed|archiv/i.test(x.status || ""))
-                .slice(0, 8)
-                .map((x) => ({ id: x.id, name: x.name }));
-              fromZoho = true;
-            } catch { /* zoho unreachable this cycle */ }
-          }
-          if (!alive) return;
-          if (!linked.length) {
-            push("zoho:none", "empty", { icon: "sp", title: "No sprint projects found", meta: "check the Zoho connection in Settings", delta: "none", tone: "dim", href: "/settings" });
-          }
-
-          let bugs = 0, open = 0, review = 0, blocked = 0, fresh = 0;
-          let soonest: { name: string; days: number; open: number } | null = null;
-          for (const p of linked) {
-            try {
-              const board = await fetchSprintBoard(p.id);
-              for (const sp of board.sprints) {
-                const active = /active|current|progress/i.test(sp.status || "");
-                let spOpen = 0;
-                for (const it of sp.items) {
-                  const done = /done|closed|resolved|complete/i.test(it.status || "");
-                  if (isOpenBug(it)) bugs += 1;
-                  if (!done) { open += 1; spOpen += 1; }
-                  if (/review|qa|testing/i.test(it.status || "")) review += 1;
-                  if (/block|hold|impede/i.test(it.status || "")) blocked += 1;
-                  const touched = Date.parse(it.modifiedTime || "");
-                  if (touched && touched > start) fresh += 1;
-                }
-                if (active && sp.endDate) {
-                  const days = Math.ceil((Date.parse(sp.endDate) - Date.now()) / 86400000);
-                  if (!Number.isNaN(days) && (!soonest || days < soonest.days)) soonest = { name: sp.name, days, open: spOpen };
-                }
-              }
-            } catch { /* skip this project this cycle */ }
-          }
-          if (!alive) return;
-          setBugTotal(bugs);
-          if (on("zoho.bugs"))
-            push("zoho:bugs", `b${bugs}/${linked.length}`, { icon: "bg", title: `${bugs} open bug${bugs === 1 ? "" : "s"} across ${linked.length} project${linked.length === 1 ? "" : "s"}`, meta: fromZoho ? "zoho sprints · all projects" : "zoho sprints · linked projects", delta: bugs ? `${bugs} to fix` : "clear", tone: bugs ? "warn" : "ok", href: "/sprints" });
-          if (on("zoho.sprint") && soonest)
-            push("zoho:burn", `s${soonest.days}/${soonest.open}`, {
-              icon: "sp", title: soonest.days < 0 ? `${soonest.name} overran · ${soonest.open} still open` : `${soonest.name} ends in ${soonest.days} day${soonest.days === 1 ? "" : "s"} · ${soonest.open} open`,
-              meta: "sprint burndown", delta: `${soonest.open} left`, tone: soonest.days <= 2 && soonest.open ? "warn" : "info", href: "/sprints",
-            });
-          if (on("zoho.review"))
-            push("zoho:review", `r${review}`, { icon: "sp", title: review ? `${review} item${review === 1 ? "" : "s"} waiting in review` : "Nothing waiting in review", meta: "needs your eyes", delta: `${review} review`, tone: review ? "info" : "dim", href: "/sprints" });
-          if (on("zoho.blocked") && blocked)
-            push("zoho:blocked", `k${blocked}`, { icon: "bg", title: `${blocked} item${blocked === 1 ? "" : "s"} blocked`, meta: "zoho sprints", delta: "blocked", tone: "warn", href: "/sprints" });
-          if (fresh)
-            push("zoho:new", `n${fresh}`, { icon: "sp", title: `${fresh} item${fresh === 1 ? "" : "s"} updated since your break started`, meta: "sprint activity", delta: `+${fresh}`, tone: "add", href: "/sprints" });
-
-          // 4) timesheet drift — Orbit hours vs Zoho logged hours
-          if (on("timesheet.drift")) {
-            try {
-              const [oh, ts] = await Promise.all([fetchOrbitHours(), fetchTimesheet()]);
-              const todayKey = new Date().toISOString().slice(0, 10);
-              const zohoToday = ts.byDate?.[todayKey] ?? 0;
-              const drift = +(oh.todayH - zohoToday).toFixed(2);
-              const hm = (h: number) => `${Math.floor(Math.abs(h))}h${String(Math.round((Math.abs(h) % 1) * 60)).padStart(2, "0")}m`;
-              if (alive) push("ts:drift", `d${drift}`, {
-                icon: "ts",
-                title: Math.abs(drift) < 0.25 ? "Timesheet matches Orbit hours" : drift > 0 ? `${hm(drift)} unlogged in Zoho` : `Zoho has ${hm(drift)} more than Orbit`,
-                meta: `orbit ${hm(oh.todayH)} · zoho ${hm(zohoToday)}`,
-                delta: Math.abs(drift) < 0.25 ? "in sync" : `${drift > 0 ? "+" : "−"}${hm(drift)}`,
-                tone: drift >= 0.5 ? "warn" : Math.abs(drift) < 0.25 ? "ok" : "info", href: "/time",
-              });
-            } catch { /* zoho timesheet unavailable */ }
-          }
-          await sleep(700);
-        }
-
-        // 5) Orbit tasks
-        if (alive && on("tasks.backlog")) {
-          const todo = tks.filter((t) => t.status !== "done").length;
-          const today = new Date().toISOString().slice(0, 10);
-          const overdue = tks.filter((t) => t.status !== "done" && t.due_date && t.due_date < today).length;
-          push("tasks", `t${todo}/${overdue}`, { icon: "tk", title: overdue ? `${overdue} task${overdue === 1 ? "" : "s"} overdue · ${todo} in backlog` : `${todo} task${todo === 1 ? "" : "s"} in your backlog`, meta: "orbit tasks", delta: overdue ? `${overdue} late` : `${todo} todo`, tone: overdue ? "warn" : "dim", href: "/tasks" });
-        }
-
-        // 6) unread mail
-        if (alive && on("mail.unread")) {
-          const m = await gmailUnread();
-          if (alive && m.ok) push("mail", `m${m.unread}`, { icon: "ml", title: m.unread ? `${m.unread} unread message${m.unread === 1 ? "" : "s"}` : "Inbox is clear", meta: "gmail · inbox", delta: m.unread ? `${m.unread} unread` : "clear", tone: m.unread ? "info" : "ok", href: "/mail" });
-          await sleep(600);
-        }
-
-        // 7) Docker: containers, latest image, disk
-        if (alive && on("docker.ps")) {
-          const d = await fetchDocker();
-          if (alive && d.available) {
-            const up = d.containers.filter((c) => /up|running/i.test(c.status)).length;
-            push("docker:ps", `c${up}/${d.containers.length}`, { icon: "dk", title: `Docker · ${up} container${up === 1 ? "" : "s"} running`, meta: "docker ps", delta: `${d.containers.length} total`, tone: up ? "ok" : "dim", href: "/docker" });
-          }
-        }
-        if (alive && on("docker.images")) {
-          const im = await fetchDockerImages();
-          if (alive && im.available && im.images.length) {
-            const n = im.images[0];
-            push("docker:img", `i${im.images.length}:${n.id}`, { icon: "im", title: `Latest image · ${n.repository}:${n.tag}`, meta: `${n.size} · built ${n.created}`, delta: `${im.images.length} images`, tone: "info", href: "/docker" });
-          }
-        }
-        if (alive && on("docker.df")) {
-          const df = await dockerDf();
-          if (alive && df.available) {
-            push("docker:df", `f${df.dangling}:${df.reclaimable}`, { icon: "dk", title: df.dangling ? `${df.dangling} dangling image${df.dangling === 1 ? "" : "s"} · ${df.reclaimable} reclaimable` : `Docker disk clean · ${df.reclaimable} reclaimable`, meta: "docker system df", delta: df.reclaimable, tone: df.dangling ? "info" : "dim", href: "/docker" });
-            // destructive — strictly opt-in
-            if (df.dangling > 0 && ctxRef.current.cfg.allowDockerPrune) {
-              const pr = await dockerPrune();
-              if (alive && pr.ok) push("docker:prune", `p${Date.now()}`, { icon: "dk", title: `Pruned ${df.dangling} dangling image${df.dangling === 1 ? "" : "s"}`, meta: `reclaimed ${df.reclaimable}`, delta: "pruned", tone: "add", href: "/docker" });
-            }
-          }
-          await sleep(600);
-        }
-
-        // 8) Postgres health
-        if (alive && on("pg.health")) {
-          const srv = await pgServers();
-          for (const s of (srv.servers || []).slice(0, 3)) {
-            if (!alive) return;
-            const h = await pgHealth(s, s.database || undefined);
-            if (!alive) return;
-            if (h.ok) push(`pg:${s.id}`, `h${h.connections}/${h.longestSec}/${h.size}`, {
-              icon: "pg", title: `${h.name} · ${h.connections} connection${h.connections === 1 ? "" : "s"} · ${h.size}`,
-              meta: h.longestSec > 60 ? `longest query ${Math.floor(h.longestSec / 60)}m` : `longest query ${h.longestSec}s`,
-              delta: h.longestSec > 300 ? "slow query" : "healthy", tone: h.longestSec > 300 ? "warn" : "ok", href: "/postgres",
-            });
-            // "agent offline" is an expected, already-surfaced-elsewhere state — only
-            // worth an activity item when a *saved* server itself is unreachable.
-            else if (h.error !== "agent offline") push(`pg:${s.id}`, `x${h.error}`, { icon: "pg", title: `${h.name}: unreachable`, meta: (h.error || "").slice(0, 44), delta: "down", tone: "warn", href: "/postgres" });
-            await sleep(500);
-          }
-        }
-
-        // 9) port map
-        if (alive && on("ports.map")) {
-          const ports = [...new Set(projs.map((p) => p.dev_port).filter(Boolean) as number[])];
-          if (ports.length) {
-            const pm = await portsMap(ports);
-            const busy = pm.filter((x) => x.inUse);
-            const foreign = busy.filter((x) => !x.orbit);
-            if (alive) push("ports", `p${busy.length}/${foreign.length}`, {
-              icon: "pt", title: busy.length ? `${busy.length} of ${ports.length} dev port${ports.length === 1 ? "" : "s"} busy` : `All ${ports.length} dev port${ports.length === 1 ? "" : "s"} free`,
-              meta: busy.map((x) => `${x.port}${x.ownedBy ? `→${x.ownedBy}` : ""}`).join(", ") || "nothing listening",
-              delta: foreign.length ? `${foreign.length} foreign` : `${busy.length} busy`, tone: foreign.length ? "info" : "dim",
-            });
-          }
-        }
-
-        // 10) dev servers
-        if (alive && on("dev.servers")) {
-          const servers = await devRunning();
-          if (!alive) return;
-          push("dev", `d${servers.length}`, { icon: "sv", title: `Dev servers · ${servers.length} up`, meta: servers.map((s) => s.project || `:${s.port}`).slice(0, 3).join(", ") || "none running", delta: `${servers.length} up`, tone: servers.length ? "info" : "dim", href: "/time" });
-        }
-        if (alive) setLastCheck(Date.now());
-      } finally { runningRef.current = false; }
-    }
-
-    cycle();
-    const iv = setInterval(cycle, Math.max(15, cfg.intervalSec) * 1000);
-    // agent pushes: re-run right away instead of waiting for the interval
-    const off = subscribe((ev) => { if (ev === "dev:changed" || ev === "docker:changed") cycle(); });
-    return () => { alive = false; clearInterval(iv); off(); };
-  }, [real, cfg.intervalSec, subscribe]);
-
-  // Ending a break: persist the digest and leave a summary notification behind.
-  const finish = () => {
-    const rows = feedRef.current;
-    if (real && rows.length) {
-      const pulled = rows.filter((r) => r.icon === "co" && r.tone === "add").length;
-      const issues = rows.filter((r) => r.tone === "warn").length;
-      const summary = { chores: rows.length, pulled, bugs: bugTotal, issues };
-      saveBreakLog({
-        startedAt: start, seconds: elapsed, beverage: variant,
-        rows: rows.map((r) => ({ icon: r.icon, title: r.title, meta: r.meta, delta: r.delta, tone: r.tone, href: r.href ?? null })),
-        summary,
-      });
-      const bits = [`${rows.length} chores`, pulled ? `${pulled} pulled` : "", bugTotal ? `${bugTotal} bugs open` : "", issues ? `${issues} need attention` : ""].filter(Boolean);
-      notify("break", `Break digest · ${fmtDur(elapsed)}`, bits.join(" · "));
-    }
-    onEnd();
-  };
-
-  const brewPct = Math.min(100, Math.round((elapsed / BREW_TARGET) * 100));
-  const bev = BEV[variant];
-  const relAge = (at: number) => {
-    const s = Math.max(0, Math.floor((Date.now() - at) / 1000));
-    return s < 5 ? "just now" : s < 60 ? `${s}s ago` : `${Math.floor(s / 60)}m ago`;
-  };
-  const simAge = (i: number) => {
-    const age = Math.max(0, elapsed - Math.floor(i * SHIP_EVERY));
-    return age < 5 ? "just now" : age < 60 ? `${age}s ago` : `${Math.floor(age / 60)}m ago`;
-  };
-
-  // unified feed rows + stats (real chores vs simulated)
-  const simLog = buildLog(count);
-  type Row = { icon: string; title: string; meta: string; delta: string; tone: Tone; age: string; href?: string };
-  const rows: Row[] = real
-    ? feed.slice(-12).reverse().map((r) => ({ icon: r.icon, title: r.title, meta: r.meta, delta: r.delta, tone: r.tone, age: relAge(r.at), href: r.href }))
-    : simLog.map((t, i) => ({ icon: t.icon, title: t.title, meta: t.meta, delta: t.delta, tone: t.tone, age: simAge(i) }));
-
-  const agentSub = real ? "running your chores" : "clearing your queue";
-  const typingText = real
-    ? (lastCheck ? `all checked · re-running in a minute` : `checking your projects…`)
-    : "working on the next one…";
-
-  let cells: { n: number; label: string; color?: string }[];
-  let deltaRow: { add: number; del: number; files: number } | null;
-  let foot: { v: string; label: string; color?: string }[];
-  let digestCount: string;
-  let hiList: { text: string; href?: string }[];
-
-  if (real) {
-    const updated = feed.filter((r) => r.icon === "co" && r.tone === "add").length;
-    const issues = feed.filter((r) => r.tone === "warn").length;
-    cells = [
-      { n: feed.length, label: "chores run" },
-      { n: updated, label: "repos updated", color: "#43e392" },
-      { n: bugTotal, label: "bugs to fix", color: bugTotal ? "#e2a24a" : "#eaf0ea" },
-      { n: issues, label: "need attention", color: issues ? "#e2a24a" : "#eaf0ea" },
-    ];
-    deltaRow = null;
-    foot = [
-      { v: String(feed.length), label: "CHORES" },
-      { v: String(updated), label: "PULLED", color: "#43e392" },
-      { v: String(bugTotal), label: "BUGS", color: bugTotal ? "#e2a24a" : "#eaf0ea" },
-    ];
-    digestCount = `${feed.length} chore${feed.length === 1 ? "" : "s"} run`;
-    const src = [...feed].reverse();
-    const hi = src.filter((r) => r.tone !== "dim").slice(0, 4);
-    hiList = (hi.length ? hi : src.slice(0, 4)).map((r) => ({ text: r.title, href: r.href }));
-  } else {
-    const st = foldStats(simLog);
-    cells = [
-      { n: st.commits, label: "commits pushed" },
-      { n: st.tests, label: "tests green", color: "#43e392" },
-      { n: st.prs, label: "PRs opened" },
-      { n: st.deploys, label: "preview deploys" },
-    ];
-    deltaRow = { add: st.add, del: st.del, files: st.files };
-    foot = [
-      { v: String(st.shipped), label: "SHIPPED" },
-      { v: String(st.tests), label: "GREEN", color: "#43e392" },
-      { v: `+${st.add}`, label: "LINES" },
-    ];
-    digestCount = `${st.shipped} task${st.shipped === 1 ? "" : "s"} shipped`;
-    const h = [...simLog].reverse().filter((t) => t.isPr || t.isDeploy || t.tone === "ok").slice(0, 3).map((t) => t.title);
-    hiList = (h.length ? h : simLog.slice(-3).reverse().map((t) => t.title)).map((text) => ({ text }));
-  }
-
-  return (
-    <div className="break-view" style={{ display: "flex", placeItems: "stretch", padding: 0, background: "radial-gradient(120% 90% at 50% 40%, #14170f 0%, #0c0e0b 46%, #08090a 100%)" }}>
-      {/* ambient bits */}
-      <span className="bv-bit" style={{ left: "12%", top: "70%", animationDelay: "0s" }} />
-      <span className="bv-bit mint" style={{ left: "22%", top: "84%", animationDelay: "2s" }} />
-      <span className="bv-bit" style={{ right: "18%", top: "78%", animationDelay: "1s" }} />
-
-      {/* HERO */}
-      <section className="bv-hero">
-        <div className="bv-eyebrow">BREW SYNC · {bev.label.toUpperCase()} BREAK</div>
-        <div style={{ position: "relative", width: "min(360px, 78vw)", height: "min(360px, 78vw)", margin: "2px 0 4px" }}>
-          {pourKey > 0 && <span key={pourKey} className="bv-pour" style={{ background: bev.body }} />}
-          <BrewCup pct={brewPct} variant={variant} />
-          <div style={{ position: "absolute", left: "50%", bottom: 44, transform: "translateX(-50%)", textAlign: "center", pointerEvents: "none" }}>
-            <div style={{ fontFamily: "var(--mono, 'JetBrains Mono', monospace)", fontSize: 12, letterSpacing: 2, color: "#3fe08b", textTransform: "uppercase" }}>{strengthLabel(brewPct)}</div>
-          </div>
-        </div>
-
-        <div className="bv-chip">
-          <span style={{ width: 7, height: 7, borderRadius: 2, background: "#e2a24a" }} />
-          <span style={{ fontFamily: "var(--mono, 'JetBrains Mono', monospace)", fontSize: 13, letterSpacing: 1, color: "#c7cec7" }}>BREAK · {fmtDur(elapsed)}</span>
-          <span style={{ fontFamily: "var(--mono, 'JetBrains Mono', monospace)", fontSize: 13, color: "#565c56" }}>/ {brewPct}% brewed</span>
-        </div>
-
-        <h1 className="bv-title">Take a breather.</h1>
-        <p className="bv-sub">{line}</p>
-        {timerPaused && (
-          <div className="bv-paused">
-            <span style={{ width: 8, height: 8, borderRadius: 2, background: "#e2a24a" }} />
-            Break timer paused — the agent keeps shipping while you sip.
-          </div>
-        )}
-        <div className="bv-actions">
-          <button className="bv-btn" onClick={() => setVariant((v) => (v === "coffee" ? "tea" : "coffee"))}>☕ {bev.other}</button>
-          <button className="bv-btn" onClick={() => setMode((m) => (m === "live" ? "digest" : "live"))}>
-            {mode === "live" ? "See what the agent did" : "Back to live feed"}
-          </button>
-          <button className="bv-btn primary" onClick={finish}><Icon name="check" size={15} />I'm refreshed</button>
-        </div>
-      </section>
-
-      {/* FEED / DIGEST */}
-      <aside className="bv-panel">
-        {mode === "digest" ? (
-          <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-            <div style={{ flex: "0 0 auto", padding: "20px 22px 16px", borderBottom: "1px solid rgba(140,150,140,.10)" }}>
-              <button className="bv-back" onClick={() => setMode("live")}>← BACK TO LIVE</button>
-              <div className="bv-kicker">WHILE YOU WERE AWAY</div>
-              <div style={{ fontSize: 22, fontWeight: 600 }}>{digestCount} · {fmtDur(elapsed)}</div>
-            </div>
-            <div style={{ flex: 1, overflowY: "auto", padding: "18px 22px" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
-                {cells.map((c, i) => <DigestStat key={i} n={c.n} label={c.label} color={c.color} />)}
-              </div>
-              {deltaRow && (
-                <div style={{ padding: 14, border: "1px solid rgba(140,150,140,.12)", borderRadius: 12, background: "rgba(255,255,255,.02)", marginBottom: 22, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <DeltaStat v={`+${deltaRow.add}`} label="added" color="#43e392" />
-                  <div style={{ width: 1, height: 34, background: "rgba(140,150,140,.14)" }} />
-                  <DeltaStat v={`−${deltaRow.del}`} label="removed" color="#d98b6a" />
-                  <div style={{ width: 1, height: 34, background: "rgba(140,150,140,.14)" }} />
-                  <DeltaStat v={String(deltaRow.files)} label="files touched" color="#c7cec7" />
-                </div>
-              )}
-              <div className="bv-kicker" style={{ marginBottom: 12 }}>HIGHLIGHTS</div>
-              {hiList.map((h, i) => (
-                <div key={i} className={"bv-hi" + (h.href ? " act" : "")} onClick={h.href ? () => nav(h.href as string) : undefined}>
-                  <span style={{ flex: "0 0 18px", width: 18, height: 18, borderRadius: "50%", background: "rgba(63,224,139,.14)", display: "flex", alignItems: "center", justifyContent: "center", marginTop: 1, color: "#43e392", fontSize: 11 }}>✓</span>
-                  <span style={{ fontSize: 13.5, color: "#c7cec7", lineHeight: 1.45 }}>{h.text}</span>
-                  {h.href && <span className="bv-go"><Icon name="chevR" size={13} /></span>}
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-            <div style={{ flex: "0 0 auto", padding: "18px 22px", borderBottom: "1px solid rgba(140,150,140,.10)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ width: 26, height: 26, borderRadius: 7, background: "rgba(63,224,139,.10)", border: "1px solid rgba(63,224,139,.24)", display: "flex", alignItems: "center", justifyContent: "center", color: "#3fe08b" }}><Icon name="zap" size={14} fill /></div>
-                <div>
-                  <div style={{ fontFamily: "var(--mono, 'JetBrains Mono', monospace)", fontSize: 12, letterSpacing: 1.5, color: "#eaf0ea" }}>AGENT</div>
-                  <div style={{ fontSize: 11, color: "#7c847c" }}>{agentSub}</div>
-                </div>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px", borderRadius: 999, border: "1px solid rgba(63,224,139,.24)", background: "rgba(63,224,139,.06)" }}>
-                <span className="bv-blink" style={{ width: 6, height: 6, borderRadius: "50%", background: "#3fe08b" }} />
-                <span style={{ fontFamily: "var(--mono, 'JetBrains Mono', monospace)", fontSize: 10, letterSpacing: 1, color: "#3fe08b" }}>LIVE</span>
-              </div>
-            </div>
-
-            <div style={{ flex: 1, overflowY: "auto", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 4 }}>
-              {rows.map((r, i) => (
-                <div key={i} className={"bv-row" + (r.href ? " act" : "")} role={r.href ? "button" : undefined} tabIndex={r.href ? 0 : undefined}
-                  onClick={r.href ? () => nav(r.href as string) : undefined}
-                  onKeyDown={r.href ? (e) => { if (e.key === "Enter") nav(r.href as string); } : undefined}
-                  title={r.href ? "Open" : undefined}>
-                  <span className="bv-ic">{r.icon}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13.5, color: "#dfe6df", lineHeight: 1.35, marginBottom: 3 }}>{r.title}</div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span className="bv-meta">{r.meta}</span>
-                      <span style={{ flex: "0 0 auto", fontFamily: "var(--mono, 'JetBrains Mono', monospace)", fontSize: 11, color: "#565c56", marginLeft: "auto" }}>{r.age}</span>
-                    </div>
-                  </div>
-                  <span style={{ flex: "0 0 auto", alignSelf: "flex-start", fontFamily: "var(--mono, 'JetBrains Mono', monospace)", fontSize: 11, padding: "2px 8px", borderRadius: 6, background: TONE_BG[r.tone], color: TONE_COLOR[r.tone], whiteSpace: "nowrap" }}>{r.delta}</span>
-                  {r.href && <span className="bv-go"><Icon name="chevR" size={14} /></span>}
-                </div>
-              ))}
-              {real && rows.length === 0 && (
-                <div style={{ padding: "18px 12px", fontSize: 13, color: "#7c847c", lineHeight: 1.5 }}>Starting chores — fetching {runnable.length} repo{runnable.length === 1 ? "" : "s"}, sprints, tasks and Docker…</div>
-              )}
-              <div style={{ flex: 1 }} />
-              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", opacity: 0.5 }}>
-                <span className="bv-blink" style={{ width: 5, height: 5, borderRadius: "50%", background: "#7c847c" }} />
-                <span className="bv-blink" style={{ width: 5, height: 5, borderRadius: "50%", background: "#7c847c", animationDelay: ".2s" }} />
-                <span className="bv-blink" style={{ width: 5, height: 5, borderRadius: "50%", background: "#7c847c", animationDelay: ".4s" }} />
-                <span style={{ fontFamily: "var(--mono, 'JetBrains Mono', monospace)", fontSize: 11, color: "#565c56", marginLeft: 4 }}>{typingText}</span>
-              </div>
-            </div>
-
-            <div style={{ flex: "0 0 auto", padding: "14px 22px", borderTop: "1px solid rgba(140,150,140,.10)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              {foot.map((f, i) => <FootStat key={i} v={f.v} label={f.label} color={f.color} />)}
-            </div>
-          </div>
-        )}
-      </aside>
-    </div>
-  );
-}
-
-function DigestStat({ n, label, color = "#eaf0ea" }: { n: number; label: string; color?: string }) {
-  return (
-    <div style={{ padding: 14, border: "1px solid rgba(140,150,140,.12)", borderRadius: 12, background: "rgba(255,255,255,.02)" }}>
-      <div style={{ fontSize: 26, fontWeight: 600, color }}>{n}</div>
-      <div style={{ fontSize: 12, color: "#7c847c", marginTop: 2 }}>{label}</div>
-    </div>
-  );
-}
-function DeltaStat({ v, label, color }: { v: string; label: string; color: string }) {
-  return (
-    <div>
-      <div style={{ fontFamily: "var(--mono, 'JetBrains Mono', monospace)", fontSize: 18, fontWeight: 600, color }}>{v}</div>
-      <div style={{ fontSize: 11, color: "#7c847c" }}>{label}</div>
-    </div>
-  );
-}
-function FootStat({ v, label, color = "#eaf0ea" }: { v: string; label: string; color?: string }) {
-  return (
-    <div style={{ textAlign: "center" }}>
-      <div style={{ fontFamily: "var(--mono, 'JetBrains Mono', monospace)", fontSize: 16, fontWeight: 600, color }}>{v}</div>
-      <div style={{ fontSize: 10, color: "#7c847c", letterSpacing: 0.5 }}>{label}</div>
-    </div>
-  );
-}

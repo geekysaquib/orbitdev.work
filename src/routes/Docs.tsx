@@ -8,7 +8,6 @@ const SECTIONS = [
   ["zoho", "Zoho Sprints"],
   ["tasks", "Tasks & tickets"],
   ["calendar", "Calendar & notifications"],
-  ["automation", "Automation"],
   ["time", "Time tracking"],
   ["data", "Data & security"],
   ["faq", "FAQ"],
@@ -86,15 +85,34 @@ mkcert localhost 127.0.0.1</div>
 
           <h2 id="d-zoho">Zoho Sprints</h2>
           <p>ORBIT pulls your Zoho <b>Sprints</b> work items into the Tickets screen. Credentials live
-            server-side (in a Netlify function), never in the browser. To connect, create a Self Client in
-            the Zoho API Console for your data center, generate a grant code with these scopes, and
-            exchange it for a refresh token:</p>
+            server-side (in a Netlify function), never in the browser, and are scoped to your account.
+            Connect from <b>Settings → Zoho Sprints</b>, which walks through this same checklist with
+            a copy button and a live exchange step, but here's the full picture:</p>
+          <ol>
+            <li>Open the Zoho API Console for your data center (<code>api-console.zoho.in</code>,
+              <code>.com</code>, <code>.eu</code>, etc.) and sign in with the Zoho account that has
+              access to your Sprints team.</li>
+            <li>Click <b>Add Client</b> (or <b>Get Started</b> the first time), choose <b>Self
+              Client</b> as the type, and confirm/<b>CREATE</b>. Self Client is the right choice here —
+              it doesn't need a redirect URL.</li>
+            <li>On the <b>Client Secret</b> tab, copy the <b>Client ID</b> and <b>Client Secret</b> —
+              these go straight into ORBIT.</li>
+            <li>Switch to the <b>Generate Code</b> tab. Paste this scope into <i>Scope</i>, write
+              anything in <i>Scope Description</i>, set <i>Time Duration</i> to a few minutes, then
+              <b> CREATE</b>:</li>
+          </ol>
           <div className="cq">ZohoSprints.teams.READ,ZohoSprints.projects.READ,ZohoSprints.sprints.READ,ZohoSprints.items.READ</div>
-          <p>Set <code>ZOHO_CLIENT_ID</code>, <code>ZOHO_CLIENT_SECRET</code>,
-            <code>ZOHO_REFRESH_TOKEN</code>, and <code>ZOHO_DC</code> (e.g. <code>in</code>) in your
-            Netlify environment, then hit <b>Sync</b> on the Tickets screen. ORBIT resolves your team and
-            project automatically; you can pin <code>ZOHO_TEAM_ID</code> / <code>ZOHO_PROJECT_ID</code>
-            once you know them.</p>
+          <ol start={5}>
+            <li>Zoho shows a <b>code</b> — it's single-use and expires within minutes. Copy it.</li>
+            <li>Back in ORBIT → Settings → Zoho Sprints, paste the Client ID, Client Secret and that
+              code, then hit <b>Exchange for tokens</b>. ORBIT does the code-for-refresh-token
+              exchange server-side — no terminal, no curl — and fills in the Refresh Token field.</li>
+            <li>Hit <b>Save & connect</b> and you're done. ORBIT auto-discovers your team and default
+              project; pin a Team ID / Project ID only if you want to skip that lookup.</li>
+          </ol>
+          <p>Once connected, it stays connected across sign-outs — no need to reconnect after logging
+            back in. If the code expires before you paste it (they're short-lived), just generate a
+            fresh one from the same <b>Generate Code</b> tab and try again.</p>
 
           <h2 id="d-tasks">Tasks & tickets</h2>
           <p>The <b>Tasks</b> board is a four-column kanban (to do → in progress → review → done) across
@@ -107,12 +125,6 @@ mkcert localhost 127.0.0.1</div>
             click any day to add an event. <b>Notifications</b> collects ticket assignments, deploys, git
             events, and deadline reminders; unread items show a dot on the rail icon, and you can mark
             individual items or everything as read.</p>
-
-          <h2 id="d-automation">Automation</h2>
-          <p>The <b>Automation</b> screen holds your Start-Work and End-Work macros, if-this-then-that
-            rules, and scheduled jobs. Start Work runs an ignition sequence — pull, containers, dev
-            server, IDEs, Zoho sync, timer — so a project's whole environment comes up at once. Toggle
-            rules and jobs on or off; scaffolding templates let you generate new modules.</p>
 
           <h2 id="d-time">Time tracking</h2>
           <p>Track focus per project with the timer, review your week at a glance, and see billable hours

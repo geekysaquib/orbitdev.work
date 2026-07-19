@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { Icon } from "../lib/icons";
 import { Select } from "../components/Select";
 import { ACCENT } from "../components/ui";
@@ -7,48 +7,84 @@ import { useAgent } from "../context/Agent";
 import { useZoho } from "../context/Zoho";
 import { useToast } from "../context/Toast";
 import { useAuth } from "../context/AuthContext";
+import { useSignOutGuard } from "../hooks/useSignOutGuard";
 import { useTimezone, allZones, tzOffset, tzClock, deviceTz } from "../context/Timezone";
-import { fetchIntegrations, saveIntegrations } from "../lib/integrations";
+import { useBreak } from "../context/Break";
+import { useTheme, THEMES, ACCENTS, FONTS, DENSITIES, type ThemeId, type AccentId, type FontId, type DensityId } from "../context/Theme";
+import { useDashboardLayout } from "../hooks/useDashboardLayout";
+import { DASH_TILES } from "../lib/dashboardLayout";
+import { recordAudit } from "../lib/audit";
 import { fetchDocker } from "../lib/agent";
 import { ORBIT_AGENT_DOWNLOAD_URL } from "../lib/downloads";
 import { pgServers, pgDeleteServer, type PgServer } from "../lib/pg";
 import { PgServerModal } from "../components/PgServerModal";
 import { ChoresCard } from "../components/ChoresCard";
-import { KeyField } from "../components/KeyField";
+import { ZohoSetupPanel } from "../components/ZohoSetupPanel";
+import { GmailSetupPanel } from "../components/GmailSetupPanel";
+import { AiKeySetupPanel } from "../components/AiKeySetupPanel";
+import { GithubSetupPanel } from "../components/GithubSetupPanel";
+import { GitlabSetupPanel } from "../components/GitlabSetupPanel";
+import { AzureDevopsSetupPanel } from "../components/AzureDevopsSetupPanel";
+import { MicrosoftTeamsSetupPanel } from "../components/MicrosoftTeamsSetupPanel";
+import { LinkedProjectsPanel } from "../components/LinkedProjectsPanel";
+import { useTable } from "../hooks/useTable";
+import type { Project } from "../lib/types";
+import { SentrySetupPanel } from "../components/SentrySetupPanel";
+import { CloudSetupPanel } from "../components/CloudSetupPanel";
+import { useIntegrationHealth } from "../hooks/useIntegrationHealth";
+import { fetchSettings } from "../lib/settings";
 
-const CONNS: [string, string, string][] = [["GitHub", "git", "#ECEEF2"], ["Azure DevOps", "server", ACCENT.blue], ["Docker", "container", ACCENT.blue], ["Slack", "bell", ACCENT.violet]];
-
-type SectionId = "account" | "agent" | "zoho" | "gmail" | "postgres" | "docker" | "chores" | "integrations" | "data";
+type SectionId = "account" | "appearance" | "agent" | "zoho" | "gmail" | "github" | "gitlab" | "azuredevops" | "msteams" | "sentry" | "cloud" | "postgres" | "docker" | "chores" | "ai" | "integrations" | "data";
+// Non-interactive group labels rendered above the section they precede in the
+// Settings side-rail — purely visual, keeps SECTIONS' data shape unchanged.
+const SECTION_GROUPS: Partial<Record<SectionId, string>> = {
+  account: "General", zoho: "Integrations", postgres: "Local", chores: "Automation", data: "Data",
+};
 const SECTIONS: { id: SectionId; label: string; icon: string; desc: string }[] = [
   { id: "account", label: "Account", icon: "user", desc: "Identity, timezone and session" },
+  { id: "appearance", label: "Appearance", icon: "palette", desc: "Theme and dashboard layout" },
   { id: "agent", label: "Local agent", icon: "plug", desc: "The companion service on this machine" },
   { id: "zoho", label: "Zoho Sprints", icon: "sprint", desc: "Projects, sprints, items and hours" },
   { id: "gmail", label: "Gmail", icon: "mail", desc: "Read-only inbox over IMAP" },
+  { id: "github", label: "GitHub", icon: "github", desc: "Repos, pull requests and Actions status" },
+  { id: "gitlab", label: "GitLab", icon: "gitlab", desc: "Projects, merge requests and pipelines" },
+  { id: "azuredevops", label: "Azure DevOps", icon: "azuredevops", desc: "Repos, pull requests and builds" },
+  { id: "msteams", label: "Microsoft Teams", icon: "msteams", desc: "Create meeting links from Calendar events" },
+  { id: "sentry", label: "Sentry", icon: "alert", desc: "Unresolved issues and releases" },
+  { id: "cloud", label: "Cloud", icon: "cloud", desc: "Netlify, Vercel and AWS cost/status" },
   { id: "postgres", label: "PostgreSQL", icon: "db", desc: "Servers you can browse and query" },
   { id: "docker", label: "Docker", icon: "container", desc: "Containers and images" },
   { id: "chores", label: "Break chores", icon: "zap", desc: "What the agent does while you sip" },
-  { id: "integrations", label: "Integrations", icon: "layers", desc: "Other services and IDE paths" },
+  { id: "ai", label: "AI-assisted seeding", icon: "sparkles", desc: "Project-aware dummy data via Claude" },
+  { id: "integrations", label: "IDE & tools", icon: "layers", desc: "Local executable names for launching" },
   { id: "data", label: "Data & security", icon: "shield", desc: "Where everything is stored" },
 ];
 const SECTIONS_IDS = new Set<string>(SECTIONS.map((s) => s.id));
 
 export default function Settings() {
   const toast = useToast();
-  const { user, signOut } = useAuth();
+  const nav = useNavigate();
+  const { user } = useAuth();
   const { status, url, updateUrl, recheck } = useAgent();
+  const { requestSignOut, signOutGuardModal } = useSignOutGuard();
+  const { idleEnabled, idleMinutes, setIdlePrefs } = useBreak();
   const zoho = useZoho();
+  const { rows: projects } = useTable<Project>("projects");
   const [searchParams] = useSearchParams();
   const [section, setSection] = useState<SectionId>(() => {
     const s = searchParams.get("section");
     return (SECTIONS_IDS.has(s || "") ? s : "account") as SectionId;
   });
   const [draft, setDraft] = useState(url);
-  const [zk, setZk] = useState({ zoho_client_id: "", zoho_client_secret: "", zoho_refresh_token: "", zoho_dc: "in", zoho_team_id: "", zoho_project_id: "" });
-  const [gk, setGk] = useState({ gmail_user: "", gmail_app_password: "" });
-  const [savingZ, setSavingZ] = useState(false);
-  const [savingG, setSavingG] = useState(false);
   const [docker, setDocker] = useState<{ available: boolean; count: number } | null>(null);
   const [dockerChecking, setDockerChecking] = useState(false);
+  const [onboardedAt, setOnboardedAt] = useState<string | null | undefined>(undefined);
+  const { health } = useIntegrationHealth();
+
+  useEffect(() => { fetchSettings().then((s) => setOnboardedAt(s.onboarded_at ?? null)); }, []);
+
+  const { theme, setTheme, accent, customAccentHex, setAccent, font, setFont, density, setDensity } = useTheme();
+  const { layout, toggleHidden, reset: resetLayout, isDefault: layoutIsDefault } = useDashboardLayout();
 
   const { tz, setTz } = useTimezone();
   const zones = useMemo(() => allZones(), []);
@@ -70,44 +106,30 @@ export default function Settings() {
   }
   useEffect(() => { checkDocker(); }, [status]); // eslint-disable-line
 
-  useEffect(() => {
-    fetchIntegrations().then((i) => {
-      if (!i) return;
-      setZk({
-        zoho_client_id: i.zoho_client_id || "", zoho_client_secret: i.zoho_client_secret || "", zoho_refresh_token: i.zoho_refresh_token || "",
-        zoho_dc: i.zoho_dc || "in", zoho_team_id: i.zoho_team_id || "", zoho_project_id: i.zoho_project_id || "",
-      });
-      setGk({ gmail_user: i.gmail_user || "", gmail_app_password: i.gmail_app_password || "" });
-    });
-  }, []);
-
-  async function saveZoho() {
-    setSavingZ(true);
-    const { error } = await saveIntegrations(zk);
-    setSavingZ(false);
-    if (error) { toast(`Couldn't save: ${error}`); return; }
-    zoho.connect(); zoho.recheck();
-    toast("Zoho keys saved — checking connection…");
-  }
-
   const agentPill = status === "online"
     ? <span className="pill live"><Icon name="zap" size={15} />Connected<span className="dotled" /></span>
     : status === "disconnected"
       ? <span className="pill warn"><Icon name="plug" size={15} />Disconnected<span className="dotled warn" /></span>
       : <span className="pill"><Icon name="plug" size={15} />Offline<span className="dotled" /></span>;
 
-  const zohoPill = zoho.status === "connected"
-    ? <span className="pill live"><Icon name="zap" size={15} />Connected<span className="dotled" /></span>
-    : zoho.status === "checking"
-      ? <span className="pill"><Icon name="loader" size={15} className="spin" />Checking…<span className="dotled" /></span>
-      : <span className="pill warn"><Icon name="plug" size={15} />Disconnected<span className="dotled warn" /></span>;
-
+  // Thin adapter over useIntegrationHealth() — the single source of truth also
+  // used by the Health page, so the two can't silently disagree.
   const railState = (id: SectionId): "ok" | "warn" | null => {
-    if (id === "agent") return status === "online" ? "ok" : "warn";
-    if (id === "zoho") return zoho.status === "connected" ? "ok" : zoho.status === "checking" ? null : "warn";
-    if (id === "gmail") return gk.gmail_user && gk.gmail_app_password ? "ok" : null;
+    if (id === "agent") return health.agent.state === "ok" ? "ok" : "warn";
+    if (id === "zoho") return health.zoho.state === "ok" ? "ok" : health.zoho.state === "unknown" ? null : "warn";
+    if (id === "gmail") return health.gmail.configured ? "ok" : null;
     if (id === "docker") return status !== "online" ? null : docker?.available ? "ok" : "warn";
-    if (id === "postgres") return pgList.length ? "ok" : null;
+    if (id === "postgres") return health.postgres.state === "unknown" ? null : health.postgres.state;
+    if (id === "ai") return health.anthropic.state === "ok" ? "ok" : null;
+    if (id === "github" || id === "gitlab" || id === "azuredevops" || id === "sentry") {
+      const st = health.providers[id].state;
+      return st === "unknown" ? null : st;
+    }
+    if (id === "cloud") {
+      const states = (["netlify", "vercel", "aws"] as const).map((p) => health.providers[p].state);
+      if (states.every((s) => s === "unknown")) return null;
+      return states.some((s) => s === "ok") ? "ok" : "warn";
+    }
     return null;
   };
 
@@ -122,12 +144,16 @@ export default function Settings() {
         <nav className="set-rail">
           {SECTIONS.map((s) => {
             const st = railState(s.id);
+            const groupLabel = SECTION_GROUPS[s.id];
             return (
-              <button key={s.id} className={"set-navitem" + (section === s.id ? " on" : "")} onClick={() => setSection(s.id)}>
-                <span className="sn-ic"><Icon name={s.icon} size={16} /></span>
-                <span className="sn-label">{s.label}</span>
-                {st && <span className={"sn-dot " + st} />}
-              </button>
+              <div key={s.id}>
+                {groupLabel && <div className="set-rail-group-label">{groupLabel}</div>}
+                <button className={"set-navitem" + (section === s.id ? " on" : "")} onClick={() => setSection(s.id)}>
+                  <span className="sn-ic"><Icon name={s.icon} size={16} /></span>
+                  <span className="sn-label">{s.label}</span>
+                  {st && <span className={"sn-dot " + st} />}
+                </button>
+              </div>
             );
           })}
         </nav>
@@ -139,14 +165,23 @@ export default function Settings() {
               <div className="set-desc">{meta.desc}</div>
             </div>
             {section === "agent" && agentPill}
-            {section === "zoho" && zohoPill}
           </div>
 
           {section === "account" && (
             <>
               <div className="card">
                 <div className="setrow"><div className="l"><div className="nm">{user?.email}</div><div className="ds">{user?.email_verified ? "Verified · signed in with your ORBIT account" : "Signed in with your ORBIT account"}</div></div>
-                  <button className="btn ghost" onClick={() => signOut()}><Icon name="logout" size={15} />Sign out</button></div>
+                  <button className="btn ghost" onClick={requestSignOut}><Icon name="logout" size={15} />Sign out</button></div>
+              </div>
+              <div className="card" style={{ marginTop: 12 }}>
+                <div className="setrow">
+                  <div className="l"><div className="nm">Setup guide</div><div className="ds">Walk through connecting the local agent, Zoho, Gmail, and an AI key — the same steps from first sign-up.</div></div>
+                  <button className="btn" onClick={() => nav("/onboarding?next=/settings")}><Icon name="rocket" size={15} />{onboardedAt ? "Redo setup" : "Continue setup"}</button>
+                </div>
+                <div className="setrow">
+                  <div className="l"><div className="nm">System health</div><div className="ds">See every integration's status — agent, Zoho, Gmail, Docker, Postgres, and AI — in one place.</div></div>
+                  <button className="btn ghost" onClick={() => nav("/health")}><Icon name="checkc" size={15} />View health page</button>
+                </div>
               </div>
               <div className="card" style={{ marginTop: 12 }}>
                 <div className="setrow">
@@ -165,6 +200,110 @@ export default function Settings() {
                   <div className="setrow"><div className="l"><div className="nm">Reset to device timezone</div><div className="ds">Follow this machine's zone ({deviceTz().replace(/_/g, " ")}) again.</div></div>
                     <button className="btn ghost" onClick={() => { setTz(deviceTz()); toast("Using device timezone"); }}><Icon name="refresh" size={15} />Use device</button></div>
                 )}
+              </div>
+              <div className="card" style={{ marginTop: 12 }}>
+                <div className="setrow">
+                  <div className="l"><div className="nm">Idle detection</div><div className="ds">Auto-pause the focus timer after no activity on this tab — browser-tab-based only (won't notice you're idle here but active elsewhere, e.g. coding in your editor).</div></div>
+                  <span className={"toggle" + (idleEnabled ? " on" : "")} onClick={() => setIdlePrefs(!idleEnabled, idleMinutes)} />
+                </div>
+                {idleEnabled && (
+                  <div className="setrow">
+                    <div className="l"><div className="nm">Idle threshold</div><div className="ds">Pause after this many minutes of no mouse/keyboard activity.</div></div>
+                    <Select className="field" value={String(idleMinutes)} onChange={(e) => setIdlePrefs(true, Number(e.target.value))} style={{ width: 120 }}>
+                      {[5, 10, 15, 20, 30].map((m) => <option key={m} value={m}>{m} min</option>)}
+                    </Select>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {section === "appearance" && (
+            <>
+              <div className="theme-grid">
+                {THEMES.map((t) => (
+                  <button
+                    key={t.id}
+                    className={"theme-card" + (theme === t.id ? " on" : "")}
+                    onClick={() => { setTheme(t.id as ThemeId); toast(`Theme: ${t.label}`); }}
+                  >
+                    <span className={"theme-swatch sw-" + t.id}>
+                      <span className="ts-rail" /><span className="ts-body"><span className="ts-card" /><span className="ts-card" /></span>
+                    </span>
+                    <span className="theme-meta">
+                      <span className="theme-name">
+                        <Icon name={t.icon} size={14} />
+                        {t.label}
+                        {theme === t.id && <span className="theme-tick"><Icon name="check" size={13} /></span>}
+                      </span>
+                      <span className="theme-desc">{t.desc}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="card" style={{ marginTop: 12 }}>
+                <div className="setrow">
+                  <div className="l"><div className="nm">Accent colour</div>
+                    <div className="ds">The hue used for buttons, live indicators and highlights — independent of light/dark.</div></div>
+                  <div className="accent-row">
+                    {ACCENTS.map((a) => a.id === "custom" ? (
+                      <label key={a.id} className={"accent-swatch custom" + (accent === "custom" ? " on" : "")} title="Custom colour"
+                        style={accent === "custom" ? { background: customAccentHex } : undefined}>
+                        {accent !== "custom" && <Icon name="palette" size={13} />}
+                        <input type="color" value={customAccentHex} onChange={(e) => setAccent("custom", e.target.value)} />
+                      </label>
+                    ) : (
+                      <button key={a.id} className={"accent-swatch" + (accent === a.id ? " on" : "")} style={{ background: a.swatch }}
+                        title={a.label} onClick={() => { setAccent(a.id); toast(`Accent: ${a.label}`); }}>
+                        {accent === a.id && <Icon name="check" size={13} />}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="card" style={{ marginTop: 12 }}>
+                <div className="setrow">
+                  <div className="l"><div className="nm">Font</div>
+                    <div className="ds">{FONTS.find((f) => f.id === font)?.desc}</div></div>
+                  <div className="pill-row">
+                    {FONTS.map((f) => (
+                      <button key={f.id} className={"pill-opt" + (font === f.id ? " on" : "")}
+                        onClick={() => { setFont(f.id as FontId); toast(`Font: ${f.label}`); }}>{f.label}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="setrow">
+                  <div className="l"><div className="nm">Density</div>
+                    <div className="ds">{DENSITIES.find((d) => d.id === density)?.desc}</div></div>
+                  <div className="pill-row">
+                    {DENSITIES.map((d) => (
+                      <button key={d.id} className={"pill-opt" + (density === d.id ? " on" : "")}
+                        onClick={() => { setDensity(d.id as DensityId); toast(`Density: ${d.label}`); }}>{d.label}</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="card" style={{ marginTop: 12 }}>
+                <div className="setrow">
+                  <div className="l"><div className="nm">Dashboard tiles</div>
+                    <div className="ds">Choose which stat tiles appear. Drag them into the order you want with <b>Customise</b> on the dashboard itself.</div></div>
+                  {!layoutIsDefault && <button className="btn ghost" onClick={() => { resetLayout(); toast("Layout reset"); }}><Icon name="refresh" size={15} />Reset</button>}
+                </div>
+                {DASH_TILES.map((t) => {
+                  const off = layout.hidden.includes(t.id);
+                  return (
+                    <div key={t.id} className="setrow">
+                      <div className="l"><div className="nm" style={{ opacity: off ? .5 : 1 }}>{t.label}</div>
+                        <div className="ds">{off ? "Hidden from the dashboard" : `Position ${layout.order.indexOf(t.id) + 1} of ${layout.order.length}`}</div></div>
+                      <button className={"btn ghost" + (off ? "" : " accent")} onClick={() => toggleHidden(t.id)}>
+                        <Icon name={off ? "eyeOff" : "eye"} size={15} />{off ? "Hidden" : "Shown"}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             </>
           )}
@@ -186,48 +325,42 @@ export default function Settings() {
                 <div className="setrow"><div className="l"><div className="nm">Agent URL</div><div className="ds mono" style={{ fontSize: 11.5 }}>default http://localhost:47600</div></div>
                   <div style={{ display: "flex", gap: 8 }}>
                     <input className="field mono" value={draft} onChange={(e) => setDraft(e.target.value)} style={{ minWidth: 240 }} />
-                    <button className="btn" onClick={() => { updateUrl(draft); toast("Agent URL saved"); }}>Save</button>
+                    <button className="btn" onClick={() => { updateUrl(draft); recordAudit({ action: "integration.update", entityType: "integration", entityId: "agent_url" }); toast("Agent URL saved"); }}>Save</button>
                     <button className="btn" onClick={() => { recheck(); toast("Checking agent…"); }}><Icon name="refresh" size={15} />Test</button>
                   </div></div>
               </div>
             </>
           )}
 
-          {section === "zoho" && (
-            <div className="card" style={{ padding: 20 }}>
-              <div className="ds">Your keys are stored per-account (row-level secured). The server uses them to pull projects, sprints, items, and hours.</div>
-              <div className="kf-grid">
-                <KeyField label="Client ID" value={zk.zoho_client_id} onChange={(v) => setZk({ ...zk, zoho_client_id: v })} placeholder="1000.XXXX" />
-                <KeyField label="Client Secret" value={zk.zoho_client_secret} onChange={(v) => setZk({ ...zk, zoho_client_secret: v })} placeholder="paste the client secret" />
-                <KeyField span label="Refresh Token" value={zk.zoho_refresh_token} onChange={(v) => setZk({ ...zk, zoho_refresh_token: v })} placeholder="1000.xxxx.yyyy" hint="Long-lived. Regenerate it in the Zoho API console if it ever leaks." />
-                <div className="kf">
-                  <label>Data center</label>
-                  <Select full className="kf-input" value={zk.zoho_dc} onChange={(e) => setZk({ ...zk, zoho_dc: e.target.value })}>
-                    {["in", "com", "eu", "com.au", "jp", "sa", "com.cn"].map((d) => <option key={d} value={d}>{d}</option>)}
-                  </Select>
-                </div>
-                <KeyField optional label="Team ID" value={zk.zoho_team_id} onChange={(v) => setZk({ ...zk, zoho_team_id: v })} placeholder="60069474422" />
-                <KeyField span optional label="Default Project ID" value={zk.zoho_project_id} onChange={(v) => setZk({ ...zk, zoho_project_id: v })} placeholder="45354000001026097" />
-              </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center" }}>
-                <button className="btn accent" onClick={saveZoho} disabled={savingZ || !zk.zoho_refresh_token}>{savingZ ? "Saving…" : "Save & connect"}</button>
-                {zoho.status === "connected" && <button className="btn ghost" onClick={() => { zoho.disconnect(); toast("Zoho disabled for this session"); }}><Icon name="plug" size={15} />Disable</button>}
-                {zoho.status === "disconnected" && zoho.error && <span style={{ fontSize: 12, color: "var(--amber)" }}>{zoho.error}</span>}
-              </div>
+          {section === "zoho" && <ZohoSetupPanel />}
+
+          {section === "gmail" && <GmailSetupPanel />}
+
+          {section === "github" && (
+            <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
+              <div style={{ flex: "2 1 420px" }}><GithubSetupPanel /></div>
+              <LinkedProjectsPanel provider="github" label="GitHub" projects={projects} />
             </div>
           )}
 
-          {section === "gmail" && (
-            <div className="card" style={{ padding: 20 }}>
-              <div className="ds">Read-only inbox via IMAP. Needs a Google <b>App Password</b> (2-Step Verification &rarr; App passwords). Stored per-account; the local agent uses it to connect.</div>
-              <div className="kf-grid">
-                <KeyField label="Gmail address" value={gk.gmail_user} onChange={(v) => setGk({ ...gk, gmail_user: v })} placeholder="you@gmail.com" />
-                <KeyField label="App password" value={gk.gmail_app_password} onChange={(v) => setGk({ ...gk, gmail_app_password: v })} placeholder="16-character app password" hint="Not your Google password — an app password, revocable at any time." />
-              </div>
-              <button className="btn accent" style={{ marginTop: 16 }} disabled={savingG || !gk.gmail_user || !gk.gmail_app_password}
-                onClick={async () => { setSavingG(true); const { error } = await saveIntegrations(gk); setSavingG(false); toast(error ? `Couldn't save: ${error}` : "Gmail keys saved — open Mail to connect"); }}>{savingG ? "Saving…" : "Save Gmail keys"}</button>
+          {section === "gitlab" && (
+            <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
+              <div style={{ flex: "2 1 420px" }}><GitlabSetupPanel /></div>
+              <LinkedProjectsPanel provider="gitlab" label="GitLab" projects={projects} />
             </div>
           )}
+          {section === "azuredevops" && (
+            <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
+              <div style={{ flex: "2 1 420px" }}><AzureDevopsSetupPanel /></div>
+              <LinkedProjectsPanel provider="azuredevops" label="Azure DevOps" projects={projects} />
+            </div>
+          )}
+
+          {section === "msteams" && <MicrosoftTeamsSetupPanel />}
+
+          {section === "sentry" && <SentrySetupPanel />}
+
+          {section === "cloud" && <CloudSetupPanel />}
 
           {section === "postgres" && (
             <div className="card">
@@ -246,7 +379,7 @@ export default function Settings() {
                         <div className="ds mono" style={{ fontSize: 11.5 }}>{s.user}@{s.host}:{s.port}{s.database ? ` \u00b7 ${s.database}` : ""}</div></div>
                       <div style={{ display: "flex", gap: 8 }}>
                         <button className="btn ghost" onClick={() => setPgEditing(s)}><Icon name="edit" size={15} />Edit</button>
-                        <button className="btn ghost" onClick={async () => { const r = await pgDeleteServer(s.id); if (!r.ok) { toast(`Couldn't remove ${s.name}: ${r.error}`); return; } loadPg(); toast(`Removed ${s.name}`); }}><Icon name="x" size={15} />Remove</button>
+                        <button className="btn ghost" onClick={async () => { const r = await pgDeleteServer(s.id); if (!r.ok) { toast(`Couldn't remove ${s.name}: ${r.error}`); return; } recordAudit({ action: "pg_server.delete", entityType: "pg_server", entityId: s.id, meta: { name: s.name } }); loadPg(); toast(`Removed ${s.name}`); }}><Icon name="x" size={15} />Remove</button>
                       </div>
                     </div>
                   ))}
@@ -275,22 +408,14 @@ export default function Settings() {
 
           {section === "chores" && <ChoresCard />}
 
+          {section === "ai" && <AiKeySetupPanel />}
+
           {section === "integrations" && (
-            <>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 12 }}>
-                {CONNS.map((c) => (
-                  <div key={c[0]} className="conn"><span className="ico" style={{ color: c[2] }}><Icon name={c[1]} size={18} /></span>
-                    <div style={{ flex: 1 }}><div style={{ fontSize: 13.5 }}>{c[0]}</div><div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 2 }}>Not connected</div></div>
-                    <button className="btn ghost" onClick={() => toast(`Connect ${c[0]}`)}>Connect</button></div>
-                ))}
-              </div>
-              <div className="eyebrow" style={{ marginTop: 26 }}>IDE &amp; tool paths</div>
-              <div className="card" style={{ marginTop: 12 }}>
-                {[["VS Code", "code"], ["Visual Studio", "devenv.exe"], ["Terminal", "wt.exe"], ["Browser", "chrome"]].map((p) => (
-                  <div key={p[0]} className="setrow"><div className="l"><div className="nm">{p[0]}</div></div><input className="field mono" defaultValue={p[1]} /></div>
-                ))}
-              </div>
-            </>
+            <div className="card">
+              {[["VS Code", "code"], ["Visual Studio", "devenv.exe"], ["Terminal", "wt.exe"], ["Browser", "chrome"]].map((p) => (
+                <div key={p[0]} className="setrow"><div className="l"><div className="nm">{p[0]}</div></div><input className="field mono" defaultValue={p[1]} /></div>
+              ))}
+            </div>
           )}
 
           {section === "data" && (
@@ -310,6 +435,7 @@ export default function Settings() {
 
       {pgAddOpen && <PgServerModal onClose={() => setPgAddOpen(false)} onSaved={() => { setPgAddOpen(false); loadPg(); }} />}
       {pgEditing && <PgServerModal editing={pgEditing} onClose={() => setPgEditing(null)} onSaved={() => { setPgEditing(null); loadPg(); }} />}
+      {signOutGuardModal}
     </main>
   );
 }

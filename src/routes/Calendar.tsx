@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Icon } from "../lib/icons";
 import { Select } from "../components/Select";
-import { ACCENT, OrbitLoader } from "../components/ui";
+import { ACCENT, alpha, OrbitLoader } from "../components/ui";
 import { useTable } from "../hooks/useTable";
+import { useToast } from "../context/Toast";
+import { fetchMsTeamsStatus, createTeamsMeeting } from "../lib/msTeams";
 import type { CalEvent } from "../lib/types";
 
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -16,9 +18,13 @@ const key = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart
 
 export default function Calendar() {
   const { rows, insert, loading } = useTable<CalEvent>("events", { column: "starts_at", ascending: true });
+  const toast = useToast();
   const [cursor, setCursor] = useState(new Date());
   const [modal, setModal] = useState<string | null>(null);
-  const [form, setForm] = useState({ title: "", kind: "focus", start: "", end: "" });
+  const [form, setForm] = useState({ title: "", kind: "focus", start: "", end: "", startTime: "09:00", endTime: "09:30", createMeeting: false });
+  const [creatingMeeting, setCreatingMeeting] = useState(false);
+  const [teamsConnected, setTeamsConnected] = useState(false);
+  useEffect(() => { fetchMsTeamsStatus().then((s) => setTeamsConnected(s.connected)); }, []);
 
   const { cells, monthLabel } = useMemo(() => {
     const y = cursor.getFullYear(), m = cursor.getMonth();
@@ -37,12 +43,25 @@ export default function Calendar() {
     });
   };
 
-  function openDay(k: string) { setForm({ title: "", kind: "focus", start: k, end: "" }); setModal(k); }
+  function openDay(k: string) { setForm({ title: "", kind: "focus", start: k, end: "", startTime: "09:00", endTime: "09:30", createMeeting: false }); setModal(k); }
 
   async function add() {
     if (!form.title || !form.start) return;
     const end = form.end && form.end >= form.start ? form.end : null;
-    await insert({ title: form.title, kind: form.kind, starts_at: form.start + "T09:00:00.000Z", ends_at: end ? end + "T18:00:00.000Z" : null } as Partial<CalEvent>);
+    const isMeeting = form.kind === "meeting";
+    const startsAt = isMeeting ? new Date(`${form.start}T${form.startTime}:00`).toISOString() : `${form.start}T09:00:00.000Z`;
+    const endsAt = isMeeting ? new Date(`${end || form.start}T${form.endTime}:00`).toISOString() : (end ? `${end}T18:00:00.000Z` : null);
+
+    let meetingUrl: string | null = null;
+    if (isMeeting && form.createMeeting) {
+      setCreatingMeeting(true);
+      const r = await createTeamsMeeting(form.title, startsAt, endsAt as string);
+      setCreatingMeeting(false);
+      if (r.ok) meetingUrl = r.joinUrl ?? null;
+      else toast(`Couldn't create the Teams meeting: ${r.error} — event saved without a link.`);
+    }
+
+    await insert({ title: form.title, kind: form.kind, starts_at: startsAt, ends_at: endsAt, meeting_url: meetingUrl } as Partial<CalEvent>);
     setModal(null);
   }
 
@@ -84,7 +103,16 @@ export default function Calendar() {
                   <div className="cal-evs">
                     {evs.slice(0, 4).map((e) => {
                       const c = kindColor(e.kind || "focus");
-                      return <div key={e.id} className="cal-ev" style={{ color: c, background: c + "1c", borderLeft: `2px solid ${c}` }}>{e.title}</div>;
+                      return (
+                        <div key={e.id} className="cal-ev" style={{ color: c, background: alpha(c, 11), borderLeft: `2px solid ${c}`, display: "flex", alignItems: "center", gap: 4 }}>
+                          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.title}</span>
+                          {e.meeting_url && (
+                            <a href={e.meeting_url} target="_blank" rel="noreferrer" title="Join Teams meeting" onClick={(ev) => ev.stopPropagation()} style={{ color: c, flexShrink: 0, display: "flex" }}>
+                              <Icon name="msteams" size={11} />
+                            </a>
+                          )}
+                        </div>
+                      );
                     })}
                     {evs.length > 4 && <div className="cal-more">+{evs.length - 4} more</div>}
                   </div>
@@ -111,9 +139,22 @@ export default function Calendar() {
               <Select full value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
                 {KINDS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
               </Select></div>
+            {form.kind === "meeting" && (
+              <>
+                <div style={{ display: "flex", gap: 12 }}>
+                  <div className="fld" style={{ flex: 1 }}><label>Start time</label><input type="time" value={form.startTime} onChange={(e) => setForm({ ...form, startTime: e.target.value })} /></div>
+                  <div className="fld" style={{ flex: 1 }}><label>End time</label><input type="time" value={form.endTime} min={form.startTime} onChange={(e) => setForm({ ...form, endTime: e.target.value })} /></div>
+                </div>
+                <div className="fld" style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                  <span className={"toggle" + (form.createMeeting ? " on" : "")} onClick={() => teamsConnected && setForm({ ...form, createMeeting: !form.createMeeting })} style={teamsConnected ? undefined : { opacity: .4, cursor: "not-allowed" }} />
+                  <span style={{ fontSize: 13, color: "var(--text)" }}>Create a Microsoft Teams meeting</span>
+                </div>
+                {!teamsConnected && <div style={{ fontSize: 12, color: "var(--dim)", marginTop: -6 }}>Connect Microsoft Teams in Settings first.</div>}
+              </>
+            )}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 22 }}>
               <button className="btn" onClick={() => setModal(null)}>Cancel</button>
-              <button className="btn-primary" onClick={add} disabled={!form.title || !form.start}>Add event</button>
+              <button className="btn-primary" onClick={add} disabled={!form.title || !form.start || creatingMeeting}>{creatingMeeting ? "Creating meeting…" : "Add event"}</button>
             </div>
           </div>
         </div>

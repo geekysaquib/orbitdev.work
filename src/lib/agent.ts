@@ -34,6 +34,9 @@ async function call(path: string, body?: unknown): Promise<Response> {
   });
 }
 
+/** Exported so other modules that talk to the local agent directly (e.g. lib/pg.ts) share one implementation. */
+export const agentCall = call;
+
 export async function pingAgent(): Promise<boolean> {
   try {
     const r = await call("/ping");
@@ -118,6 +121,79 @@ export async function dockerBuild(tag: string, context: string, dockerfile?: str
   } catch { return { ok: false, error: "agent offline" }; }
 }
 
+// ---- Docker lifecycle (start/stop/restart/logs/exec) + Compose ----
+export interface DockerContainerFull extends DockerContainer { state: string; running: boolean; }
+export async function fetchDockerAll(): Promise<{ available: boolean; containers: DockerContainerFull[] }> {
+  try {
+    const r = await call("/docker/all");
+    if (!r.ok) return { available: false, containers: [] };
+    const j = await r.json();
+    return { available: !!j.available, containers: j.containers ?? [] };
+  } catch { return { available: false, containers: [] }; }
+}
+async function dockerAction(path: string, name: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await call(path, { name });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: (j as { error?: string }).error || `agent ${r.status}` };
+    return { ok: true };
+  } catch { return { ok: false, error: "agent offline" }; }
+}
+export const dockerStart = (name: string) => dockerAction("/docker/start", name);
+export const dockerStop = (name: string) => dockerAction("/docker/stop", name);
+export const dockerRestart = (name: string) => dockerAction("/docker/restart", name);
+export const dockerRemove = (name: string) => dockerAction("/docker/rm", name);
+export async function dockerLogs(name: string, tail = 200): Promise<{ ok: boolean; logs?: string; error?: string }> {
+  try {
+    const r = await fetch(`${getAgentUrl()}/docker/logs?name=${encodeURIComponent(name)}&tail=${tail}`, { headers: authHeader() });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: (j as { error?: string }).error || `agent ${r.status}` };
+    return { ok: true, logs: (j as { logs?: string }).logs };
+  } catch { return { ok: false, error: "agent offline" }; }
+}
+export async function dockerLogsStream(name: string): Promise<{ ok: boolean; error?: string }> {
+  try { const r = await call("/docker/logs/stream", { name }); const j = await r.json().catch(() => ({})); return { ok: !!j.ok, error: j.error }; }
+  catch { return { ok: false, error: "agent offline" }; }
+}
+export async function dockerLogsUnstream(name: string): Promise<{ ok: boolean }> {
+  try { const r = await call("/docker/logs/unstream", { name }); const j = await r.json().catch(() => ({})); return { ok: !!j.ok }; }
+  catch { return { ok: false }; }
+}
+export async function dockerExec(name: string, cmd: string): Promise<{ ok: boolean; output?: string; error?: string }> {
+  try {
+    const r = await call("/docker/exec", { name, cmd });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: (j as { error?: string }).error || `agent ${r.status}` };
+    return { ok: true, output: (j as { output?: string }).output };
+  } catch { return { ok: false, error: "agent offline" }; }
+}
+
+export interface ComposeStack { name: string; status: string; configFiles: string; }
+export async function dockerComposeLs(): Promise<{ available: boolean; stacks: ComposeStack[] }> {
+  try {
+    const r = await call("/docker/compose/ls");
+    if (!r.ok) return { available: false, stacks: [] };
+    const j = await r.json();
+    return { available: !!j.available, stacks: j.stacks ?? [] };
+  } catch { return { available: false, stacks: [] }; }
+}
+export async function dockerComposeUp(file: string): Promise<{ ok: boolean; output?: string; error?: string }> {
+  try {
+    const r = await call("/docker/compose/up", { file });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: (j as { error?: string }).error || `agent ${r.status}` };
+    return { ok: true, output: (j as { output?: string }).output };
+  } catch { return { ok: false, error: "agent offline" }; }
+}
+export async function dockerComposeDown(name: string): Promise<{ ok: boolean; output?: string; error?: string }> {
+  try {
+    const r = await call("/docker/compose/down", { name });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: (j as { error?: string }).error || `agent ${r.status}` };
+    return { ok: true, output: (j as { output?: string }).output };
+  } catch { return { ok: false, error: "agent offline" }; }
+}
+
 // ---- Start Work ----
 export type PullReason = "updated" | "up_to_date" | "no_upstream" | "conflict" | "auth" | "fetch_failed" | "pull_failed" | "not_a_repo" | "offline";
 export interface PullResult {
@@ -131,6 +207,64 @@ export async function gitPull(path: string): Promise<PullResult> {
     if (j.reason) return { ok: !!j.ok, ...j } as PullResult;
     return { ok: false, reason: "pull_failed", error: j.error || `agent ${r.status}` };
   } catch { return { ok: false, reason: "offline", error: "agent offline" }; }
+}
+export interface GitCommit { hash: string; author: string; email?: string; date: string; subject: string; parents?: string[]; }
+export interface GitStatusResult {
+  ok: boolean; reason?: "not_a_repo" | "offline"; error?: string;
+  root?: string; branch?: string; upstream?: string | null; ahead?: number; behind?: number;
+  dirty?: number; dirtyFiles?: string[]; lastCommit?: GitCommit | null;
+}
+export async function gitStatus(path: string): Promise<GitStatusResult> {
+  try {
+    const r = await call("/git/status", { path });
+    const j = (await r.json().catch(() => ({}))) as Partial<GitStatusResult>;
+    if (!r.ok) return { ok: false, reason: j.reason ?? undefined, error: j.error || `agent ${r.status}` };
+    return { ok: true, ...j } as GitStatusResult;
+  } catch { return { ok: false, reason: "offline", error: "agent offline" }; }
+}
+export async function gitLog(path: string, limit = 20, branch?: string): Promise<{ ok: boolean; commits: GitCommit[]; error?: string }> {
+  try {
+    const r = await call("/git/log", { path, limit, branch });
+    const j = (await r.json().catch(() => ({}))) as { ok?: boolean; commits?: GitCommit[]; error?: string };
+    if (!r.ok || !j.ok) return { ok: false, commits: [], error: j.error || `agent ${r.status}` };
+    return { ok: true, commits: j.commits ?? [] };
+  } catch { return { ok: false, commits: [], error: "agent offline" }; }
+}
+
+export interface GitBranch { name: string; hash: string; date: string; subject: string; current: boolean; }
+export async function gitBranches(path: string): Promise<{ ok: boolean; branches: GitBranch[]; error?: string }> {
+  try {
+    const r = await call("/git/branches", { path });
+    const j = (await r.json().catch(() => ({}))) as { ok?: boolean; branches?: GitBranch[]; error?: string };
+    if (!r.ok || !j.ok) return { ok: false, branches: [], error: j.error || `agent ${r.status}` };
+    return { ok: true, branches: j.branches ?? [] };
+  } catch { return { ok: false, branches: [], error: "agent offline" }; }
+}
+
+export async function gitShow(path: string, hash: string): Promise<{ ok: boolean; commit?: GitCommit; patch?: string; error?: string }> {
+  try {
+    const r = await call("/git/show", { path, hash });
+    const j = (await r.json().catch(() => ({}))) as { ok?: boolean; commit?: GitCommit; patch?: string; error?: string };
+    if (!r.ok || !j.ok) return { ok: false, error: j.error || `agent ${r.status}` };
+    return { ok: true, commit: j.commit, patch: j.patch ?? "" };
+  } catch { return { ok: false, error: "agent offline" }; }
+}
+export async function runInProject(path: string, command: string): Promise<{ ok: boolean; code?: number; stdout?: string; stderr?: string; error?: string }> {
+  try {
+    const r = await call("/term/run", { path, command });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: (j as { error?: string }).error || `agent ${r.status}` };
+    const jj = j as { code?: number; stdout?: string; stderr?: string };
+    return { ok: true, code: jj.code, stdout: jj.stdout, stderr: jj.stderr };
+  } catch { return { ok: false, error: "agent offline" }; }
+}
+export async function gitDiff(path: string, base?: string): Promise<{ ok: boolean; staged?: string; unstaged?: string; range?: string; error?: string }> {
+  try {
+    const r = await call("/git/diff", { path, base });
+    const j = (await r.json().catch(() => ({}))) as { ok?: boolean; staged?: string; unstaged?: string; range?: string; error?: string };
+    if (!r.ok || !j.ok) return { ok: false, error: j.error || `agent ${r.status}` };
+    return { ok: true, staged: j.staged ?? "", unstaged: j.unstaged ?? "", range: j.range };
+  } catch { return { ok: false, error: "agent offline" }; }
 }
 export async function checkPort(port: number): Promise<{ ok: boolean; inUse: boolean; ownedBy: string | null; error?: string }> {
   try {
@@ -157,9 +291,18 @@ export async function devRunning(): Promise<DevServer[]> {
 export async function devStop(pid: number): Promise<{ ok: boolean }> {
   try { const r = await call("/dev/stop", { pid }); return { ok: r.ok }; } catch { return { ok: false }; }
 }
+export async function devLogSnapshot(pid: number): Promise<{ ok: boolean; lines: string[] }> {
+  try {
+    const r = await fetch(`${getAgentUrl()}/dev/log/${pid}`, { headers: authHeader() });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, lines: [] };
+    return { ok: true, lines: (j as { lines?: string[] }).lines ?? [] };
+  } catch { return { ok: false, lines: [] }; }
+}
 
 export interface GmailMsg { uid: number; subject: string; from: string; fromAddr: string; date: string; seen: boolean; }
-export interface GmailFull { subject: string; from: string; to: string; date: string; text: string; html: string; }
+export interface GmailAttachment { filename: string; contentType?: string; size?: number; }
+export interface GmailFull { subject: string; from: string; to: string; date: string; text: string; html: string; messageId?: string; references?: string[]; attachments?: GmailAttachment[]; }
 
 export async function gmailStatus(): Promise<{ configured: boolean; user: string | null }> {
   try { const r = await call("/gmail/status"); const j = await r.json(); return { configured: !!j.configured, user: j.user ?? null }; }
@@ -180,6 +323,18 @@ export async function gmailMessage(uid: number): Promise<{ ok: boolean; message?
   try { const r = await call(`/gmail/message?uid=${uid}`); const j = await r.json().catch(() => ({})); return r.ok ? { ok: true, message: j.message } : { ok: false, error: (j as { error?: string }).error }; }
   catch { return { ok: false, error: "agent offline" }; }
 }
+export interface GmailSendAttachment { filename: string; contentType?: string; content: string /* base64, no data: prefix */; }
+export interface GmailSendInput {
+  to: string; subject?: string; text: string; html?: string; cc?: string; bcc?: string;
+  inReplyTo?: string; references?: string[]; attachments?: GmailSendAttachment[];
+}
+export async function gmailSend(input: GmailSendInput): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await call("/gmail/send", input);
+    const j = await r.json().catch(() => ({}));
+    return r.ok ? { ok: true } : { ok: false, error: (j as { error?: string }).error || `agent ${r.status}` };
+  } catch { return { ok: false, error: "agent offline" }; }
+}
 
 // ---- Break chores: npm, docker disk, ports, mail ----
 export interface OutdatedPkg { name: string; current: string; wanted: string; latest: string; major: boolean; }
@@ -199,6 +354,14 @@ export async function npmAudit(path: string): Promise<AuditResult> {
     if (!j.ok) return { ok: false, total: 0, critical: 0, high: 0, moderate: 0, low: 0 };
     return { ok: true, total: j.total ?? 0, critical: j.critical ?? 0, high: j.high ?? 0, moderate: j.moderate ?? 0, low: j.low ?? 0 };
   } catch { return { ok: false, total: 0, critical: 0, high: 0, moderate: 0, low: 0 }; }
+}
+export interface DockerStat { name: string; cpuPercent: number; memUsage: string; memPercent: number; }
+export async function dockerStats(): Promise<{ available: boolean; stats: DockerStat[] }> {
+  try {
+    const r = await fetch(`${getAgentUrl()}/docker/stats`, { headers: authHeader() });
+    const j = await r.json().catch(() => ({}));
+    return { available: !!j.available, stats: (j.stats ?? []) as DockerStat[] };
+  } catch { return { available: false, stats: [] }; }
 }
 export async function dockerDf(): Promise<{ available: boolean; dangling: number; reclaimable: string }> {
   try {
@@ -223,7 +386,7 @@ export async function gmailUnread(): Promise<{ ok: boolean; unread: number }> {
 }
 
 /** Subscribe to agent push events. Returns an unsubscribe fn. Falls back silently. */
-export function agentEvents(onEvent: (event: string) => void): () => void {
+export function agentEvents(onEvent: (event: string, payload?: unknown) => void): () => void {
   let ws: WebSocket | null = null;
   let closed = false;
   let retry: ReturnType<typeof setTimeout>;
@@ -232,8 +395,11 @@ export function agentEvents(onEvent: (event: string) => void): () => void {
     const token = getToken();
     if (!token) { retry = setTimeout(connect, 5000); return; } // not signed in yet — try again shortly
     try {
-      ws = new WebSocket(`${getAgentUrl().replace(/^http/, "ws")}/events?token=${encodeURIComponent(token)}`);
-      ws.onmessage = (m) => { try { const d = JSON.parse(m.data as string); if (d.event) onEvent(d.event); } catch { /* noop */ } };
+      // Token goes in the first message, not the URL — a query string can land in
+      // proxy/access logs; a WS frame doesn't.
+      ws = new WebSocket(`${getAgentUrl().replace(/^http/, "ws")}/events`);
+      ws.onopen = () => { try { ws?.send(JSON.stringify({ token })); } catch { /* noop */ } };
+      ws.onmessage = (m) => { try { const d = JSON.parse(m.data as string); if (d.event) onEvent(d.event, d.payload); } catch { /* noop */ } };
       ws.onclose = () => { if (!closed) retry = setTimeout(connect, 5000); };
       ws.onerror = () => { try { ws?.close(); } catch { /* noop */ } };
     } catch { retry = setTimeout(connect, 5000); }
