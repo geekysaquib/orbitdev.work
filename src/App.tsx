@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { OfflineProvider } from "./context/Offline";
@@ -9,32 +10,43 @@ import { TimezoneProvider } from "./context/Timezone";
 import { ThemeProvider } from "./context/Theme";
 import { BreakProvider } from "./context/Break";
 import { Layout } from "./components/Layout";
+import { OrbitLoader } from "./components/ui";
 import Login from "./routes/Login";
 import VerifyEmail from "./routes/VerifyEmail";
 import ForgotPassword from "./routes/ForgotPassword";
 import InviteAccept from "./routes/InviteAccept";
 import OAuthCallback from "./routes/OAuthCallback";
 import Landing from "./routes/Landing";
-import Dashboard from "./routes/Dashboard";
-import Projects from "./routes/Projects";
-import ProjectDetail from "./routes/ProjectDetail";
-import Teams from "./routes/Teams";
-import Tickets from "./routes/Tickets";
-import Sprints from "./routes/Sprints";
-import Tasks from "./routes/Tasks";
-import Docker from "./routes/Docker";
-import Postgres from "./routes/Postgres";
-import Mail from "./routes/Mail";
-import Calendar from "./routes/Calendar";
-import Notifications from "./routes/Notifications";
-import TimeTracking from "./routes/TimeTracking";
-import Docs from "./routes/Docs";
-import Settings from "./routes/Settings";
-import GetStarted from "./routes/GetStarted";
-import Onboarding from "./routes/Onboarding";
-import AuditLog from "./routes/AuditLog";
-import Health from "./routes/Health";
 import type { JSX } from "react";
+
+// Everything behind the authenticated Layout is lazy — these are the routes
+// that actually carry the app's weight (SchemaDiagram, CommitGraph, Zoho
+// boards, etc.), unlike the small pre-auth pages above (the first thing any
+// visitor loads, kept eager on purpose — no benefit to an extra round-trip
+// before the very first paint).
+const Dashboard = lazy(() => import("./routes/Dashboard"));
+const Projects = lazy(() => import("./routes/Projects"));
+const ProjectDetail = lazy(() => import("./routes/ProjectDetail"));
+const Teams = lazy(() => import("./routes/Teams"));
+const Tickets = lazy(() => import("./routes/Tickets"));
+const Sprints = lazy(() => import("./routes/Sprints"));
+const Tasks = lazy(() => import("./routes/Tasks"));
+const Docker = lazy(() => import("./routes/Docker"));
+const Postgres = lazy(() => import("./routes/Postgres"));
+const Mail = lazy(() => import("./routes/Mail"));
+const Calendar = lazy(() => import("./routes/Calendar"));
+const Notifications = lazy(() => import("./routes/Notifications"));
+const TimeTracking = lazy(() => import("./routes/TimeTracking"));
+const Docs = lazy(() => import("./routes/Docs"));
+const Settings = lazy(() => import("./routes/Settings"));
+const GetStarted = lazy(() => import("./routes/GetStarted"));
+const Onboarding = lazy(() => import("./routes/Onboarding"));
+const AuditLog = lazy(() => import("./routes/AuditLog"));
+const Health = lazy(() => import("./routes/Health"));
+
+function RouteLoader() {
+  return <div className="page-loader"><OrbitLoader label="Loading…" /></div>;
+}
 
 function Guard({ children }: { children: JSX.Element }) {
   const { session, loading } = useAuth();
@@ -55,6 +67,7 @@ export default function App() {
           <TimezoneProvider>
           <BreakProvider>
           <BrowserRouter>
+          <Suspense fallback={<RouteLoader />}>
           <Routes>
             <Route path="/" element={<Landing />} />
             <Route path="/login" element={<Login />} />
@@ -85,6 +98,7 @@ export default function App() {
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+          </Suspense>
           </BrowserRouter>
           </BreakProvider>
           </TimezoneProvider>
