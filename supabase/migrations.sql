@@ -619,3 +619,44 @@ alter table public.provider_connections add constraint provider_connections_prov
 
 -- Join link for a calendar event's Teams meeting, if one was created for it.
 alter table public.events add column if not exists meeting_url text;
+
+-- ---------- focus events (append-only activity log for insights) ----------
+-- Idle/resume pairs (from the tab-level idle detection that pauses the focus
+-- timer, see src/context/Break.tsx) plus top-level route changes (see
+-- src/components/Layout.tsx) — enough to later derive interrupted-hours and
+-- context-switching-cost views without needing a heavier event pipeline.
+create table if not exists public.focus_events (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  project_id uuid references public.projects(id) on delete set null,
+  type text not null check (type in ('idle','resume','route_change')),
+  route text,
+  at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+create index if not exists focus_events_user_at_idx on public.focus_events(user_id, at desc);
+alter table public.focus_events enable row level security;
+drop policy if exists "owner select" on public.focus_events;
+create policy "owner select" on public.focus_events for select using (user_id = auth.uid());
+drop policy if exists "owner insert" on public.focus_events;
+create policy "owner insert" on public.focus_events for insert with check (user_id = auth.uid());
+
+-- ---------- metric snapshots (daily-brief/anomaly-scan crons' day-over-day deltas) ----------
+create table if not exists public.metric_snapshots (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  metric text not null,
+  value numeric not null,
+  meta jsonb not null default '{}'::jsonb,
+  snapshot_date date not null default current_date,
+  created_at timestamptz not null default now(),
+  unique (user_id, metric, snapshot_date)
+);
+create index if not exists metric_snapshots_user_idx on public.metric_snapshots(user_id, metric, snapshot_date desc);
+alter table public.metric_snapshots enable row level security;
+drop policy if exists "owner all" on public.metric_snapshots;
+create policy "owner all" on public.metric_snapshots for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- AI-triage reasoning ("Summary"/"Suggested next step"), persisted so it survives reload
+-- instead of only existing ephemerally in Tickets.tsx's local component state.
+alter table public.tickets add column if not exists ai_note text;

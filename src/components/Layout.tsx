@@ -19,6 +19,8 @@ import { ACCENT } from "./ui";
 import { NOTIF_ICON, notifAgo, fireDesktopNotification, DEFAULT_NOTIF_PREFS, type NotificationPrefs } from "../lib/notifications";
 import { fetchSettings } from "../lib/settings";
 import { fetchIntegrations } from "../lib/integrations";
+import { logFocusEvent } from "../lib/focusEvents";
+import { TIMER_PROJECT_KEY, ls as timerLs } from "../lib/timer";
 import { gmailList, gmailConfigure } from "../lib/agent";
 import { mailRules, matchesRule } from "../lib/mailRules";
 import { ORBIT_AGENT_DOWNLOAD_URL } from "../lib/downloads";
@@ -34,6 +36,7 @@ const NAV_GROUPS: { label: string; items: { to: string; label: string; icon: str
     { to: "/projects", label: "Projects", icon: "boxes" },
     { to: "/tasks", label: "Tasks", icon: "layers" },
     { to: "/sprints", label: "Sprints", icon: "sprint" },
+    { to: "/insights", label: "Insights", icon: "gauge" },
   ] },
   { label: "Team", items: [
     { to: "/teams", label: "Teams", icon: "users" },
@@ -98,6 +101,18 @@ export function Layout() {
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, []);
+
+  // Logs a focus_events "route_change" row whenever the top-level section
+  // changes (e.g. /projects -> /postgres), not on every sub-navigation within
+  // the same section — that's the granularity context-switching-cost analysis
+  // needs, without a row per click. See src/lib/focusEvents.ts.
+  const lastSectionRef = useRef<string | null>(null);
+  useEffect(() => {
+    const section = location.pathname.split("/")[1] || "app";
+    if (section === lastSectionRef.current) return;
+    lastSectionRef.current = section;
+    logFocusEvent("route_change", { route: section, projectId: timerLs.get(TIMER_PROJECT_KEY) });
+  }, [location.pathname]);
 
   useEffect(() => {
     const tick = () => setClock(tzClock(tz));

@@ -19,6 +19,7 @@ export function CommandPalette({ onClose, onAskAi }: { onClose: () => void; onAs
     { group: "Go to", label: "Projects", icon: "boxes", run: () => go("/projects") },
     { group: "Go to", label: "Teams", icon: "users", run: () => go("/teams") },
     { group: "Go to", label: "Sprints", icon: "sprint", run: () => go("/sprints") },
+    { group: "Go to", label: "Insights", icon: "gauge", run: () => go("/insights") },
     { group: "Go to", label: "Tickets", icon: "ticket", run: () => go("/tickets") },
     { group: "Go to", label: "Tasks", icon: "layers", run: () => go("/tasks") },
     { group: "Go to", label: "Mail", icon: "mail", run: () => go("/mail") },

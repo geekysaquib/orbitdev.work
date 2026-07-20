@@ -38,7 +38,7 @@ export interface TeamActivity {
 export interface Ticket {
   id: string; user_id: string; project_id: string | null; zoho_id: string | null;
   title: string; body: string | null; priority: Priority; status: string;
-  synced_at: string | null; created_at: string;
+  synced_at: string | null; ai_note: string | null; created_at: string;
 }
 export interface CalEvent {
   id: string; user_id: string; project_id: string | null; title: string;

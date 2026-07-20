@@ -32,7 +32,7 @@ export async function fetchAzureDevopsRepos(): Promise<AzureDevopsRepo[]> {
   return j.repos ?? [];
 }
 
-export interface AzureDevopsPull { number: number; title: string; url: string; user: string; updatedAt: string; }
+export interface AzureDevopsPull { number: number; title: string; url: string; user: string; createdAt: string; updatedAt: string; }
 export async function fetchAzureDevopsPulls(repoFullName: string): Promise<AzureDevopsPull[]> {
   const j = await get<{ pulls: AzureDevopsPull[] }>(`?mode=pulls&repo=${encodeURIComponent(repoFullName)}`);
   return j.pulls ?? [];

@@ -37,7 +37,7 @@ export function useTable<T extends { id: string }>(
     const { data, error } = await supabase.from(table)
       .insert({ ...row, user_id: u.id } as never).select().single();
     if (!error && data) setRows((r) => [data as T, ...r]);
-    return { error: error?.message };
+    return { error: error?.message, data: data as unknown as T | undefined };
   }, [table]);
 
   const update = useCallback(async (id: string, patch: Partial<T>) => {

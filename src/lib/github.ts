@@ -27,7 +27,7 @@ export async function fetchGithubRepos(): Promise<GithubRepo[]> {
   return j.repos ?? [];
 }
 
-export interface GithubPull { number: number; title: string; url: string; user: string; updatedAt: string; }
+export interface GithubPull { number: number; title: string; url: string; user: string; createdAt: string; updatedAt: string; }
 export async function fetchGithubPulls(repo: string): Promise<GithubPull[]> {
   const j = await get<{ pulls: GithubPull[] }>(`?mode=pulls&repo=${encodeURIComponent(repo)}`);
   return j.pulls ?? [];

@@ -48,7 +48,7 @@ export const handler: Handler = async (event: HandlerEvent) => {
         if (!repo) return json(400, { error: "repo required" });
         const r = await gl(baseUrl, `/projects/${encodeURIComponent(repo)}/merge_requests?state=opened&per_page=50`, token);
         if (!r.ok) return json(r.status, { error: r.body?.message || "Couldn't list merge requests" });
-        return json(200, { pulls: (r.body as any[]).map((x) => ({ number: x.iid, title: x.title, url: x.web_url, user: x.author?.username, updatedAt: x.updated_at })) });
+        return json(200, { pulls: (r.body as any[]).map((x) => ({ number: x.iid, title: x.title, url: x.web_url, user: x.author?.username, createdAt: x.created_at, updatedAt: x.updated_at })) });
       }
       case "commits": {
         if (!repo) return json(400, { error: "repo required" });

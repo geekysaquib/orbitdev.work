@@ -8,16 +8,23 @@ import { fetchZohoTickets } from "../lib/zoho";
 import { fetchIntegrations } from "../lib/integrations";
 import { ask, type AiSource } from "../lib/ai";
 import { recordAudit } from "../lib/audit";
-import type { Ticket } from "../lib/types";
+import type { Ticket, Project } from "../lib/types";
 
-const TRIAGE_SYSTEM = `You triage support/dev tickets. Given a title and description, respond with exactly three lines:
+const TRIAGE_SYSTEM = `You triage support/dev tickets. Given a title, description, and a list of projects, respond with exactly four lines:
 Priority: <low|med|high>
+Project: <exact project name from the list, or "none">
 Summary: <one sentence, plain English>
 Suggested next step: <one short actionable sentence>
 No other text, no markdown.`;
 
+function parseTriageLine(text: string, label: string): string | null {
+  const m = text.match(new RegExp(`^${label}:\\s*(.+)$`, "im"));
+  return m ? m[1].trim() : null;
+}
+
 export default function Tickets() {
   const { rows, insert, update, reload, loading } = useTable<Ticket>("tickets");
+  const { rows: projects } = useTable<Project>("projects");
   const toast = useToast();
   const [sel, setSel] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -37,13 +44,34 @@ export default function Tickets() {
 
   useEffect(() => { fetchIntegrations().then((i) => setAiApiKey(i?.anthropic_api_key || null)); }, []);
 
+  function triagePrompt(t: { title: string; body: string | null }): string {
+    const projectNames = projects.map((p) => p.name).join(", ") || "(none)";
+    return `Title: ${t.title}\n\nDescription: ${t.body || "(none)"}\n\nProjects: ${projectNames}`;
+  }
+
+  /** Parses the model's 4-line response and persists priority/project_id/ai_note — used both by the manual button and auto-triage on sync. Silently leaves fields unset when a line can't be parsed, rather than blocking. */
+  async function applyTriageResult(ticketId: string, text: string) {
+    const priorityRaw = (parseTriageLine(text, "Priority") || "").toLowerCase();
+    const priority = priorityRaw === "low" || priorityRaw === "med" || priorityRaw === "high" ? (priorityRaw as Ticket["priority"]) : null;
+    const projectName = parseTriageLine(text, "Project");
+    const matched = projectName && projectName.toLowerCase() !== "none" ? projects.find((p) => p.name.toLowerCase() === projectName.toLowerCase()) : undefined;
+    const note = [parseTriageLine(text, "Summary"), parseTriageLine(text, "Suggested next step")].filter(Boolean).join("\n");
+    const patch: Partial<Ticket> = {};
+    if (priority) patch.priority = priority;
+    if (matched) patch.project_id = matched.id;
+    if (note) patch.ai_note = note;
+    if (Object.keys(patch).length > 0) await update(ticketId, patch);
+  }
+
   async function runTriage(t: Ticket) {
     if (triaging) return;
     setTriaging(true); setTriage(null);
-    const r = await ask(`Title: ${t.title}\n\nDescription: ${t.body || "(none)"}`, TRIAGE_SYSTEM, aiApiKey);
+    const r = await ask(triagePrompt(t), TRIAGE_SYSTEM, aiApiKey);
     setTriaging(false);
     if (!r.ok) { toast(`Triage failed: ${r.error}${r.source === "local" ? " — set up local AI in Settings, or add an Anthropic key" : ""}`); return; }
-    setTriage({ id: t.id, text: r.text || "", source: r.source });
+    const text = r.text || "";
+    setTriage({ id: t.id, text, source: r.source });
+    await applyTriageResult(t.id, text);
   }
 
   async function syncZoho() {
@@ -59,7 +87,15 @@ export default function Tickets() {
           body: t.description || null, synced_at: new Date().toISOString(),
         };
         if (existing) { await update(existing.id, payload as Partial<Ticket>); updated++; }
-        else { await insert({ zoho_id: t.id, ...payload } as Partial<Ticket>); added++; }
+        else {
+          const { data } = await insert({ zoho_id: t.id, ...payload } as Partial<Ticket>);
+          added++;
+          // Auto-triage only brand-new items — resyncing an existing ticket never re-triages it.
+          if (data) {
+            const r = await ask(triagePrompt(data), TRIAGE_SYSTEM, aiApiKey);
+            if (r.ok) await applyTriageResult(data.id, r.text || "");
+          }
+        }
       }
       toast(z.length === 0 ? "Zoho connected — no items found for this project" : `Synced ${z.length} items · ${added} new, ${updated} updated`);
       reload();
@@ -113,10 +149,15 @@ export default function Tickets() {
               <div className="eyebrow">Description</div>
               <p style={{ marginTop: 10, color: "var(--muted)", lineHeight: 1.7, fontSize: 13.5 }}>{active.body || "No description synced for this item."}</p>
             </div>
-            {triage && triage.id === active.id && (
+            {triage && triage.id === active.id ? (
               <div className="card" style={{ padding: 20, marginTop: 14, maxWidth: 720, borderColor: "rgba(55,223,160,.28)" }}>
                 <div className="eyebrow" style={{ display: "flex", alignItems: "center", gap: 7 }}><span style={{ color: "var(--mint)" }}><Icon name="sparkles" size={13} /></span>AI triage · {triage.source === "local" ? "local model" : "Claude"}</div>
                 <p className="mono" style={{ marginTop: 10, color: "var(--muted)", lineHeight: 1.7, fontSize: 12.5, whiteSpace: "pre-wrap" }}>{triage.text}</p>
+              </div>
+            ) : active.ai_note && (
+              <div className="card" style={{ padding: 20, marginTop: 14, maxWidth: 720, borderColor: "rgba(55,223,160,.28)" }}>
+                <div className="eyebrow" style={{ display: "flex", alignItems: "center", gap: 7 }}><span style={{ color: "var(--mint)" }}><Icon name="sparkles" size={13} /></span>AI triage</div>
+                <p className="mono" style={{ marginTop: 10, color: "var(--muted)", lineHeight: 1.7, fontSize: 12.5, whiteSpace: "pre-wrap" }}>{active.ai_note}</p>
               </div>
             )}
           </>

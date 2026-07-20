@@ -27,7 +27,7 @@ export async function fetchGitlabRepos(): Promise<GitlabRepo[]> {
   return j.repos ?? [];
 }
 
-export interface GitlabMergeRequest { number: number; title: string; url: string; user: string; updatedAt: string; }
+export interface GitlabMergeRequest { number: number; title: string; url: string; user: string; createdAt: string; updatedAt: string; }
 export async function fetchGitlabPulls(repo: string): Promise<GitlabMergeRequest[]> {
   const j = await get<{ pulls: GitlabMergeRequest[] }>(`?mode=pulls&repo=${encodeURIComponent(repo)}`);
   return j.pulls ?? [];

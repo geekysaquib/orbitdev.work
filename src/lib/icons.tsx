@@ -80,6 +80,7 @@ const P: Record<string, JSX.Element> = {
   listBullet: <><circle cx="4.5" cy="6" r="1.3"/><circle cx="4.5" cy="12" r="1.3"/><circle cx="4.5" cy="18" r="1.3"/><line x1="9" y1="6" x2="20" y2="6"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="18" x2="20" y2="18"/></>,
   listNumber: <><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><path d="M4 5h1.5v4"/><path d="M4 10.5h2l-2 2.5h2"/><path d="M4 16h2v2h-2v2h2"/></>,
   paperclip: <path d="M21.4 11.05 12.2 20.24a5.5 5.5 0 0 1-7.78-7.78l9.19-9.2a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.2a1.5 1.5 0 0 1-2.12-2.13l8.49-8.48"/>,
+  gauge: <><path d="M12 15 15.5 9"/><path d="M3.5 19a9.5 9.5 0 1 1 17 0"/><path d="M3.5 19h17"/></>,
 };
 
 export function Icon({ name, size = 16, fill = false, className = "" }:

@@ -124,6 +124,7 @@ create table if not exists public.tickets (
   priority text not null default 'med' check (priority in ('low','med','high')),
   status text not null default 'Open',
   synced_at timestamptz,
+  ai_note text,
   created_at timestamptz not null default now(),
   unique (user_id, zoho_id)
 );
@@ -163,6 +164,23 @@ create table if not exists public.time_entries (
   seconds int not null default 0,
   created_at timestamptz not null default now()
 );
+
+-- ---------- focus events (append-only activity log for insights) ----------
+-- Idle/resume pairs (from the same tab-level idle detection that pauses the
+-- focus timer, see src/context/Break.tsx) plus top-level route changes (see
+-- src/components/Layout.tsx) — enough to later derive interrupted-hours and
+-- context-switching-cost views without needing a heavier event pipeline.
+-- No view reads this yet; it exists so data starts accumulating now.
+create table if not exists public.focus_events (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  project_id uuid references public.projects(id) on delete set null,
+  type text not null check (type in ('idle','resume','route_change')),
+  route text,
+  at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+create index if not exists focus_events_user_at_idx on public.focus_events(user_id, at desc);
 
 -- ---------- integrations (one row per user: Zoho + Gmail keys) ----------
 create table if not exists public.integrations (
@@ -311,11 +329,24 @@ create table if not exists public.audit_log (
 );
 create index if not exists audit_log_user_created_idx on public.audit_log(user_id, created_at desc);
 
+-- ---------- metric snapshots (daily-brief/anomaly-scan crons' day-over-day deltas) ----------
+create table if not exists public.metric_snapshots (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  metric text not null,               -- 'sentry_open_issues' | 'zoho_open_bugs' | 'ci_failed_runs'
+  value numeric not null,
+  meta jsonb not null default '{}'::jsonb,
+  snapshot_date date not null default current_date,
+  created_at timestamptz not null default now(),
+  unique (user_id, metric, snapshot_date)
+);
+create index if not exists metric_snapshots_user_idx on public.metric_snapshots(user_id, metric, snapshot_date desc);
+
 -- ================= Row Level Security =================
 do $$
 declare t text;
 begin
-  foreach t in array array['users','otp_codes','teams','team_members','team_invites','projects','tasks','tickets','events','notifications','time_entries','integrations','pg_servers','user_settings','break_logs','audit_log','provider_connections','mail_templates','scheduled_emails','mail_rules']
+  foreach t in array array['users','otp_codes','teams','team_members','team_invites','projects','tasks','tickets','events','notifications','time_entries','focus_events','integrations','pg_servers','user_settings','break_logs','audit_log','provider_connections','mail_templates','scheduled_emails','mail_rules','metric_snapshots']
   loop
     execute format('alter table public.%I enable row level security;', t);
   end loop;
@@ -395,7 +426,7 @@ revoke select (password_hash) on public.users from authenticated, anon;
 do $$
 declare t text;
 begin
-  foreach t in array array['tickets','events','notifications','time_entries','integrations','pg_servers','break_logs','provider_connections','mail_templates','scheduled_emails','mail_rules']
+  foreach t in array array['tickets','events','notifications','time_entries','integrations','pg_servers','break_logs','provider_connections','mail_templates','scheduled_emails','mail_rules','metric_snapshots']
   loop
     execute format('drop policy if exists "owner all" on public.%I;', t);
     execute format(
@@ -413,6 +444,12 @@ drop policy if exists "owner select" on public.audit_log;
 create policy "owner select" on public.audit_log for select using (user_id = auth.uid());
 drop policy if exists "owner insert" on public.audit_log;
 create policy "owner insert" on public.audit_log for insert with check (user_id = auth.uid());
+
+-- focus_events is append-only for the same reason as audit_log above.
+drop policy if exists "owner select" on public.focus_events;
+create policy "owner select" on public.focus_events for select using (user_id = auth.uid());
+drop policy if exists "owner insert" on public.focus_events;
+create policy "owner insert" on public.focus_events for insert with check (user_id = auth.uid());
 -- Team activity feed: a teammate can see any row explicitly logged against a
 -- shared team (team_id set), not just their own — reuses is_team_member()
 -- (defined above for team_members' own policy) since the same

@@ -49,7 +49,7 @@ export const handler: Handler = async (event: HandlerEvent) => {
         if (!repo) return json(400, { error: "repo required" });
         const r = await gh(`/repos/${repo}/pulls?state=open&per_page=50`, token);
         if (!r.ok) return json(r.status, { error: r.body?.message || "Couldn't list pull requests" });
-        return json(200, { pulls: (r.body as any[]).map((x) => ({ number: x.number, title: x.title, url: x.html_url, user: x.user?.login, updatedAt: x.updated_at })) });
+        return json(200, { pulls: (r.body as any[]).map((x) => ({ number: x.number, title: x.title, url: x.html_url, user: x.user?.login, createdAt: x.created_at, updatedAt: x.updated_at })) });
       }
       case "commits": {
         if (!repo) return json(400, { error: "repo required" });

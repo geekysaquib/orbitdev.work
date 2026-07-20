@@ -83,7 +83,9 @@ export const handler: Handler = async (event: HandlerEvent) => {
       return json(200, {
         pulls: pulls.map((x) => ({
           number: x.pullRequestId, title: x.title, user: x.createdBy?.displayName,
-          updatedAt: x.creationDate,
+          // ADO's "active PRs" list endpoint doesn't return a separate last-updated
+          // timestamp without a per-PR follow-up call, so updatedAt reuses creationDate.
+          createdAt: x.creationDate, updatedAt: x.creationDate,
           url: `https://dev.azure.com/${org}/${project}/_git/${repo}/pullrequest/${x.pullRequestId}`,
         })),
       });

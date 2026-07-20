@@ -1,42 +1,23 @@
 import { schedule } from "@netlify/functions";
 import { dbSelect, dbInsert } from "./_lib/db";
+import { askClaude } from "./_lib/anthropic";
 
 /**
  * Monday-morning "how was your week" digest — mirrors mail-scheduled-send.ts's
  * shape (schedule() export, service-role reads via _lib/db.ts since a cron
  * invocation has no caller JWT to scope RLS with). Summarizes each user's last
  * 7 days from `audit_log` (task/project activity, team actions) and
- * `time_entries` (hours tracked), via a direct Anthropic REST call — NOT the
- * agent's /ai/ask (that only exists on the user's own machine, unreachable
- * from a Netlify cron job) — using the same per-user `anthropic_api_key`
- * already stored in `integrations`. Users without a key are skipped rather
- * than falling back to the agent's local model, since there's no running
- * agent for a cron job to call.
+ * `time_entries` (hours tracked), via a direct Anthropic REST call (see
+ * _lib/anthropic.ts) — NOT the agent's /ai/ask (that only exists on the
+ * user's own machine, unreachable from a Netlify cron job) — using the same
+ * per-user `anthropic_api_key` already stored in `integrations`. Users
+ * without a key are skipped rather than falling back to the agent's local
+ * model, since there's no running agent for a cron job to call.
  */
 
 interface IntegrationRow { user_id: string; anthropic_api_key: string | null; }
 interface AuditRow { action: string; created_at: string; }
 interface TimeEntryRow { seconds: number; }
-
-async function askClaude(apiKey: string, system: string, prompt: string): Promise<string | null> {
-  try {
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001", max_tokens: 500,
-        system, messages: [{ role: "user", content: prompt }],
-      }),
-    });
-    const j = await r.json().catch(() => ({} as Record<string, unknown>));
-    if (!r.ok) { console.error("[weekly-digest] anthropic call failed", j); return null; }
-    const content = (j as { content?: { type: string; text?: string }[] }).content;
-    return content?.find((b) => b.type === "text")?.text || null;
-  } catch (e) {
-    console.error("[weekly-digest] anthropic call threw", e);
-    return null;
-  }
-}
 
 async function run() {
   const since = new Date(Date.now() - 7 * 86_400_000).toISOString();

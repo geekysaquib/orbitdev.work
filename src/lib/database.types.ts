@@ -73,12 +73,12 @@ export interface Database {
         {
           id: string; user_id: string; project_id: string | null; zoho_id: string | null;
           title: string; body: string | null; priority: "low" | "med" | "high"; status: string;
-          synced_at: string | null; created_at: string;
+          synced_at: string | null; ai_note: string | null; created_at: string;
         },
         {
           id?: string; user_id: string; project_id?: string | null; zoho_id?: string | null;
           title: string; body?: string | null; priority?: "low" | "med" | "high"; status?: string;
-          synced_at?: string | null; created_at?: string;
+          synced_at?: string | null; ai_note?: string | null; created_at?: string;
         }
       >;
       events: Table<
@@ -183,6 +183,17 @@ export interface Database {
         {
           id?: string; user_id: string; team_id?: string | null; action: string; entity_type: string;
           entity_id?: string | null; meta?: Json; created_at?: string;
+        },
+        never // append-only — no update policy in schema.sql, rows are never edited after insert
+      >;
+      focus_events: Table<
+        {
+          id: string; user_id: string; project_id: string | null;
+          type: "idle" | "resume" | "route_change"; route: string | null; at: string; created_at: string;
+        },
+        {
+          id?: string; user_id: string; project_id?: string | null;
+          type: "idle" | "resume" | "route_change"; route?: string | null; at?: string; created_at?: string;
         },
         never // append-only — no update policy in schema.sql, rows are never edited after insert
       >;

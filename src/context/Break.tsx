@@ -1,7 +1,8 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { fetchSettings, saveSettings } from "../lib/settings";
-import { TIMER_KEY, TIMER_PAUSE_KEY as PAUSE_KEY, TIMER_EVENT, ls, emitTimerChange } from "../lib/timer";
+import { TIMER_KEY, TIMER_PAUSE_KEY as PAUSE_KEY, TIMER_PROJECT_KEY, TIMER_EVENT, ls, emitTimerChange } from "../lib/timer";
 import { useIdleDetection } from "../hooks/useIdleDetection";
+import { logFocusEvent } from "../lib/focusEvents";
 
 const BREAK_KEY = "orbit.onBreak";
 const BREAK_START_KEY = "orbit.breakStart";
@@ -64,6 +65,7 @@ export function BreakProvider({ children }: { children: ReactNode }) {
     ls.del(TIMER_KEY);
     emit();
     setIdlePaused(true);
+    logFocusEvent("idle", { projectId: ls.get(TIMER_PROJECT_KEY) });
   };
   const resumeFromIdle = () => {
     if (!idlePaused) return;
@@ -75,6 +77,7 @@ export function BreakProvider({ children }: { children: ReactNode }) {
       emit();
     }
     setIdlePaused(false);
+    logFocusEvent("resume", { projectId: ls.get(TIMER_PROJECT_KEY) });
   };
   useIdleDetection(idleEnabled && !onBreak, idleMinutes, pauseForIdle, resumeFromIdle);
 

@@ -32,6 +32,17 @@ export async function dbInsert<T = Record<string, unknown>>(table: string, row: 
   return Array.isArray(j) ? j[0] : j;
 }
 
+/** Upsert via PostgREST's `Prefer: resolution=merge-duplicates` — `onConflict` must match an existing unique constraint's column list. */
+export async function dbUpsert<T = Record<string, unknown>>(table: string, row: Record<string, unknown>, onConflict: string): Promise<T> {
+  assertConfigured();
+  const r = await fetch(`${URL}/rest/v1/${table}?on_conflict=${onConflict}`, {
+    method: "POST", headers: headers({ Prefer: "resolution=merge-duplicates,return=representation" }), body: JSON.stringify(row),
+  });
+  if (!r.ok) throw new Error(`db upsert ${table} failed: ${r.status} ${(await r.text().catch(() => "")).slice(0, 200)}`);
+  const j = await r.json();
+  return Array.isArray(j) ? j[0] : j;
+}
+
 export async function dbUpdate(table: string, query: string, patch: Record<string, unknown>): Promise<void> {
   assertConfigured();
   const r = await fetch(`${URL}/rest/v1/${table}?${query}`, { method: "PATCH", headers: headers(), body: JSON.stringify(patch) });
