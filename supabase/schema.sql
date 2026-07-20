@@ -110,8 +110,34 @@ create table if not exists public.tasks (
   status text not null default 'todo' check (status in ('todo','doing','review','done')),
   priority text not null default 'med' check (priority in ('low','med','high')),
   due_date date,
+  estimate_minutes int check (estimate_minutes is null or estimate_minutes > 0),
+  completed_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+-- Keeps completed_at in lockstep with status ('done' <-> timestamp) so every
+-- status-changing call site (Tasks.tsx drag-drop, Zoho-ticket conversion,
+-- etc.) gets weekly-retrospective/estimate-accuracy data for free instead of
+-- each one having to remember to stamp it. BEFORE (not AFTER) so it can
+-- rewrite NEW directly; also overwrites any completed_at a client tries to
+-- set explicitly, since status is the single source of truth for it.
+create or replace function public.set_task_completed_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  if NEW.status = 'done' and (TG_OP = 'INSERT' or OLD.status is distinct from 'done') then
+    NEW.completed_at := now();
+  elsif NEW.status <> 'done' then
+    NEW.completed_at := null;
+  end if;
+  return NEW;
+end;
+$$;
+drop trigger if exists set_task_completed_at on public.tasks;
+create trigger set_task_completed_at
+before insert or update on public.tasks
+for each row execute function public.set_task_completed_at();
 
 -- ---------- tickets (mirrors Zoho, synced via Netlify function) ----------
 create table if not exists public.tickets (
@@ -159,11 +185,13 @@ create table if not exists public.time_entries (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
   project_id uuid references public.projects(id) on delete set null,
+  task_id uuid references public.tasks(id) on delete set null,
   started_at timestamptz not null,
   ended_at timestamptz,
   seconds int not null default 0,
   created_at timestamptz not null default now()
 );
+create index if not exists time_entries_task_idx on public.time_entries(task_id) where task_id is not null;
 
 -- ---------- focus events (append-only activity log for insights) ----------
 -- Idle/resume pairs (from the same tab-level idle detection that pauses the
@@ -188,7 +216,8 @@ create table if not exists public.integrations (
   zoho_client_id text, zoho_client_secret text, zoho_refresh_token text,
   zoho_dc text default 'in', zoho_team_id text, zoho_project_id text,
   gmail_user text, gmail_app_password text,
-  anthropic_api_key text,
+  anthropic_api_key text, gemini_api_key text, openai_api_key text, grok_api_key text,
+  ai_provider text default 'anthropic' check (ai_provider in ('anthropic','gemini','openai','grok')),
   updated_at timestamptz not null default now()
 );
 
@@ -342,11 +371,33 @@ create table if not exists public.metric_snapshots (
 );
 create index if not exists metric_snapshots_user_idx on public.metric_snapshots(user_id, metric, snapshot_date desc);
 
+-- ---------- automation: when-X-then-Y rules ----------
+-- Triggers are raised client-side at the point the change happens (a task moved
+-- to done, a timer started) rather than by DB triggers: the actions run through
+-- the same RLS-scoped client calls the user would make by hand, so a rule can
+-- never do something its owner couldn't. `trigger_config`/`action_config` stay
+-- jsonb because each type carries a different shape — see src/lib/automation.ts,
+-- which owns the validation.
+create table if not exists public.automation_rules (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  name text not null,
+  enabled boolean not null default true,
+  trigger_type text not null check (trigger_type in ('task_status','ticket_status','ticket_created','timer_started','timer_stopped','mail_rule_matched')),
+  trigger_config jsonb not null default '{}'::jsonb,
+  action_type text not null check (action_type in ('create_task','set_task_status','set_ticket_status','notify','start_timer','send_email','create_teams_meeting','run_agent_command','webhook')),
+  action_config jsonb not null default '{}'::jsonb,
+  run_count integer not null default 0,
+  last_run_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create index if not exists automation_rules_user_idx on public.automation_rules(user_id, enabled);
+
 -- ================= Row Level Security =================
 do $$
 declare t text;
 begin
-  foreach t in array array['users','otp_codes','teams','team_members','team_invites','projects','tasks','tickets','events','notifications','time_entries','focus_events','integrations','pg_servers','user_settings','break_logs','audit_log','provider_connections','mail_templates','scheduled_emails','mail_rules','metric_snapshots']
+  foreach t in array array['users','otp_codes','teams','team_members','team_invites','projects','tasks','tickets','events','notifications','time_entries','focus_events','integrations','pg_servers','user_settings','break_logs','audit_log','provider_connections','mail_templates','scheduled_emails','mail_rules','metric_snapshots','automation_rules']
   loop
     execute format('alter table public.%I enable row level security;', t);
   end loop;
@@ -426,7 +477,7 @@ revoke select (password_hash) on public.users from authenticated, anon;
 do $$
 declare t text;
 begin
-  foreach t in array array['tickets','events','notifications','time_entries','integrations','pg_servers','break_logs','provider_connections','mail_templates','scheduled_emails','mail_rules','metric_snapshots']
+  foreach t in array array['tickets','events','notifications','time_entries','integrations','pg_servers','break_logs','provider_connections','mail_templates','scheduled_emails','mail_rules','metric_snapshots','automation_rules']
   loop
     execute format('drop policy if exists "owner all" on public.%I;', t);
     execute format(

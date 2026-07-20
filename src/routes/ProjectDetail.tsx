@@ -7,8 +7,9 @@ import { useTable } from "../hooks/useTable";
 import { useToast } from "../context/Toast";
 import { useAgent } from "../context/Agent";
 import { launch, gitPull, gitStatus, gitBranches, gitLog, gitDiff, type GitStatusResult, type GitBranch, type GitCommit } from "../lib/agent";
-import { fetchIntegrations } from "../lib/integrations";
+import { fetchIntegrations, providerKeys } from "../lib/integrations";
 import { generateCommitMessage, generatePrDescription } from "../lib/gitWriter";
+import type { ProviderKeys, CloudProvider } from "../lib/ai";
 import { AiWriterModal } from "../components/AiWriterModal";
 import { ProjectTerminal } from "../components/ProjectTerminal";
 import { CommitGraph } from "../components/CommitGraph";
@@ -67,8 +68,9 @@ export default function ProjectDetail() {
   const [linkRepoOpen, setLinkRepoOpen] = useState(false);
 
   // ---- AI commit-message / PR-description writer ----
-  const [aiApiKey, setAiApiKey] = useState<string | null>(null);
-  useEffect(() => { fetchIntegrations().then((i) => setAiApiKey(i?.anthropic_api_key || null)); }, []);
+  const [aiKeys, setAiKeys] = useState<ProviderKeys>({});
+  const [aiProvider, setAiProvider] = useState<CloudProvider | undefined>(undefined);
+  useEffect(() => { fetchIntegrations().then((i) => { setAiKeys(providerKeys(i)); setAiProvider(i?.ai_provider ?? undefined); }); }, []);
   const [commitAi, setCommitAi] = useState<{ loading: boolean; text: string; error?: string } | null>(null);
   const [prAi, setPrAi] = useState<{ loading: boolean; text: string; error?: string } | null>(null);
 
@@ -79,7 +81,7 @@ export default function ProjectDetail() {
     const d = await gitDiff(path);
     if (!d.ok) { setCommitAi({ loading: false, text: "", error: d.error }); return; }
     const diff = d.staged?.trim() ? d.staged : (d.unstaged || "");
-    const r = await generateCommitMessage(diff, aiApiKey);
+    const r = await generateCommitMessage(diff, aiKeys, aiProvider);
     setCommitAi({ loading: false, text: r.text || "", error: r.error });
   }
 
@@ -91,7 +93,7 @@ export default function ProjectDetail() {
     const d = await gitDiff(path, base);
     if (!d.ok) { setPrAi({ loading: false, text: "", error: d.error }); return; }
     const subjects = commits.slice(0, 15).map((c) => c.subject);
-    const r = await generatePrDescription(subjects, d.range || "", aiApiKey);
+    const r = await generatePrDescription(subjects, d.range || "", aiKeys, aiProvider);
     setPrAi({ loading: false, text: r.text || "", error: r.error });
   }
 

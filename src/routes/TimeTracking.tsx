@@ -1,29 +1,43 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Icon } from "../lib/icons";
+import { Select } from "../components/Select";
 import { ACCENT, OrbitLoader, Empty, SetupRequired } from "../components/ui";
 import { useToast } from "../context/Toast";
 import { useZoho } from "../context/Zoho";
 import { useAgent } from "../context/Agent";
 import { useBreak } from "../context/Break";
+import { useTable } from "../hooks/useTable";
 import { fetchTimesheet, type Timesheet } from "../lib/zoho";
 import { fetchOrbitHours, type OrbitHours } from "../lib/orbitHours";
 import { TIMER_EVENT, readTimer, startTimer, stopTimer } from "../lib/timer";
+import { fireAsync } from "../lib/automation";
+import type { Project, Task } from "../lib/types";
 
 export default function TimeTracking() {
   const toast = useToast();
   const zoho = useZoho();
   const { status: agentStatus } = useAgent();
   const { onBreak } = useBreak();
+  const { rows: projects } = useTable<Project>("projects");
+  const { rows: tasks } = useTable<Task>("tasks");
   const [running, setRunning] = useState(false);
   const [sec, setSec] = useState(0);
   const [ts, setTs] = useState<Timesheet | null>(null);
   const [loading, setLoading] = useState(true);
   const [orbit, setOrbit] = useState<OrbitHours>({ todayH: 0, totalH: 0 });
+  const [pickProject, setPickProject] = useState("");
+  const [pickTask, setPickTask] = useState("");
+  const [runningProjectId, setRunningProjectId] = useState<string | null>(null);
+  const [runningTaskId, setRunningTaskId] = useState<string | null>(null);
 
   // restore a running timer after a page refresh, and stay in sync when it's
   // started/paused/resumed elsewhere (break mode, another tab, Ask AI)
   useEffect(() => {
-    const sync = () => { const t = readTimer(); setRunning(t.startedAt !== null); setSec(t.seconds); };
+    const sync = () => {
+      const t = readTimer();
+      setRunning(t.startedAt !== null); setSec(t.seconds);
+      setRunningProjectId(t.projectId); setRunningTaskId(t.taskId);
+    };
     sync();
     window.addEventListener(TIMER_EVENT, sync);
     window.addEventListener("storage", sync);
@@ -45,17 +59,29 @@ export default function TimeTracking() {
 
   const agentDown = agentStatus !== "online";
 
+  const openTasks = useMemo(
+    () => tasks.filter((t) => t.status !== "done" && (!pickProject || t.project_id === pickProject)),
+    [tasks, pickProject],
+  );
+  const projName = useMemo(() => Object.fromEntries(projects.map((p) => [p.id, p.name])), [projects]);
+  const taskTitle = useMemo(() => Object.fromEntries(tasks.map((t) => [t.id, t.title])), [tasks]);
+
   async function toggle() {
     if (running) {
       setRunning(false);
+      // Read the session's project/task before stopTimer() clears them.
+      const { projectId, taskId } = readTimer();
       const logged = await stopTimer();
       const h = await fetchOrbitHours(); setOrbit(h);
       toast(`Logged ${Math.floor(logged / 60)}m ${logged % 60}s to Orbit hours`);
       setSec(0);
+      setPickProject(""); setPickTask("");
+      fireAsync({ type: "timer_stopped", projectId, taskId, seconds: logged });
     } else {
       if (agentDown) { toast("Agent required — start the ORBIT agent to run the timer"); return; }
-      startTimer();
+      startTimer(pickProject || null, pickTask || null);
       setRunning(true); toast("Timer started");
+      fireAsync({ type: "timer_started", projectId: pickProject || null, taskId: pickTask || null });
     }
   }
 
@@ -88,6 +114,25 @@ export default function TimeTracking() {
       <div className="card" style={{ padding: 24, display: "flex", flexDirection: "column", alignItems: "center", gap: 14, maxWidth: 460 }}>
         <div className="eyebrow">Orbit focus timer</div>
         <div className="timerbig" style={{ color: running ? ACCENT.mint : "var(--text)" }}>00:{mm}:{ss}</div>
+        {running ? (
+          (runningProjectId || runningTaskId) && (
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>
+              Logging to {runningTaskId ? (taskTitle[runningTaskId] ?? "a task") : projName[runningProjectId!] ?? "a project"}
+              {runningTaskId && runningProjectId && projName[runningProjectId] ? ` · ${projName[runningProjectId]}` : ""}
+            </div>
+          )
+        ) : (
+          <div style={{ display: "flex", gap: 8, width: "100%" }}>
+            <Select value={pickProject} onChange={(e) => { setPickProject(e.target.value); setPickTask(""); }} full>
+              <option value="">No project</option>
+              {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </Select>
+            <Select value={pickTask} onChange={(e) => setPickTask(e.target.value)} full>
+              <option value="">No task</option>
+              {openTasks.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
+            </Select>
+          </div>
+        )}
         <button className="btn-primary" onClick={toggle} disabled={(agentDown && !running) || (onBreak && !running)}>
           {running ? <Icon name="bolt" size={16} /> : <Icon name="play" size={14} fill />}{running ? "Stop & log" : "Start"}
         </button>

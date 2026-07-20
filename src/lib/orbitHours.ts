@@ -2,7 +2,7 @@ import { supabase } from "./supabase";
 import { getUser } from "./auth";
 
 /** Save a completed focus-timer session to Supabase (Orbit hours). */
-export async function logOrbitSession(seconds: number, projectId?: string | null) {
+export async function logOrbitSession(seconds: number, projectId?: string | null, taskId?: string | null) {
   if (seconds < 1) return;
   const u = getUser();
   if (!u) return;
@@ -10,6 +10,7 @@ export async function logOrbitSession(seconds: number, projectId?: string | null
   await supabase.from("time_entries").insert({
     user_id: u.id,
     project_id: projectId ?? null,
+    task_id: taskId ?? null,
     started_at: new Date(now.getTime() - seconds * 1000).toISOString(),
     ended_at: now.toISOString(),
     seconds,

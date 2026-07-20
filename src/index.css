@@ -30,7 +30,7 @@
 /* Density — scoped to the layout-defining classes rather than every px literal
    in the file (there is no spacing-scale token to refactor from). */
 [data-density="compact"] .page{padding:18px 20px 32px}
-[data-density="compact"] .topbar{height:52px}
+[data-density="compact"] .topbar{height:44px}
 [data-density="compact"] .stat{padding:12px 14px}
 [data-density="compact"] .grid-stats{gap:10px;margin:16px 0 20px}
 [data-density="compact"] .bay{padding:14px}
@@ -152,19 +152,28 @@ kbd{font-family:var(--mono);font-size:11px}
 
 /* layout */
 .app{display:flex;height:100vh}
-.rail{width:68px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:18px 0 16px;gap:6px;flex-shrink:0}
-.logo{width:44px;height:44px;display:grid;place-items:center;margin-bottom:16px;color:var(--mint)}
+/* overflow-y:auto is the safety net for shorter/zoomed viewports (13-14"
+   laptops, 125%+ Windows scaling) where even the consolidated icon set can
+   run past 100vh — content scrolls inside the rail itself instead of forcing
+   a page-level scrollbar. overflow-x is pinned to hidden (rather than left
+   to the browser's auto-promotion of the other axis) so a stray horizontal
+   scrollbar never renders across the bottom of the 52px-wide rail; a hover
+   .tip near the clipped edge can itself get clipped instead of escaping
+   sideways over the page — only matters on the rare viewport short enough to
+   actually trigger the scroll in the first place. */
+.rail{width:52px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:14px 0 12px;gap:4px;flex-shrink:0;overflow-y:auto;overflow-x:hidden}
+.logo{width:38px;height:38px;display:grid;place-items:center;margin-bottom:12px;color:var(--mint)}
 .logo svg,.auth-logo svg{stroke-width:1.7}
-.navbtn{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;color:var(--dim);position:relative;transition:all .18s}
+.navbtn{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;color:var(--dim);position:relative;transition:all .18s}
 .navbtn:hover{color:var(--muted)}
 .navbtn.on{background:var(--raised2);color:var(--text)}
-.navbtn.on::before{content:"";position:absolute;left:-14px;width:3px;height:20px;border-radius:3px;background:var(--mint)}
-.navbtn .tip{position:absolute;left:52px;background:var(--raised2);border:1px solid var(--border);padding:4px 9px;border-radius:7px;font-size:12px;white-space:nowrap;opacity:0;pointer-events:none;transform:translateX(-4px);transition:.15s;z-index:40}
+.navbtn.on::before{content:"";position:absolute;left:-12px;width:3px;height:18px;border-radius:3px;background:var(--mint)}
+.navbtn .tip{position:absolute;left:46px;background:var(--raised2);border:1px solid var(--border);padding:4px 9px;border-radius:7px;font-size:12px;white-space:nowrap;opacity:0;pointer-events:none;transform:translateX(-4px);transition:.15s;z-index:40}
 .navbtn:hover .tip{opacity:1;transform:none}
-.navbtn .dotbadge{position:absolute;top:8px;right:8px;width:7px;height:7px;border-radius:5px;background:var(--red);box-shadow:0 0 6px var(--red)}
+.navbtn .dotbadge{position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:5px;background:var(--red);box-shadow:0 0 6px var(--red)}
 
 .shell{flex:1;display:flex;flex-direction:column;min-width:0}
-.topbar{height:62px;border-bottom:1px solid var(--border);background:var(--bg2);display:flex;align-items:center;padding:0 20px;gap:14px;flex-shrink:0}
+.topbar{height:50px;border-bottom:1px solid var(--border);background:var(--bg2);display:flex;align-items:center;padding:0 16px;gap:12px;flex-shrink:0}
 .wordmark{font-family:var(--display);font-weight:700;font-size:20px;letter-spacing:2px}
 .ver{font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:1px}
 .searchbar{display:flex;align-items:center;gap:8px;height:34px;padding:0 12px;background:var(--raised);border:1px solid var(--border);border-radius:9px;color:var(--dim);font-size:13px;min-width:230px;margin-left:6px}
@@ -520,16 +529,28 @@ kbd{font-family:var(--mono);font-size:11px}
 .profile-head .pe{font-size:11.5px;color:var(--dim);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .menu-item{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:9px 11px;border-radius:9px;font-size:13px;color:var(--text2);transition:.12s}
 .menu-item:hover{background:var(--raised)}
+.menu-item.on{background:color-mix(in srgb, var(--mint) 10%, transparent);color:var(--mint)}
 .menu-item.danger{color:var(--red)}
 .menu-item.danger:hover{background:rgba(239,109,109,.1)}
 
 /* ---- rail footer / version ---- */
 .rail-foot{margin-top:auto;display:flex;flex-direction:column;align-items:center;gap:6px;padding-top:10px}
 .rail-group{display:flex;flex-direction:column;align-items:center;gap:6px}
-.rail-group-label{display:none}
 .rail-div{width:24px;height:1px;background:var(--border);margin:4px 0}
 .rail-ver{font-family:var(--mono);font-size:10px;color:var(--dim);border:1px solid var(--border);border-radius:7px;padding:4px 7px;transition:.14s}
 .rail-ver:hover{color:var(--muted);border-color:var(--border2)}
+
+/* ---- rail "More" popover — collapses every secondary route (Team/Infra/
+   Time/admin) out of the permanent rail so it only ever shows the handful of
+   daily-use routes plus this one trigger; see NAV_PRIMARY/NAV_MORE_GROUPS in
+   Layout.tsx. Portaled to <body> and positioned via inline left/bottom
+   computed from the trigger button's real screen position (see toggleMore())
+   rather than anchored with CSS to an ancestor — `.rail` scrolls internally
+   (overflow-y:auto below) and, on mobile, animates with a `transform` for its
+   slide-in, either of which would otherwise hijack this popover's
+   fixed-position containing block or clip it outright. */
+.rail-more-menu{position:fixed;width:210px;max-height:min(70vh,520px);overflow-y:auto;background:var(--raised2);border:1px solid var(--border);border-radius:13px;box-shadow:0 24px 60px -24px var(--shadow);padding:8px;z-index:120;animation:up .16s both}
+.rail-more-group-label{padding:9px 11px 4px;font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--dim)}
 
 /* ---- docs ---- */
 .docs{display:grid;grid-template-columns:210px 1fr;gap:30px;align-items:start}
@@ -1082,6 +1103,10 @@ kbd{font-family:var(--mono);font-size:11px}
 .ai-turn-user{align-self:flex-end;max-width:85%;padding:9px 13px;border-radius:12px 12px 3px 12px;background:var(--raised);border:1px solid var(--border);font-size:12.5px;line-height:1.6;white-space:pre-wrap}
 .ai-turn-assistant{display:flex;flex-direction:column}
 .ai-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+/* Blinking cursor on the answer still streaming in — the local model runs at
+   ~5-7 tok/s, so this is the signal that it's producing, not stalled. */
+.ai-caret{display:inline-block;width:7px;height:1.05em;margin-left:2px;vertical-align:text-bottom;background:var(--mint);animation:ai-blink 1.05s steps(2,start) infinite}
+@keyframes ai-blink{to{visibility:hidden}}
 
 .ai-thinking{display:flex;align-items:center;gap:9px;margin-top:14px;padding:16px;border-radius:12px;border:1px solid var(--border);background:var(--bg)}
 .ai-thinking-text{
@@ -1237,6 +1262,9 @@ kbd{font-family:var(--mono);font-size:11px}
 button.ttask-prio{background:none;border:none;padding:0;font:inherit;cursor:pointer;text-transform:capitalize}
 .ttask-meta .uisel-trigger{background:none;border:none;color:var(--dim);font-size:11.5px;font-family:var(--body);cursor:pointer;padding:0}
 .ttask-meta .uisel-chev{color:var(--dim)}
+.ttask-est{width:34px;background:none;border:none;border-bottom:1px solid transparent;color:var(--dim);font-size:11.5px;padding:0;text-align:right}
+.ttask-est:hover,.ttask-est:focus{border-bottom-color:var(--border-soft);color:var(--muted);outline:none}
+.ttask-est::-webkit-inner-spin-button,.ttask-est::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
 
 /* ---- Dashboard greeting + break mode ---- */
 .dash-greet{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
@@ -1537,20 +1565,20 @@ button.ttask-prio{background:none;border:none;padding:0;font:inherit;cursor:poin
   .tz-wrap{display:none}
   .ver{display:none}
 
-  .rail{position:fixed;top:0;left:0;bottom:0;z-index:95;width:240px;transform:translateX(-100%);transition:transform .22s ease;padding:18px 14px 16px;align-items:stretch;gap:2px}
+  .rail{position:fixed;top:0;left:0;bottom:0;z-index:95;width:240px;transform:translateX(-100%);transition:transform .22s ease;padding:18px 14px 16px;align-items:stretch;gap:2px;overflow-y:auto}
   .rail.open{transform:translateX(0);box-shadow:20px 0 60px -20px var(--shadow)}
   .rail .logo{align-self:flex-start}
   .navbtn{width:100%;height:44px;justify-content:flex-start;gap:12px;padding:0 10px}
   .navbtn .tip{position:static;opacity:1;pointer-events:auto;transform:none;background:none;border:none;padding:0;font-size:13.5px;color:inherit;white-space:nowrap}
   .rail-group{align-items:stretch;gap:2px}
-  .rail-group-label{display:block;padding:10px 10px 2px;font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--dim)}
   .rail-foot{width:100%;align-items:stretch}
   .rail-ver{align-self:flex-start}
 
   /* topbar popovers anchor to their trigger via right:0, which isn't the
      viewport edge on mobile — pin them to the viewport instead so they can't
      spill off-screen regardless of where their trigger sits in the topbar */
-  .profile-menu,.agent-menu,.notif-menu,.tz-menu{position:fixed;top:66px;left:12px;right:12px;width:auto;max-width:none}
+  .profile-menu,.agent-menu,.notif-menu,.tz-menu{position:fixed;top:66px;left:12px;right:12px;bottom:auto;width:auto;max-width:none}
+  .rail-more-menu{max-width:calc(100vw - 16px)}
   .pg-pickmenu{max-width:calc(100vw - 24px)}
 
   .page{padding:18px 16px 32px}
@@ -1588,4 +1616,24 @@ button.ttask-prio{background:none;border:none;padding:0;font:inherit;cursor:poin
 
 @media(max-width:480px){
   .agent-wrap{display:none}
+}
+
+/* ---------- Automation rules ---------- */
+.auto-list{display:flex;flex-direction:column;gap:12px;margin-top:18px}
+.auto-rule{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 18px}
+/* Paused rules stay readable but visibly inert — they're still configured, just not firing. */
+.auto-rule.off{opacity:.6}
+.auto-rule-main{min-width:0}
+.auto-rule-head{display:flex;align-items:center;gap:9px}
+.auto-rule-ic{display:grid;place-items:center}
+.auto-rule-name{font-size:13.5px;font-weight:600}
+.auto-rule-desc{margin-top:6px;font-size:12.5px;color:var(--muted);line-height:1.6}
+.auto-rule-meta{margin-top:6px;font-size:11.5px;color:var(--dim)}
+.auto-rule-actions{display:flex;gap:6px;flex-shrink:0}
+.auto-form-sec{margin-top:16px;padding:14px;border:1px solid var(--border-soft);border-radius:12px;background:var(--bg);display:flex;flex-direction:column;gap:10px}
+.auto-form-lab{display:flex;align-items:center;gap:7px;font-size:11.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--dim)}
+.auto-check{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--muted);cursor:pointer}
+@media(max-width:640px){
+  .auto-rule{flex-direction:column;align-items:flex-start}
+  .auto-rule-actions{width:100%}
 }

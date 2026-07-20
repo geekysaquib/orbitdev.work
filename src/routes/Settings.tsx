@@ -55,7 +55,7 @@ const SECTIONS: { id: SectionId; label: string; icon: string; desc: string }[] =
   { id: "postgres", label: "PostgreSQL", icon: "db", desc: "Servers you can browse and query" },
   { id: "docker", label: "Docker", icon: "container", desc: "Containers and images" },
   { id: "chores", label: "Break chores", icon: "zap", desc: "What the agent does while you sip" },
-  { id: "ai", label: "AI-assisted seeding", icon: "sparkles", desc: "Project-aware dummy data via Claude" },
+  { id: "ai", label: "AI providers", icon: "sparkles", desc: "Claude, Gemini, ChatGPT, Grok, or the free local model" },
   { id: "integrations", label: "IDE & tools", icon: "layers", desc: "Local executable names for launching" },
   { id: "data", label: "Data & security", icon: "shield", desc: "Where everything is stored" },
 ];
@@ -120,7 +120,7 @@ export default function Settings() {
     if (id === "gmail") return health.gmail.configured ? "ok" : null;
     if (id === "docker") return status !== "online" ? null : docker?.available ? "ok" : "warn";
     if (id === "postgres") return health.postgres.state === "unknown" ? null : health.postgres.state;
-    if (id === "ai") return health.anthropic.state === "ok" ? "ok" : null;
+    if (id === "ai") return health.ai.state === "ok" ? "ok" : null;
     if (id === "github" || id === "gitlab" || id === "azuredevops" || id === "sentry") {
       const st = health.providers[id].state;
       return st === "unknown" ? null : st;

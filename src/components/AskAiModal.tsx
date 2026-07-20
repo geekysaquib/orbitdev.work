@@ -16,10 +16,10 @@ import { useNavigate } from "react-router-dom";
 import { Icon } from "../lib/icons";
 import { Modal } from "./Modal";
 import { AiThinking, formatDuration } from "./AiThinking";
-import { askThread, type AiSource, type AiMessage } from "../lib/ai";
+import { askThreadStream, orderedProviders, PROVIDER_LABEL, type AiSource, type AiMessage, type CloudProvider, type ProviderKeys } from "../lib/ai";
 import { buildAppContext, primeAskContext, invalidateAskContext, type ActionIndex } from "../lib/askContext";
 import { parseActions, actionHref, actionIcon, ACTIONS_CONTRACT, type Action } from "../lib/askActions";
-import { fetchIntegrations } from "../lib/integrations";
+import { fetchIntegrations, providerKeys, INTEGRATIONS_EVENT } from "../lib/integrations";
 import { startTimer, isTimerRunning } from "../lib/timer";
 import { useToast } from "../context/Toast";
 import { useAgent } from "../context/Agent";
@@ -54,13 +54,17 @@ export function AskAiModal({ open, onClose }: { open: boolean; onClose: () => vo
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorSource, setErrorSource] = useState<AiSource | null>(null);
+  const [streaming, setStreaming] = useState("");   // partial answer, rendered as it lands
   const [contextReady, setContextReady] = useState(false);
   const [snapshotAt, setSnapshotAt] = useState<number | null>(null);
-  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [aiKeys, setAiKeys] = useState<ProviderKeys>({});
+  const [aiProvider, setAiProvider] = useState<CloudProvider | undefined>(undefined);
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const indexRef = useRef<ActionIndex | null>(null);
   const contextRef = useRef<string>("");
+  const compactRef = useRef<string>("");  // smaller snapshot, used when local answers
 
   // Warm the workspace snapshot at mount (Layout mounts this once, signed in), so
   // opening Ask AI doesn't pay the 9-30s Zoho gather. Safe to call repeatedly —
@@ -70,20 +74,38 @@ export function AskAiModal({ open, onClose }: { open: boolean; onClose: () => vo
   const loadContext = () => {
     setContextReady(false);
     Promise.all([fetchIntegrations(), buildAppContext()])
-      .then(([i, ctx]) => {
-        setApiKey(i?.anthropic_api_key || null);
-        contextRef.current = ctx.text;
-        indexRef.current = ctx.index;
-        setSnapshotAt(ctx.at);
+      .then(async ([i, full]) => {
+        setAiKeys(providerKeys(i));
+        setAiProvider(i?.ai_provider ?? undefined);
+        contextRef.current = full.text;
+        indexRef.current = full.index;
+        // Kept alongside the full snapshot rather than chosen here: whether local
+        // answers isn't known until request time (a configured cloud key can still
+        // fail over), and the local model pays ~80 tok/s to prefill every token it
+        // is handed. Re-rendering is a cache hit — no extra network.
+        compactRef.current = (await buildAppContext({ compact: true })).text;
+        setSnapshotAt(full.at);
         setContextReady(true);
       })
       .catch(() => setError("Couldn't read your workspace — check your connection and try again."));
   };
   useEffect(loadContext, []);
+  // This modal stays mounted for the whole session (see the file-header
+  // comment), so without this it would only ever see whatever Anthropic key
+  // was on file at app-load time — saving a key in Settings afterward
+  // wouldn't be picked up short of a full page reload.
+  useEffect(() => {
+    window.addEventListener(INTEGRATIONS_EVENT, loadContext);
+    return () => window.removeEventListener(INTEGRATIONS_EVENT, loadContext);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // autoFocus only fires on a real mount, and this component no longer remounts.
   useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
-  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }, [turns, busy]);
+  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }, [turns, busy, streaming]);
+  // Abandon an in-flight answer if the whole modal goes away, so the agent stops
+  // pumping tokens into a socket nobody is reading.
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   async function submit(q: string) {
     const text = q.trim();
@@ -91,22 +113,40 @@ export function AskAiModal({ open, onClose }: { open: boolean; onClose: () => vo
     setQuestion("");
     setError(null);
     setBusy(true);
+    setStreaming("");
     const started = Date.now();
     const next: Turn[] = [...turns, { role: "user", text }];
     setTurns(next);
 
-    // The actions contract goes to the cloud model only: the local 1B model at 384
-    // tokens truncates the fence more often than it closes one, and the contract
+    // The actions contract goes to a cloud model only: the local 1B model at its
+    // token cap truncates the fence more often than it closes one, and the contract
     // would crowd out the prose it actually needs to produce.
-    const system = apiKey ? `${PERSONA}\n${ACTIONS_CONTRACT}` : PERSONA;
-    const r = await askThread(wireMessages(next, contextRef.current), system, apiKey);
+    const hasCloud = orderedProviders(aiKeys, aiProvider).length > 0;
+    const system = hasCloud ? `${PERSONA}\n${ACTIONS_CONTRACT}` : PERSONA;
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    const r = await askThreadStream(
+      wireMessages(next, contextRef.current), system, aiKeys, aiProvider,
+      (chunk) => setStreaming((s) => s + chunk),
+      ctrl.signal,
+      // Whatever the chain tried first, the local model gets the small snapshot and
+      // the plain persona — the actions contract is cloud-only either way.
+      { messages: wireMessages(next, compactRef.current), system: PERSONA },
+    );
+    abortRef.current = null;
     setBusy(false);
+    setStreaming("");
     if (!r.ok) {
+      if (r.error === "cancelled") { setTurns(turns); return; } // user closed the modal
       setError(r.error || "Couldn't get an answer");
       setErrorSource(r.source);
       setTurns(turns); // drop the unanswered question rather than stranding it mid-thread
       setQuestion(text);
       return;
+    }
+    if (r.fellBackFrom) {
+      const to = r.source === "local" ? "the local model" : PROVIDER_LABEL[r.source as CloudProvider];
+      toast(`${r.fellBackFrom} unavailable — answered with ${to} instead`);
     }
     const { prose, actions } = parseActions(r.text || "", indexRef.current ?? { tickets: new Map(), projects: new Map(), sprintItems: new Map(), timerProjects: new Map() });
     setTurns([...next, { role: "assistant", text: prose || "(no answer)", actions, source: r.source, ms: Date.now() - started }]);
@@ -137,6 +177,7 @@ export function AskAiModal({ open, onClose }: { open: boolean; onClose: () => vo
   if (!open) return null;
 
   const empty = turns.length === 0;
+  const providerOrder = orderedProviders(aiKeys, aiProvider);
   return (
     <Modal onClose={onClose} style={{ width: 560, maxWidth: "90vw" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -149,12 +190,12 @@ export function AskAiModal({ open, onClose }: { open: boolean; onClose: () => vo
       <p style={{ color: "var(--dim)", fontSize: 11.5, marginTop: 6 }}>
         {!contextReady
           ? "Gathering your projects, tasks, tickets, and Zoho sprints…"
-          : apiKey
-            ? "Answered by Claude, grounded in your projects, tasks, tickets, and Zoho sprints. Ask follow-ups."
-            : "No Anthropic key set — this tries the free local model instead (needs Python + llama-cpp-python, see Settings)."}
+          : providerOrder.length > 0
+            ? `Answered by ${PROVIDER_LABEL[providerOrder[0]]}, grounded in your projects, tasks, tickets, and Zoho sprints. Ask follow-ups.`
+            : "No cloud AI key set — this tries the free local model instead (needs Python + llama-cpp-python, see Settings)."}
       </p>
 
-      {!empty && (
+      {(!empty || streaming) && (
         <div className="ai-thread" ref={scrollRef}>
           {turns.map((t, i) => (
             t.role === "user" ? (
@@ -172,12 +213,19 @@ export function AskAiModal({ open, onClose }: { open: boolean; onClose: () => vo
                   </div>
                 )}
                 <div className="ai-source">
-                  <span>via {t.source === "local" ? "local model (free)" : "Claude"}{t.ms ? ` · ${formatDuration(t.ms)}` : ""}</span>
+                  <span>via {t.source === "local" ? "local model (free)" : PROVIDER_LABEL[t.source as CloudProvider]}{t.ms ? ` · ${formatDuration(t.ms)}` : ""}</span>
                   <button className="btn ghost sm" onClick={() => { navigator.clipboard.writeText(t.text); }}><Icon name="copy" size={12} />Copy</button>
                 </div>
               </div>
             )
           ))}
+          {/* The answer in flight. Actions are parsed from the completed text, so
+              this renders prose only and is replaced by a real turn on finish. */}
+          {streaming && (
+            <div className="ai-turn-assistant">
+              <div className="ai-answer">{streaming}<span className="ai-caret" /></div>
+            </div>
+          )}
         </div>
       )}
 
@@ -202,9 +250,10 @@ export function AskAiModal({ open, onClose }: { open: boolean; onClose: () => vo
           ))}
         </div>
       )}
-      {/* Also active during the context gather — that wait used to show nothing at all. */}
-      <AiThinking active={busy || !contextReady} />
-      {busy && !apiKey && <p style={{ color: "var(--dim)", fontSize: 11.5, marginTop: 10 }}>First run of the local model can take a while if it still needs to download.</p>}
+      {/* Also active during the context gather — that wait used to show nothing at all.
+          Once tokens start landing the partial answer is the progress indicator. */}
+      <AiThinking active={(busy && !streaming) || !contextReady} />
+      {busy && !streaming && providerOrder.length === 0 && <p style={{ color: "var(--dim)", fontSize: 11.5, marginTop: 10 }}>First run of the local model can take a while if it still needs to download.</p>}
       {error && (
         <div className="pg-error" style={{ marginTop: 14 }}>
           <Icon name="plug" size={16} />

@@ -660,3 +660,90 @@ create policy "owner all" on public.metric_snapshots for all using (user_id = au
 -- AI-triage reasoning ("Summary"/"Suggested next step"), persisted so it survives reload
 -- instead of only existing ephemerally in Tickets.tsx's local component state.
 alter table public.tickets add column if not exists ai_note text;
+
+-- ---------- estimate accuracy + weekly retrospective columns ----------
+-- estimate_minutes: user-set planned effort on a task (Tasks.tsx board card).
+-- completed_at: auto-stamped by the trigger below, not settable by the client
+-- — status is the single source of truth for it. task_id on time_entries lets
+-- a logged session be attributed to a specific task (not just its project),
+-- which is what makes "planned vs actual" computable at all.
+alter table public.tasks add column if not exists estimate_minutes int;
+alter table public.tasks drop constraint if exists tasks_estimate_minutes_check;
+alter table public.tasks add constraint tasks_estimate_minutes_check check (estimate_minutes is null or estimate_minutes > 0);
+alter table public.tasks add column if not exists completed_at timestamptz;
+-- Backfill: best-effort guess for tasks already sitting in 'done' pre-migration
+-- (no history of *when* they finished), so they aren't silently excluded from
+-- future weekly-retrospective windows solely for having a null completed_at.
+update public.tasks set completed_at = created_at where status = 'done' and completed_at is null;
+
+create or replace function public.set_task_completed_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  if NEW.status = 'done' and (TG_OP = 'INSERT' or OLD.status is distinct from 'done') then
+    NEW.completed_at := now();
+  elsif NEW.status <> 'done' then
+    NEW.completed_at := null;
+  end if;
+  return NEW;
+end;
+$$;
+drop trigger if exists set_task_completed_at on public.tasks;
+create trigger set_task_completed_at
+before insert or update on public.tasks
+for each row execute function public.set_task_completed_at();
+
+alter table public.time_entries add column if not exists task_id uuid references public.tasks(id) on delete set null;
+create index if not exists time_entries_task_idx on public.time_entries(task_id) where task_id is not null;
+
+-- ---------- multi-provider AI keys ----------
+-- Ask AI / seeding / triage / standup / commit-writer previously only supported
+-- Anthropic; a low-credit or expired key meant a hard failure with no cloud
+-- fallback short of the free local model. Adding Gemini/OpenAI/Grok as peer
+-- providers plus a user-chosen `ai_provider` preference so the client can try
+-- other configured cloud keys before dropping to local.
+alter table public.integrations add column if not exists gemini_api_key text;
+alter table public.integrations add column if not exists openai_api_key text;
+alter table public.integrations add column if not exists grok_api_key text;
+alter table public.integrations add column if not exists ai_provider text default 'anthropic';
+alter table public.integrations drop constraint if exists integrations_ai_provider_check;
+alter table public.integrations add constraint integrations_ai_provider_check check (ai_provider in ('anthropic','gemini','openai','grok'));
+
+-- ---------- automation: when-X-then-Y rules ----------
+-- Cross-module rules ("task moved to done -> notify", "timer started -> ...").
+-- Triggers are raised client-side where the change happens and actions run
+-- through the user's own RLS-scoped client calls, so a rule can never do
+-- something its owner couldn't. See src/lib/automation.ts.
+create table if not exists public.automation_rules (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  name text not null,
+  enabled boolean not null default true,
+  trigger_type text not null check (trigger_type in ('task_status','ticket_status','timer_started','timer_stopped')),
+  trigger_config jsonb not null default '{}'::jsonb,
+  action_type text not null check (action_type in ('create_task','set_task_status','set_ticket_status','notify','start_timer')),
+  action_config jsonb not null default '{}'::jsonb,
+  run_count integer not null default 0,
+  last_run_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create index if not exists automation_rules_user_idx on public.automation_rules(user_id, enabled);
+alter table public.automation_rules enable row level security;
+drop policy if exists "owner all" on public.automation_rules;
+create policy "owner all" on public.automation_rules
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- ---------- automation: engine v2 (multi-condition rules, more triggers/actions) ----------
+-- `trigger_config.conditions` (an array of {field,op,value}) rides in the existing
+-- jsonb column, so no schema change was needed for multi-condition matching itself
+-- — this migration only widens the type check constraints for the two new
+-- triggers (ticket_created, mail_rule_matched) and four new actions
+-- (send_email, create_teams_meeting, run_agent_command, webhook). See
+-- src/lib/automation.ts.
+alter table public.automation_rules drop constraint if exists automation_rules_trigger_type_check;
+alter table public.automation_rules add constraint automation_rules_trigger_type_check
+  check (trigger_type in ('task_status','ticket_status','ticket_created','timer_started','timer_stopped','mail_rule_matched'));
+alter table public.automation_rules drop constraint if exists automation_rules_action_type_check;
+alter table public.automation_rules add constraint automation_rules_action_type_check
+  check (action_type in ('create_task','set_task_status','set_ticket_status','notify','start_timer','send_email','create_teams_meeting','run_agent_command','webhook'));

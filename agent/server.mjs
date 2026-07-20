@@ -1127,13 +1127,25 @@ app.post("/macro", (req, res) => {
 // follow-up thread) wins, `prompt` (every other caller) is the single-turn form.
 // Returns [] when there's nothing usable, so callers do one emptiness check.
 const MAX_TURNS = 12; // ~6 exchanges — bounds both cost and the local model's 4k context
+
+// JS strings are UTF-16, so a plain slice() can land between the two halves of a
+// surrogate pair (any emoji or astral character) and leave a lone surrogate. That
+// isn't representable in UTF-8: it survives JSON intact and then throws
+// "surrogates not allowed" inside the Python worker while it tokenizes the prompt,
+// failing the request before generation starts. Drop the orphaned half.
+function sliceText(s, max) {
+  const out = String(s).slice(0, max);
+  const last = out.charCodeAt(out.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? out.slice(0, -1) : out;
+}
+
 function coerceTurns({ prompt, messages }) {
   const turns = Array.isArray(messages) && messages.length
     ? messages
         .filter((m) => m && (m.role === "user" || m.role === "assistant") && String(m.content || "").trim())
-        .map((m) => ({ role: m.role, content: String(m.content).slice(0, 12000) }))
+        .map((m) => ({ role: m.role, content: sliceText(m.content, 12000) }))
         .slice(-MAX_TURNS)
-    : (prompt && String(prompt).trim() ? [{ role: "user", content: String(prompt).slice(0, 12000) }] : []);
+    : (prompt && String(prompt).trim() ? [{ role: "user", content: sliceText(prompt, 12000) }] : []);
   // Anthropic requires the first turn to be `user`. Trimming to the last N can
   // land on an assistant turn, so this has to run after the slice, not before.
   if (turns.length && turns[0].role !== "user") turns.shift();
@@ -1141,29 +1153,161 @@ function coerceTurns({ prompt, messages }) {
 }
 
 // ---- Generic AI helper (schema Q&A, ticket triage, standup summaries, Ask AI) —
-// reuses the caller's own Anthropic key (stored in Supabase `integrations`, forwarded
-// per-request same as the seed feature's project hints; never persisted here). ----
+// reuses the caller's own API key (stored in Supabase `integrations`, forwarded
+// per-request same as the seed feature's project hints; never persisted here).
+// Four cloud providers share this endpoint shape so the client's fallback chain
+// (see src/lib/ai.ts) can fail over between them without knowing any
+// provider-specific request/response format itself. ----
+const CLOUD_MODELS = {
+  // Haiku/flash/mini tiers, not the flagship ones — these are short, bounded
+  // answers (triage lines, standup bullets, grounded Q&A, or Ask AI's threaded
+  // prose+actions), so the fastest/cheapest tier per provider is plenty.
+  anthropic: "claude-haiku-4-5-20251001",
+  gemini: "gemini-2.5-flash",
+  openai: "gpt-4o-mini",
+  grok: "grok-3-mini",
+};
+const CLOUD_MAX_TOKENS = 900; // Ask AI's threaded answers carry prose plus an actions block; other callers are far shorter and don't use the headroom.
+
+async function anthropicComplete({ apiKey, system, turns }) {
+  const client = new Anthropic({ apiKey });
+  const response = await client.messages.create({
+    model: CLOUD_MODELS.anthropic, max_tokens: CLOUD_MAX_TOKENS,
+    system: system ? sliceText(system, 6000) : undefined,
+    messages: turns,
+  });
+  if (response.stop_reason === "refusal") return { ok: false, error: "The model declined to answer that." };
+  return { ok: true, text: response.content.find((b) => b.type === "text")?.text || "" };
+}
+async function anthropicStream({ apiKey, system, turns, onDelta }) {
+  const client = new Anthropic({ apiKey });
+  const stream = client.messages.stream({
+    model: CLOUD_MODELS.anthropic, max_tokens: CLOUD_MAX_TOKENS,
+    system: system ? sliceText(system, 6000) : undefined,
+    messages: turns,
+  });
+  for await (const event of stream) {
+    if (event.type === "content_block_delta" && event.delta?.type === "text_delta") onDelta(event.delta.text);
+  }
+  return { ok: true };
+}
+
+function geminiContents(turns) {
+  return turns.map((t) => ({ role: t.role === "assistant" ? "model" : "user", parts: [{ text: t.content }] }));
+}
+function geminiBody(system, turns) {
+  return {
+    contents: geminiContents(turns),
+    generationConfig: { maxOutputTokens: CLOUD_MAX_TOKENS },
+    ...(system ? { systemInstruction: { parts: [{ text: sliceText(system, 6000) }] } } : {}),
+  };
+}
+async function geminiComplete({ apiKey, system, turns }) {
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CLOUD_MODELS.gemini}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(geminiBody(system, turns)),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) return { ok: false, error: j.error?.message || `Gemini error ${r.status}` };
+  return { ok: true, text: j.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "" };
+}
+async function geminiStream({ apiKey, system, turns, onDelta }) {
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CLOUD_MODELS.gemini}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(geminiBody(system, turns)),
+  });
+  if (!r.ok || !r.body) { const j = await r.json().catch(() => ({})); return { ok: false, error: j.error?.message || `Gemini error ${r.status}` }; }
+  await pumpSse(r.body, (obj) => {
+    const text = obj?.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
+    if (text) onDelta(text);
+  });
+  return { ok: true };
+}
+
+// OpenAI and Grok (xAI) both speak the OpenAI chat-completions wire format, so
+// one implementation serves both — only the base URL, model, and key differ.
+function openAiCompatMessages(system, turns) {
+  const msgs = turns.map((t) => ({ role: t.role, content: t.content }));
+  if (system) msgs.unshift({ role: "system", content: sliceText(system, 6000) });
+  return msgs;
+}
+// OpenAI nests error text as `{error:{message}}`; Grok (xAI) sometimes sends
+// the plain-string form `{error:"..."}` instead — handle both.
+function openAiCompatError(j, status, model) {
+  const e = j?.error;
+  return (typeof e === "string" ? e : e?.message) || `${model} error ${status}`;
+}
+async function openAiCompatComplete({ baseUrl, model, apiKey, system, turns }) {
+  const r = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ model, max_tokens: CLOUD_MAX_TOKENS, messages: openAiCompatMessages(system, turns) }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) return { ok: false, error: openAiCompatError(j, r.status, model) };
+  return { ok: true, text: j.choices?.[0]?.message?.content || "" };
+}
+async function openAiCompatStream({ baseUrl, model, apiKey, system, turns, onDelta }) {
+  const r = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ model, max_tokens: CLOUD_MAX_TOKENS, messages: openAiCompatMessages(system, turns), stream: true }),
+  });
+  if (!r.ok || !r.body) { const j = await r.json().catch(() => ({})); return { ok: false, error: openAiCompatError(j, r.status, model) }; }
+  await pumpSse(r.body, (obj, raw) => {
+    if (raw === "[DONE]") return;
+    const text = obj?.choices?.[0]?.delta?.content;
+    if (text) onDelta(text);
+  });
+  return { ok: true };
+}
+
+// Shared SSE line-pump for the three REST-based providers (Anthropic's SDK does
+// its own framing via `client.messages.stream`). Frames are `data: <json>\n\n`
+// (OpenAI/Grok terminate with the literal `data: [DONE]`, passed through as
+// `raw` since it isn't JSON); a chunk can split one frame in half.
+async function pumpSse(body, onEvent) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let sep;
+    while ((sep = buf.indexOf("\n\n")) >= 0) {
+      const frame = buf.slice(0, sep).trim(); buf = buf.slice(sep + 2);
+      if (!frame.startsWith("data:")) continue;
+      const raw = frame.slice(5).trim();
+      if (raw === "[DONE]") { onEvent(null, raw); continue; }
+      let obj; try { obj = JSON.parse(raw); } catch { continue; }
+      onEvent(obj, raw);
+    }
+  }
+}
+
+function cloudProvider(provider) {
+  switch (provider) {
+    case "gemini": return { complete: geminiComplete, stream: geminiStream };
+    case "openai": return {
+      complete: (a) => openAiCompatComplete({ ...a, baseUrl: "https://api.openai.com/v1", model: CLOUD_MODELS.openai }),
+      stream: (a) => openAiCompatStream({ ...a, baseUrl: "https://api.openai.com/v1", model: CLOUD_MODELS.openai }),
+    };
+    case "grok": return {
+      complete: (a) => openAiCompatComplete({ ...a, baseUrl: "https://api.x.ai/v1", model: CLOUD_MODELS.grok }),
+      stream: (a) => openAiCompatStream({ ...a, baseUrl: "https://api.x.ai/v1", model: CLOUD_MODELS.grok }),
+    };
+    case "anthropic": default: return { complete: anthropicComplete, stream: anthropicStream };
+  }
+}
+
 app.post("/ai/ask", async (req, res) => {
-  const { apiKey, system, prompt, messages } = req.body || {};
-  if (!apiKey) return res.status(400).json({ ok: false, error: "Anthropic API key required — add one in Settings" });
+  const { provider, apiKey, system, prompt, messages } = req.body || {};
+  if (!apiKey) return res.status(400).json({ ok: false, error: "API key required — add one in Settings" });
   const turns = coerceTurns({ prompt, messages });
   if (!turns.length) return res.status(400).json({ ok: false, error: "prompt or messages required" });
   try {
-    const client = new Anthropic({ apiKey });
-    const response = await client.messages.create({
-      // Haiku, not Opus — these are short, bounded answers (triage lines, standup
-      // bullets, grounded Q&A), so the fastest tier is plenty and cuts latency a lot.
-      model: "claude-haiku-4-5-20251001",
-      // Ask AI's threaded answers carry prose plus an actions block; the other
-      // callers are far shorter and just don't use the headroom.
-      max_tokens: 900,
-      system: system ? String(system).slice(0, 6000) : undefined,
-      messages: turns,
-    });
-    if (response.stop_reason === "refusal") return res.json({ ok: false, error: "The model declined to answer that." });
-    const text = response.content.find((b) => b.type === "text")?.text || "";
-    res.json({ ok: true, text });
-  } catch (e) { res.status(500).json({ ok: false, error: e.message.slice(0, 300) }); }
+    const r = await cloudProvider(provider).complete({ apiKey, system, turns });
+    res.json(r);
+  } catch (e) { res.status(500).json({ ok: false, error: (e.message || String(e)).slice(0, 300) }); }
 });
 
 // ---- Local AI (llama-cpp-python via a persistent Python worker) — genuinely
@@ -1173,7 +1317,7 @@ app.post("/ai/ask", async (req, res) => {
 // worker is respawned on the next request. ----
 const LOCAL_AI_SCRIPT = join(__dir, "ai_local.py");
 let localAi = null; // { proc, model, ready: Promise<{ok,error?}> }
-let localAiPending = null; // resolver for the one in-flight request's response line
+let localAiPending = null; // { resolve, onDelta? } for the one in-flight request
 let localAiQueue = Promise.resolve(); // the worker handles one request at a time
 
 function ensureLocalAi() {
@@ -1197,13 +1341,17 @@ function ensureLocalAi() {
         else resolveReady({ ok: false, error: msg.error || "local AI worker failed to start" });
         continue;
       }
-      if (localAiPending) { const r = localAiPending; localAiPending = null; r(msg); }
+      if (!localAiPending) continue;
+      // A streaming request stays subscribed across many delta lines and is only
+      // settled by the terminating line (done, text, or error) that follows them.
+      if (msg.delta !== undefined) { localAiPending.onDelta?.(msg.delta); continue; }
+      const p = localAiPending; localAiPending = null; p.resolve(msg);
     }
   });
   proc.stderr.on("data", (d) => { stderrBuf += d.toString(); });
   proc.on("exit", (code) => {
     if (!readyResolved) { readyResolved = true; resolveReady({ ok: false, error: stderrBuf.trim().slice(-300) || `python exited (${code})` }); }
-    if (localAiPending) { const r = localAiPending; localAiPending = null; r({ ok: false, error: "local AI worker exited" }); }
+    if (localAiPending) { const p = localAiPending; localAiPending = null; p.resolve({ ok: false, error: "local AI worker exited" }); }
     if (localAi === entry) localAi = null;
   });
   proc.on("error", (e) => {
@@ -1215,17 +1363,25 @@ function ensureLocalAi() {
   return ready;
 }
 
-async function askLocalAi({ prompt, system, messages }) {
+// Pass `onDelta` to stream: it fires per token chunk and the resolved `text` is
+// the concatenation, so streaming and non-streaming callers get the same result.
+async function askLocalAi({ prompt, system, messages, onDelta }) {
   const started = await ensureLocalAi();
   if (!started.ok) return started;
   const entry = localAi;
+  const stream = !!onDelta;
+  let acc = "";
   const task = localAiQueue.then(() => new Promise((resolve) => {
-    localAiPending = resolve;
-    entry.proc.stdin.write(JSON.stringify({ prompt, system, messages }) + "\n");
+    localAiPending = {
+      resolve,
+      onDelta: stream ? (d) => { acc += d; onDelta(d); } : undefined,
+    };
+    entry.proc.stdin.write(JSON.stringify({ prompt, system, messages, stream }) + "\n");
   }));
   localAiQueue = task.then(() => {}, () => {});
   const msg = await task;
-  return msg.ok ? { ok: true, text: msg.text } : { ok: false, error: msg.error || "local AI failed" };
+  if (!msg.ok) return { ok: false, error: msg.error || "local AI failed" };
+  return { ok: true, text: stream ? acc : msg.text };
 }
 
 app.get("/ai/local/status", async (_req, res) => {
@@ -1240,6 +1396,52 @@ app.post("/ai/local/ask", async (req, res) => {
   const r = await askLocalAi({ system, messages: turns });
   if (!r.ok) return res.status(500).json(r);
   res.json(r);
+});
+
+// ---- Streaming variants (SSE) ----
+// The local model generates at ~5-7 tok/s on CPU, so a complete answer is tens of
+// seconds of blank screen. Streaming doesn't make it faster, it makes the wait
+// legible: first token in ~5s instead of ~30-75s of nothing. Both backends speak
+// the same event shape so the client doesn't branch: {delta} … then {done} | {error}.
+function openSse(res) {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no"); // don't let a proxy sit on the chunks
+  res.flushHeaders?.();
+  return (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+}
+
+app.post("/ai/local/ask/stream", async (req, res) => {
+  const turns = coerceTurns(req.body || {});
+  if (!turns.length) return res.status(400).json({ ok: false, error: "prompt or messages required" });
+  const system = req.body?.system ? String(req.body.system) : undefined;
+  const send = openSse(res);
+  // A disconnect (modal closed mid-answer) must not keep pumping into a dead socket.
+  // Hook `res`, not `req`: on a POST, req's "close" fires as soon as the body has
+  // been read, which would abort every stream before its first token.
+  let aborted = false;
+  res.on("close", () => { aborted = true; });
+  const r = await askLocalAi({ system, messages: turns, onDelta: (d) => { if (!aborted) send({ delta: d }); } });
+  if (!aborted) send(r.ok ? { done: true } : { error: r.error });
+  res.end();
+});
+
+app.post("/ai/ask/stream", async (req, res) => {
+  const { provider, apiKey, system, prompt, messages } = req.body || {};
+  if (!apiKey) return res.status(400).json({ ok: false, error: "API key required — add one in Settings" });
+  const turns = coerceTurns({ prompt, messages });
+  if (!turns.length) return res.status(400).json({ ok: false, error: "prompt or messages required" });
+  const send = openSse(res);
+  let aborted = false;
+  res.on("close", () => { aborted = true; }); // see the note in /ai/local/ask/stream
+  try {
+    const r = await cloudProvider(provider).stream({ apiKey, system, turns, onDelta: (d) => { if (!aborted) send({ delta: d }); } });
+    if (!aborted) send(r.ok ? { done: true } : { error: r.error || "stream failed" });
+  } catch (e) {
+    if (!aborted) send({ error: (e.message || String(e)).slice(0, 300) });
+  }
+  res.end();
 });
 
 // ---- npm chores: dependency drift + advisories (read-only) ----

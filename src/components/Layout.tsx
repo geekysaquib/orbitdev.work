@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Icon } from "../lib/icons";
 import { useAuth } from "../context/AuthContext";
@@ -23,40 +24,38 @@ import { logFocusEvent } from "../lib/focusEvents";
 import { TIMER_PROJECT_KEY, ls as timerLs } from "../lib/timer";
 import { gmailList, gmailConfigure } from "../lib/agent";
 import { mailRules, matchesRule } from "../lib/mailRules";
+import { fireAsync } from "../lib/automation";
 import { ORBIT_AGENT_DOWNLOAD_URL } from "../lib/downloads";
 import type { Notification } from "../lib/types";
 
-// Grouped into small labeled clusters (visible on the mobile expanded rail;
-// on desktop the icon-only rail just gets a divider between groups, same
-// bare `rail-div` already used once between this and NAV_BOTTOM) so the rail
-// doesn't read as one flat list of 14 items as it grows.
-const NAV_GROUPS: { label: string; items: { to: string; label: string; icon: string; end?: boolean }[] }[] = [
-  { label: "Work", items: [
-    { to: "/app", label: "Dashboard", icon: "grid", end: true },
-    { to: "/projects", label: "Projects", icon: "boxes" },
-    { to: "/tasks", label: "Tasks", icon: "layers" },
-    { to: "/sprints", label: "Sprints", icon: "sprint" },
-    { to: "/insights", label: "Insights", icon: "gauge" },
-  ] },
-  { label: "Team", items: [
-    { to: "/teams", label: "Teams", icon: "users" },
-    { to: "/mail", label: "Mail", icon: "mail" },
-    { to: "/calendar", label: "Calendar", icon: "cal" },
-  ] },
-  { label: "Infra", items: [
-    { to: "/postgres", label: "Postgres", icon: "db" },
-    { to: "/docker", label: "Docker", icon: "container" },
-  ] },
-  { label: "Time", items: [
+// The handful of routes opened every day, plus Team/Infra (promoted back out
+// of the "More" popover on request), get a permanent rail icon — the rest
+// (Time/Docs/Audit/Health/Settings) still live behind the single "More"
+// trigger. `.rail` keeps its own overflow-y:auto (see the CSS) as a fallback
+// for short viewports now that this list is longer again.
+const NAV_PRIMARY: { to: string; label: string; icon: string; end?: boolean }[] = [
+  { to: "/app", label: "Dashboard", icon: "grid", end: true },
+  { to: "/projects", label: "Projects", icon: "boxes" },
+  { to: "/tasks", label: "Tasks", icon: "layers" },
+  { to: "/sprints", label: "Sprints", icon: "sprint" },
+  { to: "/insights", label: "Insights", icon: "gauge" },
+  { to: "/teams", label: "Teams", icon: "users" },
+  { to: "/mail", label: "Mail", icon: "mail" },
+  { to: "/calendar", label: "Calendar", icon: "cal" },
+  { to: "/postgres", label: "Postgres", icon: "db" },
+  { to: "/docker", label: "Docker", icon: "container" },
+];
+const NAV_MORE_GROUPS: { label: string; items: { to: string; label: string; icon: string }[] }[] = [
+  { label: "Time & more", items: [
     { to: "/time", label: "Time", icon: "timer" },
+    { to: "/automation", label: "Automation", icon: "zap" },
+    { to: "/docs", label: "Docs", icon: "book" },
+    { to: "/audit", label: "Audit log", icon: "activity" },
+    { to: "/health", label: "Health", icon: "checkc" },
+    { to: "/settings", label: "Settings", icon: "settings" },
   ] },
 ];
-const NAV_BOTTOM = [
-  { to: "/docs", label: "Docs", icon: "book" },
-  { to: "/audit", label: "Audit log", icon: "activity" },
-  { to: "/health", label: "Health", icon: "checkc" },
-  { to: "/settings", label: "Settings", icon: "settings" },
-];
+const NAV_MORE_ROUTES = NAV_MORE_GROUPS.flatMap((g) => g.items.map((i) => i.to));
 
 const CHANGELOG = [
   { v: "0.1.0", date: "Jul 2026", notes: ["Supabase auth + RLS-scoped projects, tasks, calendar, notifications", "Zoho Sprints work-item sync", "Local agent: launch VS Code / Visual Studio, native folder picker", "Configurable agent URL, auto-reconnect, status page", "Docs, profile menu, empty states"] },
@@ -86,6 +85,8 @@ export function Layout() {
   const [navOpen, setNavOpen] = useState(false);
   const [menu, setMenu] = useState(false);
   const [agentPop, setAgentPop] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [morePos, setMorePos] = useState<{ left: number; bottom: number } | null>(null);
   const [log, setLog] = useState(false);
   const [cmdk, setCmdk] = useState(false);
   const [startWork, setStartWork] = useState(false);
@@ -93,6 +94,24 @@ export function Layout() {
   const menuRef = useRef<HTMLDivElement>(null);
   const agentRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
+  const moreBtnRef = useRef<HTMLButtonElement>(null);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
+
+  // Popover is portaled to <body> (see the render below) so it's never clipped
+  // by `.rail`'s own overflow-y:auto — it's positioned from the trigger
+  // button's real screen coordinates instead of relying on a CSS anchor
+  // relative to an ancestor, since on mobile `.rail` gets a `transform` for
+  // its slide-in animation, which would otherwise hijack the containing
+  // block for a plain `position:fixed` descendant.
+  function toggleMore() {
+    if (!moreOpen && moreBtnRef.current) {
+      const r = moreBtnRef.current.getBoundingClientRect();
+      const width = 210;
+      const left = Math.min(r.right + 8, window.innerWidth - width - 8);
+      setMorePos({ left: Math.max(8, left), bottom: window.innerHeight - r.bottom });
+    }
+    setMoreOpen((v) => !v);
+  }
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -176,6 +195,7 @@ export function Layout() {
           title: `Mail rule: ${hit.field === "from" ? "sender" : "subject"} contains "${hit.value}"`,
           body: `${m.subject} — ${m.from || m.fromAddr}`,
         });
+        fireAsync({ type: "mail_rule_matched", ruleId: hit.id, field: hit.field, value: hit.value, title: m.subject });
       }
     }
     seenMailUids.current = seen;
@@ -208,6 +228,9 @@ export function Layout() {
       if (agentRef.current && !agentRef.current.contains(e.target as Node)) setAgentPop(false);
       if (notifRef.current && !notifRef.current.contains(e.target as Node)) setNotifOpen(false);
       if (tzRef.current && !tzRef.current.contains(e.target as Node)) setTzOpen(false);
+      const insideMoreBtn = moreBtnRef.current?.contains(e.target as Node);
+      const insideMoreMenu = moreMenuRef.current?.contains(e.target as Node);
+      if (!insideMoreBtn && !insideMoreMenu) setMoreOpen(false);
     };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
@@ -234,29 +257,38 @@ export function Layout() {
     <PresenceProvider>
     <div className="app">
       <nav className={"rail" + (navOpen ? " open" : "")}>
-        <NavLink to="/app" className="logo" style={{ display: "grid", placeItems: "center" }} onClick={() => setNavOpen(false)}><Icon name="orbit" size={26} /></NavLink>
-        {NAV_GROUPS.map((g, i) => (
-          <div key={g.label} className="rail-group">
-            {i > 0 && <span className="rail-div" />}
-            <span className="rail-group-label">{g.label}</span>
-            {g.items.map((n) => (
-              <NavLink key={n.to} to={n.to} end={n.end} onClick={() => setNavOpen(false)}
-                className={({ isActive }) => "navbtn" + (isActive ? " on" : "")}>
-                <Icon name={n.icon} size={20} />
-                {n.to === "/notifications" && unread > 0 && <span className="dotbadge" />}
-                <span className="tip">{n.label}</span>
-              </NavLink>
-            ))}
-          </div>
-        ))}
-        <div className="rail-foot">
-          {NAV_BOTTOM.map((n) => (
-            <NavLink key={n.to} to={n.to} onClick={() => setNavOpen(false)}
+        <NavLink to="/app" className="logo" style={{ display: "grid", placeItems: "center" }} onClick={() => setNavOpen(false)}><Icon name="orbit" size={22} /></NavLink>
+        <div className="rail-group">
+          {NAV_PRIMARY.map((n) => (
+            <NavLink key={n.to} to={n.to} end={n.end} onClick={() => setNavOpen(false)}
               className={({ isActive }) => "navbtn" + (isActive ? " on" : "")}>
-              <Icon name={n.icon} size={20} />
+              <Icon name={n.icon} size={18} />
               <span className="tip">{n.label}</span>
             </NavLink>
           ))}
+        </div>
+        <div className="rail-foot">
+          <button ref={moreBtnRef} className={"navbtn" + (moreOpen || NAV_MORE_ROUTES.some((r) => location.pathname.startsWith(r)) ? " on" : "")}
+            onClick={toggleMore}>
+            <Icon name="more" size={18} />
+            <span className="tip">More</span>
+          </button>
+          {moreOpen && morePos && createPortal(
+            <div className="rail-more-menu" ref={moreMenuRef} style={{ left: morePos.left, bottom: morePos.bottom }}>
+              {NAV_MORE_GROUPS.map((g) => (
+                <div key={g.label}>
+                  <div className="rail-more-group-label">{g.label}</div>
+                  {g.items.map((n) => (
+                    <NavLink key={n.to} to={n.to} onClick={() => { setMoreOpen(false); setNavOpen(false); }}
+                      className={({ isActive }) => "menu-item" + (isActive ? " on" : "")}>
+                      <Icon name={n.icon} size={16} />{n.label}
+                    </NavLink>
+                  ))}
+                </div>
+              ))}
+            </div>,
+            document.body,
+          )}
           <span className="rail-div" />
           <button className="rail-ver" onClick={() => setLog(true)} title="What's new">v0.1</button>
         </div>

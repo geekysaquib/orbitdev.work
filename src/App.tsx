@@ -42,6 +42,7 @@ const Settings = lazy(() => import("./routes/Settings"));
 const GetStarted = lazy(() => import("./routes/GetStarted"));
 const Onboarding = lazy(() => import("./routes/Onboarding"));
 const AuditLog = lazy(() => import("./routes/AuditLog"));
+const Automation = lazy(() => import("./routes/Automation"));
 const Health = lazy(() => import("./routes/Health"));
 const Insights = lazy(() => import("./routes/Insights"));
 
@@ -94,6 +95,7 @@ export default function App() {
               <Route path="/notifications" element={<Notifications />} />
               <Route path="/docs" element={<Docs />} />
               <Route path="/audit" element={<AuditLog />} />
+              <Route path="/automation" element={<Automation />} />
               <Route path="/health" element={<Health />} />
               <Route path="/insights" element={<Insights />} />
               <Route path="/settings" element={<Settings />} />

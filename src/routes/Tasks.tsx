@@ -9,6 +9,7 @@ import { supabase } from "../lib/supabase";
 import { getUser } from "../lib/auth";
 import { listMyTeams } from "../lib/teams";
 import { recordAudit } from "../lib/audit";
+import { fireAsync } from "../lib/automation";
 import { useMyTeamRoles } from "../hooks/useMyTeamRoles";
 import type { Task, TaskStatus, Priority, Project, Team } from "../lib/types";
 
@@ -65,7 +66,10 @@ export default function Tasks() {
   function drop(status: TaskStatus) {
     if (dragId) {
       const t = rows.find((x) => x.id === dragId);
-      if (t && t.status !== status) update(t.id, { status } as Partial<Task>);
+      if (t && t.status !== status) {
+        update(t.id, { status } as Partial<Task>);
+        fireAsync({ type: "task_status", taskId: t.id, title: t.title, status, priority: t.priority, projectId: t.project_id });
+      }
     }
     setDragId(null); setOverCol(null);
   }
@@ -149,6 +153,25 @@ export default function Tasks() {
                       )}
                       {t.project_id && projName[t.project_id] && <span>· {projName[t.project_id]}</span>}
                       {due && <span className={"ttask-due" + (due.over ? " over" : "")}>· {due.text}</span>}
+                      {canEdit ? (
+                        <span>
+                          ·{" "}
+                          <input
+                            key={`${t.id}-${t.estimate_minutes ?? "u"}`}
+                            type="number" min={1} className="ttask-est mono" title="Estimated minutes"
+                            defaultValue={t.estimate_minutes ?? ""} placeholder="Est min"
+                            onClick={(e) => e.stopPropagation()}
+                            onBlur={(e) => {
+                              const raw = e.target.value.trim();
+                              const n = raw ? Math.max(1, Math.round(Number(raw))) : null;
+                              if (n !== t.estimate_minutes) update(t.id, { estimate_minutes: n } as Partial<Task>);
+                            }}
+                            onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+                          />m
+                        </span>
+                      ) : (
+                        t.estimate_minutes != null && <span>· Est {t.estimate_minutes}m</span>
+                      )}
                       {mine ? (
                         teams.length > 0 && (
                           <>

@@ -2,9 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import { useAgent } from "../context/Agent";
 import { useZoho } from "../context/Zoho";
 import { fetchDocker } from "../lib/agent";
-import { fetchIntegrations } from "../lib/integrations";
+import { fetchIntegrations, providerKeys } from "../lib/integrations";
 import { pgServers, pgHealth } from "../lib/pg";
 import { fetchProviderConnections } from "../lib/providerConnections";
+import { orderedProviders } from "../lib/ai";
 import type { ProviderId } from "../lib/types";
 
 export type HealthState = "ok" | "warn" | "unknown";
@@ -17,7 +18,8 @@ export interface IntegrationHealth {
   gmail: { state: HealthState; configured: boolean };
   docker: { state: HealthState; available: boolean; count: number };
   postgres: { state: HealthState; servers: { name: string; ok: boolean; error?: string }[] };
-  anthropic: { state: HealthState };
+  /** Any cloud AI provider (Anthropic/Gemini/OpenAI/Grok) configured — not specifically Anthropic anymore. */
+  ai: { state: HealthState; count: number };
   // GitHub/GitLab/Sentry/Netlify/Vercel/AWS — generic, since these all share
   // the same "connected or not" shape (unlike Docker/Postgres above, which
   // carry richer per-item detail existing call sites already depend on).
@@ -34,7 +36,7 @@ const EMPTY: IntegrationHealth = {
   gmail: { state: "unknown", configured: false },
   docker: { state: "unknown", available: false, count: 0 },
   postgres: { state: "unknown", servers: [] },
-  anthropic: { state: "unknown" },
+  ai: { state: "unknown", count: 0 },
   providers: EMPTY_PROVIDERS,
 };
 
@@ -66,7 +68,8 @@ export function useIntegrationHealth() {
     const integrations = await fetchIntegrations();
     const gmailConfigured = !!(integrations?.gmail_user && integrations?.gmail_app_password);
     const gmail: IntegrationHealth["gmail"] = { state: gmailConfigured ? "ok" : "unknown", configured: gmailConfigured };
-    const anthropic: IntegrationHealth["anthropic"] = { state: integrations?.anthropic_api_key ? "ok" : "unknown" };
+    const configuredProviders = orderedProviders(providerKeys(integrations));
+    const ai: IntegrationHealth["ai"] = { state: configuredProviders.length > 0 ? "ok" : "unknown", count: configuredProviders.length };
 
     const docker: IntegrationHealth["docker"] = agentStatus !== "online"
       ? { state: "unknown", available: false, count: 0 }
@@ -94,7 +97,7 @@ export function useIntegrationHealth() {
       }),
     ) as Record<ProviderId, { state: HealthState; label: string }>;
 
-    setHealth({ agent, zoho: zohoHealth, gmail, docker, postgres, anthropic, providers });
+    setHealth({ agent, zoho: zohoHealth, gmail, docker, postgres, ai, providers });
     setLoading(false);
   }, [agentStatus, zoho.status]);
 

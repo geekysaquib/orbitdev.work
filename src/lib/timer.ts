@@ -18,6 +18,7 @@ import { logOrbitSession } from "./orbitHours";
 export const TIMER_KEY = "orbit.timerStart";
 export const TIMER_PAUSE_KEY = "orbit.timerPausedSec";
 export const TIMER_PROJECT_KEY = "orbit.timerProject";
+export const TIMER_TASK_KEY = "orbit.timerTask";
 /** Fired whenever the timer starts/stops so other mounted surfaces re-read immediately. */
 export const TIMER_EVENT = "orbit-timer-change";
 
@@ -29,7 +30,7 @@ export const ls = {
 
 export function emitTimerChange() { try { window.dispatchEvent(new Event(TIMER_EVENT)); } catch { /* noop */ } }
 
-export interface TimerState { startedAt: number | null; seconds: number; projectId: string | null }
+export interface TimerState { startedAt: number | null; seconds: number; projectId: string | null; taskId: string | null }
 
 export function readTimer(): TimerState {
   const raw = ls.get(TIMER_KEY);
@@ -38,32 +39,37 @@ export function readTimer(): TimerState {
     startedAt,
     seconds: startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0,
     projectId: ls.get(TIMER_PROJECT_KEY),
+    taskId: ls.get(TIMER_TASK_KEY),
   };
 }
 
 export const isTimerRunning = (): boolean => readTimer().startedAt !== null;
 
 /**
- * Start a session, optionally attributed to a project. No-ops if one is already
- * running — restarting would silently discard the unlogged session in progress.
- * Callers own the "can you start right now" gates (agent online, not on a break);
- * break resume has to bypass them, so they can't live here.
+ * Start a session, optionally attributed to a project and/or a specific task
+ * within it (task-level attribution is what makes estimate-accuracy — planned
+ * vs actual — computable). No-ops if one is already running — restarting would
+ * silently discard the unlogged session in progress. Callers own the "can you
+ * start right now" gates (agent online, not on a break); break resume has to
+ * bypass them, so they can't live here.
  */
-export function startTimer(projectId?: string | null): void {
+export function startTimer(projectId?: string | null, taskId?: string | null): void {
   if (isTimerRunning()) return;
   ls.set(TIMER_KEY, String(Date.now()));
   if (projectId) ls.set(TIMER_PROJECT_KEY, projectId); else ls.del(TIMER_PROJECT_KEY);
+  if (taskId) ls.set(TIMER_TASK_KEY, taskId); else ls.del(TIMER_TASK_KEY);
   emitTimerChange();
 }
 
-/** Stop, log the session to Orbit hours with its project, and return the seconds logged. */
+/** Stop, log the session to Orbit hours with its project/task, and return the seconds logged. */
 export async function stopTimer(): Promise<number> {
-  const { startedAt, seconds, projectId } = readTimer();
+  const { startedAt, seconds, projectId, taskId } = readTimer();
   if (startedAt === null) return 0;
   ls.del(TIMER_KEY);
   ls.del(TIMER_PROJECT_KEY);
+  ls.del(TIMER_TASK_KEY);
   ls.del(TIMER_PAUSE_KEY);
   emitTimerChange();
-  await logOrbitSession(seconds, projectId);
+  await logOrbitSession(seconds, projectId, taskId);
   return seconds;
 }

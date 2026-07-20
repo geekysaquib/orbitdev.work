@@ -15,7 +15,12 @@ export interface Project {
 }
 export interface Task {
   id: string; user_id: string; project_id: string | null; team_id: string | null; title: string;
-  status: TaskStatus; priority: Priority; due_date: string | null; created_at: string;
+  status: TaskStatus; priority: Priority; due_date: string | null;
+  estimate_minutes: number | null; completed_at: string | null; created_at: string;
+}
+export interface TimeEntry {
+  id: string; user_id: string; project_id: string | null; task_id: string | null;
+  started_at: string; ended_at: string | null; seconds: number; created_at: string;
 }
 export interface Team {
   id: string; name: string; owner_id: string; created_at: string;

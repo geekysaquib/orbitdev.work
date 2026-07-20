@@ -26,11 +26,12 @@ export function setAgentUrl(url: string): void {
   try { localStorage.setItem(KEY, url.trim().replace(/\/+$/, "")); } catch { /* ignore */ }
 }
 
-async function call(path: string, body?: unknown): Promise<Response> {
+async function call(path: string, body?: unknown, signal?: AbortSignal): Promise<Response> {
   return fetch(getAgentUrl() + path, {
     method: body ? "POST" : "GET",
     headers: { "Content-Type": "application/json", ...authHeader() },
     body: body ? JSON.stringify(body) : undefined,
+    signal,
   });
 }
 

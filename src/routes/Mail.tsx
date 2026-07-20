@@ -9,7 +9,7 @@ import { useAgent } from "../context/Agent";
 import { useTimezone, tzDateTime } from "../context/Timezone";
 import { useTable } from "../hooks/useTable";
 import { gmailConfigure, gmailDisconnect, gmailList, gmailMessage, gmailSend, type GmailMsg, type GmailFull } from "../lib/agent";
-import { fetchIntegrations, saveIntegrations } from "../lib/integrations";
+import { fetchIntegrations, saveIntegrations, providerKeys } from "../lib/integrations";
 import { fetchSettings } from "../lib/settings";
 import { mailTemplates, type MailTemplate } from "../lib/mailTemplates";
 import { scheduleEmail } from "../lib/scheduledEmails";
@@ -371,7 +371,7 @@ export default function Mail() {
     const intg = await fetchIntegrations();
     const system = "You draft concise, professional email replies. Ground your reply ONLY in the quoted thread the user provides — never invent facts, commitments, names or details that aren't in it. Match the sender's tone. Output only the reply body text, with no subject line and no preamble like \"Here's a draft\".";
     const prompt = `Reply to this email thread.\n\nFrom: ${full.from}\nSubject: ${full.subject}\n\n${(full.text || "").slice(0, 6000)}`;
-    const r = await ask(prompt, system, intg?.anthropic_api_key || null);
+    const r = await ask(prompt, system, providerKeys(intg), intg?.ai_provider ?? undefined);
     setAiDrafting(false);
     if (!r.ok) { toast(`Couldn't draft a reply: ${r.error}`); return; }
     setCompose({

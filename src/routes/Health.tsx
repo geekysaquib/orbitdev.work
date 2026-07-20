@@ -122,8 +122,10 @@ export default function Health() {
           {localAi.ok === false && <div style={{ marginTop: 8, fontSize: 12, color: "var(--red)" }}>{localAi.message}</div>}
         </HealthTile>
         <HealthTile
-          icon="key" label="Anthropic key" state={health.anthropic.state}
-          sub={health.anthropic.state === "ok" ? "Set — powers schema Q&A, ticket triage, and standup summaries." : "Not set — optional, the local model covers the same features for free."}
+          icon="key" label="Cloud AI keys" state={health.ai.state}
+          sub={health.ai.count > 0
+            ? `${health.ai.count} provider${health.ai.count > 1 ? "s" : ""} set — powers schema Q&A, ticket triage, standup summaries, and Ask AI.`
+            : "None set — optional, the local model covers the same features for free."}
           cta={{ label: "Set up", onClick: () => nav("/settings?section=ai") }}
         />
       </div>

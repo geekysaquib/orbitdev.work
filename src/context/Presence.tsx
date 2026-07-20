@@ -13,9 +13,9 @@ export interface PresenceEntry {
   since: string;
 }
 
-// Mirrors the path -> label mapping in Layout.tsx's NAV_GROUPS/NAV_BOTTOM, so
-// a presence label always reads like the nav rail without importing it (that
-// list is keyed by icon/route metadata this doesn't need).
+// Mirrors the path -> label mapping in Layout.tsx's NAV_PRIMARY/NAV_MORE_GROUPS,
+// so a presence label always reads like the nav rail without importing it
+// (that list is keyed by icon/route metadata this doesn't need).
 const PATH_LABELS: Record<string, string> = {
   "/app": "Dashboard", "/projects": "Projects", "/tasks": "Tasks", "/sprints": "Sprints",
   "/teams": "Teams", "/mail": "Mail", "/calendar": "Calendar",

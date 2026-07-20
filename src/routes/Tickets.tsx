@@ -5,9 +5,10 @@ import { Badge, ACCENT, prColor, Empty, OrbitLoader } from "../components/ui";
 import { useTable } from "../hooks/useTable";
 import { useToast } from "../context/Toast";
 import { fetchZohoTickets } from "../lib/zoho";
-import { fetchIntegrations } from "../lib/integrations";
-import { ask, type AiSource } from "../lib/ai";
+import { fetchIntegrations, providerKeys } from "../lib/integrations";
+import { ask, type AiSource, type ProviderKeys, type CloudProvider } from "../lib/ai";
 import { recordAudit } from "../lib/audit";
+import { fireAsync } from "../lib/automation";
 import type { Ticket, Project } from "../lib/types";
 
 const TRIAGE_SYSTEM = `You triage support/dev tickets. Given a title, description, and a list of projects, respond with exactly four lines:
@@ -28,7 +29,8 @@ export default function Tickets() {
   const toast = useToast();
   const [sel, setSel] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
-  const [aiApiKey, setAiApiKey] = useState<string | null>(null);
+  const [aiKeys, setAiKeys] = useState<ProviderKeys>({});
+  const [aiProvider, setAiProvider] = useState<CloudProvider | undefined>(undefined);
   const [triage, setTriage] = useState<{ id: string; text: string; source: AiSource } | null>(null);
   const [triaging, setTriaging] = useState(false);
   const active = rows.find((t) => t.id === sel) ?? rows[0];
@@ -42,7 +44,7 @@ export default function Tickets() {
     if (wantId && rows.some((r) => r.id === wantId)) setSel(wantId);
   }, [wantId, rows]);
 
-  useEffect(() => { fetchIntegrations().then((i) => setAiApiKey(i?.anthropic_api_key || null)); }, []);
+  useEffect(() => { fetchIntegrations().then((i) => { setAiKeys(providerKeys(i)); setAiProvider(i?.ai_provider ?? undefined); }); }, []);
 
   function triagePrompt(t: { title: string; body: string | null }): string {
     const projectNames = projects.map((p) => p.name).join(", ") || "(none)";
@@ -63,12 +65,20 @@ export default function Tickets() {
     if (Object.keys(patch).length > 0) await update(ticketId, patch);
   }
 
+  /** Shared by the status buttons so audit, toast and automation stay in one place. */
+  async function setTicketStatus(t: Ticket, status: string, message: string) {
+    await update(t.id, { status } as Partial<Ticket>);
+    recordAudit({ action: "ticket.update", entityType: "ticket", entityId: t.id, meta: { status } });
+    fireAsync({ type: "ticket_status", ticketId: t.id, title: t.title, status, priority: t.priority, projectId: t.project_id });
+    toast(message);
+  }
+
   async function runTriage(t: Ticket) {
     if (triaging) return;
     setTriaging(true); setTriage(null);
-    const r = await ask(triagePrompt(t), TRIAGE_SYSTEM, aiApiKey);
+    const r = await ask(triagePrompt(t), TRIAGE_SYSTEM, aiKeys, aiProvider);
     setTriaging(false);
-    if (!r.ok) { toast(`Triage failed: ${r.error}${r.source === "local" ? " — set up local AI in Settings, or add an Anthropic key" : ""}`); return; }
+    if (!r.ok) { toast(`Triage failed: ${r.error}${r.source === "local" ? " — set up local AI in Settings, or add a cloud AI key" : ""}`); return; }
     const text = r.text || "";
     setTriage({ id: t.id, text, source: r.source });
     await applyTriageResult(t.id, text);
@@ -92,7 +102,8 @@ export default function Tickets() {
           added++;
           // Auto-triage only brand-new items — resyncing an existing ticket never re-triages it.
           if (data) {
-            const r = await ask(triagePrompt(data), TRIAGE_SYSTEM, aiApiKey);
+            fireAsync({ type: "ticket_created", ticketId: data.id, title: data.title, priority: data.priority, projectId: data.project_id });
+            const r = await ask(triagePrompt(data), TRIAGE_SYSTEM, aiKeys, aiProvider);
             if (r.ok) await applyTriageResult(data.id, r.text || "");
           }
         }
@@ -138,8 +149,8 @@ export default function Tickets() {
             </div>
             <h1 className="h1" style={{ marginTop: 14, maxWidth: 640, lineHeight: 1.3 }}>{active.title}</h1>
             <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-              <button className="btn" onClick={() => update(active.id, { status: "In Progress" } as Partial<Ticket>).then(() => { recordAudit({ action: "ticket.update", entityType: "ticket", entityId: active.id, meta: { status: "In Progress" } }); toast("Status updated"); })}><Icon name="check" size={14} />In progress</button>
-              <button className="btn" onClick={() => update(active.id, { status: "Closed" } as Partial<Ticket>).then(() => { recordAudit({ action: "ticket.update", entityType: "ticket", entityId: active.id, meta: { status: "Closed" } }); toast("Marked closed"); })}><Icon name="check2" size={14} />Close</button>
+              <button className="btn" onClick={() => setTicketStatus(active, "In Progress", "Status updated")}><Icon name="check" size={14} />In progress</button>
+              <button className="btn" onClick={() => setTicketStatus(active, "Closed", "Marked closed")}><Icon name="check2" size={14} />Close</button>
               <button className="btn accent" onClick={() => toast("Task created from item")}><Icon name="plus" size={14} />To task</button>
               <button className="btn ghost" disabled={triaging} onClick={() => runTriage(active)}>
                 {triaging ? <><Icon name="loader" size={14} className="spin" />Triaging…</> : <><Icon name="sparkles" size={14} />AI triage</>}

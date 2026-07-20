@@ -92,27 +92,49 @@ export function askContextAge(): number | null {
   return zohoCache.age() ?? supaCache.age();
 }
 
-export async function buildAppContext(): Promise<AppContext> {
+/**
+ * `compact` renders a much smaller snapshot for the local model, which pays for
+ * every prompt token twice over: prefill runs at ~80 tok/s on CPU, so the full
+ * snapshot spends 40-85s tokenizing before the first token appears, and a big
+ * workspace can exceed the 4k context window outright ("Requested tokens exceed
+ * context window"). It drops the `[P:]`/`[T:]`/`[S:]` ids entirely — those exist
+ * only for the actions contract, which AskAiModal sends to cloud models only —
+ * and keeps fewer rows per section. Measured: 1869 -> 367 tokens, 41s -> 12s to
+ * first token. The `index` is still populated either way; it's cheap, and the
+ * caller decides whether to parse actions out of the answer.
+ */
+const CAPS = {
+  full: { tasks: 20, tickets: 20, sprintBlocks: 8, itemsPerSprint: 10 },
+  compact: { tasks: 8, tickets: 8, sprintBlocks: 4, itemsPerSprint: 3 },
+};
+
+export async function buildAppContext(opts: { compact?: boolean } = {}): Promise<AppContext> {
   const supa = await supaCache.get();
   const active = supa.projects.filter((p) => p.status === "active");
   // A Zoho failure degrades to the local-only snapshot rather than failing the ask.
   const zoho = await zohoCache.get().catch(() => ({ connected: false, todayHours: null, boards: [] } as ZohoSlice));
 
+  const lean = !!opts.compact;
+  const cap = lean ? CAPS.compact : CAPS.full;
   const index: ActionIndex = { tickets: new Map(), projects: new Map(), sprintItems: new Map(), timerProjects: new Map() };
   for (const p of active) { index.projects.set(p.id, p.name); index.timerProjects.set(p.id, p.name); }
 
   const lines: string[] = [];
   lines.push(active.length
-    ? `Active projects: ${active.map((p) => `[P:${p.id}] ${p.name}`).join("; ")}`
+    ? `Active projects: ${active.map((p) => (lean ? p.name : `[P:${p.id}] ${p.name}`)).join("; ")}`
     : "Active projects: none");
-  if (supa.orbit) lines.push(`Orbit hours today: ${supa.orbit.todayH}h (${supa.orbit.totalH}h all-time)`);
+  if (supa.orbit) {
+    lines.push(lean
+      ? `Orbit hours today: ${supa.orbit.todayH}h`
+      : `Orbit hours today: ${supa.orbit.todayH}h (${supa.orbit.totalH}h all-time)`);
+  }
 
   const done = supa.tasks.filter((t) => t.status === "done").map((t) => t.title);
   const inProgress = supa.tasks.filter((t) => t.status !== "done").map((t) => `${t.title} (${t.status})`);
-  lines.push(`Done tasks: ${done.length ? done.slice(0, 20).join("; ") : "none"}`);
-  lines.push(`Tasks in progress / to do: ${inProgress.length ? inProgress.slice(0, 20).join("; ") : "none"}`);
+  lines.push(`Done tasks: ${done.length ? done.slice(0, cap.tasks).join("; ") : "none"}`);
+  lines.push(`Tasks in progress / to do: ${inProgress.length ? inProgress.slice(0, cap.tasks).join("; ") : "none"}`);
 
-  const openTickets = supa.tickets.filter((t) => !/resolved|closed/i.test(t.status)).slice(0, 20);
+  const openTickets = supa.tickets.filter((t) => !/resolved|closed/i.test(t.status)).slice(0, cap.tickets);
   if (openTickets.length) {
     lines.push("Open tickets (local):");
     for (const t of openTickets) {
@@ -120,7 +142,9 @@ export async function buildAppContext(): Promise<AppContext> {
       // The zoho_id is display-only context so a user asking about "#4102" resolves
       // for the model; it answers with the [T:] id, which is what actions target.
       const num = t.zoho_id ? `#${t.zoho_id} ` : "";
-      lines.push(`  [T:${t.id}] ${num}${t.title} — ${t.status}/${t.priority}`);
+      lines.push(lean
+        ? `  ${num}${t.title} — ${t.status}/${t.priority}`
+        : `  [T:${t.id}] ${num}${t.title} — ${t.status}/${t.priority}`);
     }
   } else {
     lines.push("Open tickets (local): none");
@@ -140,21 +164,24 @@ export async function buildAppContext(): Promise<AppContext> {
       const openItems = sprint.items.filter((it) => !/done|closed|resolved|complete/i.test(it.status));
       if (openItems.length === 0) continue;
       const block = [`  ${entry.project.name} · ${sprint.name} (${sprint.status}):`];
-      for (const it of openItems.slice(0, 10)) {
+      for (const it of openItems.slice(0, cap.itemsPerSprint)) {
         const projectId = entry.project.sprint_project_id!;
         const key = `${projectId}/${sprint.id}/${it.id}`;
         const label = it.subject;
         index.sprintItems.set(key, { projectId, sprintId: sprint.id, itemId: it.id, label });
         const num = it.ticketNumber ? `#${it.ticketNumber} ` : "";
         const who = it.assignees?.length ? ` (${it.assignees.join(", ")})` : "";
-        block.push(`    [S:${key}] ${num}${it.subject} [${it.status}${it.priority ? `/${it.priority}` : ""}]${who}`);
+        const status = `[${it.status}${it.priority ? `/${it.priority}` : ""}]`;
+        block.push(lean
+          ? `    ${num}${it.subject} ${status}`
+          : `    [S:${key}] ${num}${it.subject} ${status}${who}`);
       }
       sprintLines.push(block.join("\n"));
     }
   }
   lines.push(`Open bugs across linked sprints: ${openBugCount}`);
   lines.push(sprintLines.length
-    ? `Zoho sprint items in progress:\n${sprintLines.slice(0, 8).join("\n")}`
+    ? `Zoho sprint items in progress:\n${sprintLines.slice(0, cap.sprintBlocks).join("\n")}`
     : "Zoho sprint items in progress: none");
 
   return { text: lines.join("\n"), index, at: Date.now() };

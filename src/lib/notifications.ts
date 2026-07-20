@@ -8,12 +8,13 @@ export const NOTIF_ICON: Record<string, [string, string]> = {
   task_team: ["users", ACCENT.mint], task: ["layers", ACCENT.blue], mail: ["mail", ACCENT.violet],
   mention: ["at", ACCENT.blue], weekly_digest: ["sparkles", ACCENT.violet],
   daily_brief: ["sun", ACCENT.amber], anomaly: ["alert", ACCENT.red],
+  automation: ["zap", ACCENT.mint],
 };
 export const NOTIF_KIND_LABEL: Record<string, string> = {
   ticket: "Tickets", deploy: "Deploys", git: "Git events", deadline: "Deadlines",
   system: "System", task_team: "Team tasks", task: "Tasks", mail: "Mail rules",
   mention: "Mentions", weekly_digest: "Weekly review",
-  daily_brief: "Daily brief", anomaly: "Anomalies",
+  daily_brief: "Daily brief", anomaly: "Anomalies", automation: "Automation",
 };
 export const NOTIF_KINDS = Object.keys(NOTIF_KIND_LABEL);
 

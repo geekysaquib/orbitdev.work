@@ -22,8 +22,8 @@ import { launch, fetchDocker, type DockerContainer } from "../lib/agent";
 import { fetchZohoTickets, fetchTimesheet, fetchSprintBoard, type Board, type ZohoItem } from "../lib/zoho";
 import { fetchOrbitHours, type OrbitHours } from "../lib/orbitHours";
 import { readTimer } from "../lib/timer";
-import { fetchIntegrations } from "../lib/integrations";
-import { ask, type AiSource } from "../lib/ai";
+import { fetchIntegrations, providerKeys } from "../lib/integrations";
+import { ask, type AiSource, type ProviderKeys, type CloudProvider } from "../lib/ai";
 import { supabase } from "../lib/supabase";
 import type { Project, Ticket, Task, Notification } from "../lib/types";
 
@@ -63,7 +63,8 @@ export default function Dashboard() {
   const agentDown = agentStatus !== "online";
   const { gitByProject } = useProjectsGitStatus(projects, agentStatus === "online");
   const { health } = useIntegrationHealth();
-  const [aiApiKey, setAiApiKey] = useState<string | null>(null);
+  const [aiKeys, setAiKeys] = useState<ProviderKeys>({});
+  const [aiProvider, setAiProvider] = useState<CloudProvider | undefined>(undefined);
   const [standup, setStandup] = useState<string | null>(null);
   const [standupSource, setStandupSource] = useState<AiSource | null>(null);
   const [standupDurationMs, setStandupDurationMs] = useState(0);
@@ -153,7 +154,7 @@ export default function Dashboard() {
     window.addEventListener("pointerup", onUp);
   }
 
-  useEffect(() => { fetchIntegrations().then((i) => setAiApiKey(i?.anthropic_api_key || null)); }, []);
+  useEffect(() => { fetchIntegrations().then((i) => { setAiKeys(providerKeys(i)); setAiProvider(i?.ai_provider ?? undefined); }); }, []);
 
   // 1s tick drives the live Orbit timer
   useEffect(() => { const t = setInterval(() => setTick(Date.now()), 1000); return () => clearInterval(t); }, []);
@@ -263,7 +264,7 @@ export default function Dashboard() {
     if (standupBusy) return;
     setStandupBusy(true); setStandup(null);
     const started = Date.now();
-    const r = await ask(buildWorkContext(), STANDUP_SYSTEM, aiApiKey);
+    const r = await ask(buildWorkContext(), STANDUP_SYSTEM, aiKeys, aiProvider);
     setStandupBusy(false);
     setStandupSource(r.source);
     setStandupDurationMs(Date.now() - started);
@@ -291,7 +292,7 @@ export default function Dashboard() {
     { id: "cloud", icon: "cloud", label: "Cloud", state: cloudState, status: cloudOkCount > 0 ? `${cloudOkCount}/3 connected` : cloudState === "unknown" ? "Not set up" : "Disconnected" },
     { id: "docker", icon: "container", label: "Docker", state: health.docker.state, status: agentDown ? "Agent offline" : health.docker.available ? `${health.docker.count} running` : "Not detected" },
     { id: "postgres", icon: "db", label: "Postgres", state: health.postgres.state, status: health.postgres.servers.length === 0 ? "No servers" : `${health.postgres.servers.filter((s) => s.ok).length}/${health.postgres.servers.length} reachable` },
-    { id: "anthropic", icon: "key", label: "Anthropic key", state: health.anthropic.state, status: health.anthropic.state === "ok" ? "Set" : "Not set" },
+    { id: "ai", icon: "key", label: "Cloud AI keys", state: health.ai.state, status: health.ai.count > 0 ? `${health.ai.count} set` : "Not set" },
   ];
   const healthWarnCount = healthRows.filter((r) => r.state === "warn").length;
   const healthOkCount = healthRows.filter((r) => r.state === "ok").length;

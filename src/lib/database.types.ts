@@ -61,12 +61,12 @@ export interface Database {
         {
           id: string; user_id: string; project_id: string | null; team_id: string | null; title: string;
           status: "todo" | "doing" | "review" | "done"; priority: "low" | "med" | "high";
-          due_date: string | null; created_at: string;
+          due_date: string | null; estimate_minutes: number | null; completed_at: string | null; created_at: string;
         },
         {
           id?: string; user_id: string; project_id?: string | null; team_id?: string | null; title: string;
           status?: "todo" | "doing" | "review" | "done"; priority?: "low" | "med" | "high";
-          due_date?: string | null; created_at?: string;
+          due_date?: string | null; estimate_minutes?: number | null; completed_at?: string | null; created_at?: string;
         }
       >;
       tickets: Table<
@@ -96,19 +96,23 @@ export interface Database {
         { id?: string; user_id: string; kind?: string; title: string; body?: string | null; link?: string | null; read?: boolean; created_at?: string }
       >;
       time_entries: Table<
-        { id: string; user_id: string; project_id: string | null; started_at: string; ended_at: string | null; seconds: number; created_at: string },
-        { id?: string; user_id: string; project_id?: string | null; started_at: string; ended_at?: string | null; seconds?: number; created_at?: string }
+        { id: string; user_id: string; project_id: string | null; task_id: string | null; started_at: string; ended_at: string | null; seconds: number; created_at: string },
+        { id?: string; user_id: string; project_id?: string | null; task_id?: string | null; started_at: string; ended_at?: string | null; seconds?: number; created_at?: string }
       >;
       integrations: Table<
         {
           user_id: string; zoho_client_id: string | null; zoho_client_secret: string | null; zoho_refresh_token: string | null;
           zoho_dc: string | null; zoho_team_id: string | null; zoho_project_id: string | null;
-          gmail_user: string | null; gmail_app_password: string | null; anthropic_api_key: string | null; updated_at: string;
+          gmail_user: string | null; gmail_app_password: string | null;
+          anthropic_api_key: string | null; gemini_api_key: string | null; openai_api_key: string | null; grok_api_key: string | null;
+          ai_provider: string | null; updated_at: string;
         },
         {
           user_id: string; zoho_client_id?: string | null; zoho_client_secret?: string | null; zoho_refresh_token?: string | null;
           zoho_dc?: string | null; zoho_team_id?: string | null; zoho_project_id?: string | null;
-          gmail_user?: string | null; gmail_app_password?: string | null; anthropic_api_key?: string | null; updated_at?: string;
+          gmail_user?: string | null; gmail_app_password?: string | null;
+          anthropic_api_key?: string | null; gemini_api_key?: string | null; openai_api_key?: string | null; grok_api_key?: string | null;
+          ai_provider?: string | null; updated_at?: string;
         }
       >;
       pg_servers: Table<
@@ -142,6 +146,20 @@ export interface Database {
       mail_rules: Table<
         { id: string; user_id: string; field: "from" | "subject"; value: string; enabled: boolean; created_at: string },
         { id?: string; user_id: string; field: "from" | "subject"; value: string; enabled?: boolean; created_at?: string }
+      >;
+      automation_rules: Table<
+        {
+          id: string; user_id: string; name: string; enabled: boolean;
+          trigger_type: string; trigger_config: Record<string, unknown>;
+          action_type: string; action_config: Record<string, unknown>;
+          run_count: number; last_run_at: string | null; created_at: string;
+        },
+        {
+          id?: string; user_id: string; name: string; enabled?: boolean;
+          trigger_type: string; trigger_config?: Record<string, unknown>;
+          action_type: string; action_config?: Record<string, unknown>;
+          run_count?: number; last_run_at?: string | null; created_at?: string;
+        }
       >;
       provider_connections: Table<
         {
