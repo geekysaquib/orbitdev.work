@@ -5,3 +5,9 @@ dist
 .netlify
 *.log
 netlify/functions/mail-config.json
+
+# test artifacts (raw results / Playwright traces / generated report — not source)
+test-results
+.playwright-artifacts
+playwright-report
+orbit-feature-test-report.pdf

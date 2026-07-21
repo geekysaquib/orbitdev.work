@@ -11,6 +11,7 @@ import { useTimezone, tzClock, allZones, tzOffset, zoneMatches } from "../contex
 import { useBreak } from "../context/Break";
 import { PresenceProvider } from "../context/Presence";
 import { useSignOutGuard } from "../hooks/useSignOutGuard";
+import { useVscodeBridge } from "../hooks/useVscodeBridge";
 import { CommandPalette } from "./CommandPalette";
 import { StartWorkModal } from "./StartWorkModal";
 import { AskAiModal } from "./AskAiModal";
@@ -58,9 +59,9 @@ const NAV_MORE_GROUPS: { label: string; items: { to: string; label: string; icon
 const NAV_MORE_ROUTES = NAV_MORE_GROUPS.flatMap((g) => g.items.map((i) => i.to));
 
 const CHANGELOG = [
-  { v: "0.1.0", date: "Jul 2026", notes: ["Supabase auth + RLS-scoped projects, tasks, calendar, notifications", "Zoho Sprints work-item sync", "Local agent: launch VS Code / Visual Studio, native folder picker", "Configurable agent URL, auto-reconnect, status page", "Docs, profile menu, empty states"] },
-  { v: "0.0.2", date: "Jun 2026", notes: ["Claude Design control-room system", "Start-Work ignition macro"] },
-  { v: "0.0.1", date: "Jun 2026", notes: ["Initial prototype — dashboard, project bays, tickets"] },
+  { v: "0.1.0", date: "Jul 2026", notes: ["Secure sign-in, with your projects, tasks, calendar, and notifications kept private to your team", "Two-way sync with Zoho Sprints for tickets and sprints", "Open projects straight into VS Code or Visual Studio with a native folder picker", "More reliable connection to your local agent, with auto-reconnect and a status page", "New docs, a profile menu, and friendlier empty states throughout"] },
+  { v: "0.0.2", date: "Jun 2026", notes: ["Refreshed look and feel across the app", "One-click Start Work to jump straight into a task"] },
+  { v: "0.0.1", date: "Jun 2026", notes: ["First look: dashboard, projects, and tickets"] },
 ];
 
 export function Layout() {
@@ -72,6 +73,7 @@ export function Layout() {
   const { tz, setTz } = useTimezone();
   const { onBreak, endBreak, idlePaused } = useBreak();
   const { requestSignOut, signOutGuardModal } = useSignOutGuard();
+  useVscodeBridge();  // publishes the work list to the agent and runs VS Code's relayed commands
   const nav = useNavigate();
   const location = useLocation();
   const [clock, setClock] = useState("");
@@ -289,8 +291,6 @@ export function Layout() {
             </div>,
             document.body,
           )}
-          <span className="rail-div" />
-          <button className="rail-ver" onClick={() => setLog(true)} title="What's new">v0.1</button>
         </div>
       </nav>
       {navOpen && <div className="rail-backdrop" onClick={() => setNavOpen(false)} />}

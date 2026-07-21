@@ -267,6 +267,16 @@ export async function gitDiff(path: string, base?: string): Promise<{ ok: boolea
     return { ok: true, staged: j.staged ?? "", unstaged: j.unstaged ?? "", range: j.range };
   } catch { return { ok: false, error: "agent offline" }; }
 }
+/** Kill every process (across every window/session on this machine) bound to the agent's own port — clears a stuck EADDRINUSE after a crashed or duplicate launch. */
+export async function killAgentSessions(): Promise<{ ok: boolean; killed: number[]; killedSelf: boolean; error?: string }> {
+  try {
+    const r = await call("/agent/kill-sessions", {});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, killed: [], killedSelf: false, error: (j as { error?: string }).error || `agent ${r.status}` };
+    return { ok: true, killed: (j as { killed?: number[] }).killed ?? [], killedSelf: !!(j as { killedSelf?: boolean }).killedSelf };
+  } catch { return { ok: false, killed: [], killedSelf: false, error: "agent offline" }; }
+}
+
 export async function checkPort(port: number): Promise<{ ok: boolean; inUse: boolean; ownedBy: string | null; error?: string }> {
   try {
     const r = await fetch(`${getAgentUrl()}/port/check?port=${port}`, { headers: authHeader() });

@@ -1,0 +1,171 @@
+{
+  "name": "orbit-vscode",
+  "displayName": "ORBIT",
+  "description": "Your ORBIT tasks, tickets and timer inside VS Code — and accurate focus tracking based on what you're actually editing.",
+  "version": "0.3.1",
+  "publisher": "orbit",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "orbit",
+          "title": "ORBIT",
+          "icon": "media/orbit.svg"
+        }
+      ]
+    },
+    "views": {
+      "orbit": [
+        {
+          "id": "orbit.panel",
+          "name": "My work",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "orbit.refresh",
+        "title": "Refresh",
+        "category": "ORBIT",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "orbit.setToken",
+        "title": "Sign in (paste session token)",
+        "category": "ORBIT"
+      },
+      {
+        "command": "orbit.signOut",
+        "title": "Sign out of this editor",
+        "category": "ORBIT"
+      },
+      {
+        "command": "orbit.toggleTimer",
+        "title": "Start/stop timer",
+        "category": "ORBIT",
+        "icon": "$(watch)"
+      },
+      {
+        "command": "orbit.newTask",
+        "title": "New task from selection",
+        "category": "ORBIT",
+        "icon": "$(add)"
+      },
+      {
+        "command": "orbit.openApp",
+        "title": "Open ORBIT in browser",
+        "category": "ORBIT",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "orbit.rankTasks",
+        "title": "Rank tasks with AI",
+        "category": "ORBIT",
+        "icon": "$(sparkle)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "orbit.rankTasks",
+          "when": "view == orbit.panel",
+          "group": "navigation@0"
+        },
+        {
+          "command": "orbit.newTask",
+          "when": "view == orbit.panel",
+          "group": "navigation@1"
+        },
+        {
+          "command": "orbit.toggleTimer",
+          "when": "view == orbit.panel",
+          "group": "navigation@2"
+        },
+        {
+          "command": "orbit.refresh",
+          "when": "view == orbit.panel",
+          "group": "navigation@3"
+        },
+        {
+          "command": "orbit.openApp",
+          "when": "view == orbit.panel",
+          "group": "1_orbit"
+        },
+        {
+          "command": "orbit.setToken",
+          "when": "view == orbit.panel",
+          "group": "9_auth"
+        },
+        {
+          "command": "orbit.signOut",
+          "when": "view == orbit.panel",
+          "group": "9_auth"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "orbit.newTask",
+          "when": "editorHasSelection",
+          "group": "orbit@1"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "orbit.toggleTimer",
+        "key": "ctrl+alt+t",
+        "mac": "cmd+alt+t"
+      },
+      {
+        "command": "orbit.newTask",
+        "key": "ctrl+alt+n",
+        "mac": "cmd+alt+n"
+      }
+    ],
+    "configuration": {
+      "title": "ORBIT",
+      "properties": {
+        "orbit.agentUrl": {
+          "type": "string",
+          "default": "http://localhost:47600",
+          "description": "URL of the local ORBIT agent."
+        },
+        "orbit.webUrl": {
+          "type": "string",
+          "default": "http://localhost:8888",
+          "description": "URL of the ORBIT web app, used by 'Open in ORBIT'."
+        },
+        "orbit.reportActivity": {
+          "type": "boolean",
+          "default": true,
+          "description": "Report the active file/language to the ORBIT agent so focus analytics and idle detection reflect real editing. Nothing leaves your machine — the agent is local."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node18",
+    "watch": "npm run build -- --watch",
+    "typecheck": "tsc --noEmit",
+    "package": "vsce package --allow-missing-repository --skip-license"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.4.0"
+  }
+}

@@ -7,6 +7,7 @@ import { useTable } from "../hooks/useTable";
 import { useToast } from "../context/Toast";
 import { useAgent } from "../context/Agent";
 import { launch, gitPull, gitStatus, gitBranches, gitLog, gitDiff, type GitStatusResult, type GitBranch, type GitCommit } from "../lib/agent";
+import { openProjectWorkspace } from "../lib/vscode";
 import { fetchIntegrations, providerKeys } from "../lib/integrations";
 import { generateCommitMessage, generatePrDescription } from "../lib/gitWriter";
 import type { ProviderKeys, CloudProvider } from "../lib/ai";
@@ -207,6 +208,18 @@ export default function ProjectDetail() {
     toast(res.ok ? `Opening ${res.opened?.join(", ") || kind} · ${p!.name}` : (res.error === "agent offline" ? "Local agent offline — start it to launch apps" : res.error || "Couldn't launch"));
   }
 
+  /**
+   * Opens frontend + solution folders as one multi-root VS Code window instead
+   * of the two separate ones `launch("vscode")` gives, which only ever opens
+   * fe_path. Falls back to that when the project has a single folder.
+   */
+  async function doOpenWorkspace() {
+    const folders = [p!.fe_path, p!.sln_path ? p!.sln_path.replace(/[\\/][^\\/]+\.sln$/i, "") : null];
+    const r = await openProjectWorkspace(p!.name, folders);
+    if (!r.ok) { toast("No folder set on this project — add a frontend or solution path first"); return; }
+    toast(r.via === "deeplink" ? `Opening ${p!.name} in VS Code (agent offline)` : `Opened ${p!.name} workspace in VS Code`);
+  }
+
   async function doPull() {
     const path = p!.fe_path || p!.sln_path;
     if (!path) return;
@@ -246,6 +259,11 @@ export default function ProjectDetail() {
         <div style={{ display: "flex", gap: 8 }}>
           {canEdit && <button className="btn" onClick={() => setEdit(true)}><Icon name="settings" size={14} />Edit</button>}
           {p.fe_path && <button className="btn" disabled={agentDown} onClick={() => doLaunch("vscode")}><span style={{ color: ACCENT.blue }}><Icon name="code" size={14} /></span>Open UI</button>}
+          {p.fe_path && p.sln_path && (
+            <button className="btn" onClick={doOpenWorkspace} title="Open frontend and solution together as one VS Code workspace">
+              <span style={{ color: ACCENT.blue }}><Icon name="layers" size={14} /></span>Open workspace
+            </button>
+          )}
           {p.sln_path && <button className="btn" disabled={agentDown} onClick={() => doLaunch("visualstudio")}><span style={{ color: ACCENT.violet }}><Icon name="server" size={14} /></span>Backend</button>}
           <button className="iconbtn" title="Terminal" disabled={agentDown} onClick={() => doLaunch("terminal")}><Icon name="terminal" size={15} /></button>
           <button className="iconbtn" title="Open localhost" disabled={agentDown} onClick={() => doLaunch("browser")}><Icon name="globe" size={15} /></button>

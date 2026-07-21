@@ -19,7 +19,7 @@ import jwt from "jsonwebtoken";
 import { spawn, execFile, exec } from "node:child_process";
 import net from "node:net";
 import { platform } from "node:os";
-import { readFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, unlinkSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { ImapFlow } from "imapflow";
@@ -995,6 +995,50 @@ app.get("/port/check", async (req, res) => {
   res.json({ ok: true, inUse, ownedBy: owned ? owned.project : null });
 });
 
+// Find every PID currently LISTENING on a given TCP port — used to clean up
+// stale agent processes left behind by a crashed window or a launch that
+// didn't shut down cleanly (the classic EADDRINUSE-on-restart case).
+function pidsOnPort(port) {
+  return new Promise((resolve) => {
+    if (isWin) {
+      exec("netstat -ano", { windowsHide: true, maxBuffer: 1024 * 1024 * 8 }, (err, stdout) => {
+        if (err) return resolve([]);
+        const pids = new Set();
+        for (const line of String(stdout).split("\n")) {
+          const m = line.trim().match(/^TCP6?\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)/i);
+          if (m && Number(m[1]) === port) pids.add(Number(m[2]));
+        }
+        resolve([...pids]);
+      });
+    } else {
+      exec(`lsof -nP -iTCP:${port} -sTCP:LISTEN -t`, (err, stdout) => {
+        if (err) return resolve([]);
+        resolve([...new Set(String(stdout).split("\n").map((s) => Number(s.trim())).filter(Boolean))]);
+      });
+    }
+  });
+}
+
+// Kill every process (across every ORBIT window/session on this machine)
+// bound to the agent's own port, then exit this instance too if it's one of
+// them — leaves the port fully free for the next `npm start` / relaunch.
+app.post("/agent/kill-sessions", async (req, res) => {
+  const pids = await pidsOnPort(PORT);
+  const self = process.pid;
+  const others = pids.filter((pid) => pid !== self);
+  const killed = [];
+  for (const pid of others) {
+    try {
+      if (isWin) exec(`taskkill /PID ${pid} /T /F`, { windowsHide: true });
+      else process.kill(pid, "SIGKILL");
+      killed.push(pid);
+    } catch { /* already gone */ }
+  }
+  const killedSelf = pids.includes(self);
+  res.json({ ok: true, killed, killedSelf });
+  if (killedSelf) setTimeout(() => process.exit(0), 200); // let the response flush before this process exits too
+});
+
 app.post("/dev/start", async (req, res) => {
   const { path, command, port, project } = req.body || {};
   if (!path || !command) return res.status(400).json({ ok: false, error: "path and command required" });
@@ -1078,6 +1122,272 @@ app.post("/launch", (req, res) => {
     return res.status(422).json({ ok: false, error: missing.length ? `No path set for: ${missing.join(", ")}` : "Nothing to open" });
   }
   res.json({ ok: true, opened, missing });
+});
+
+// ---- System idle ----
+// ORBIT's timer used to infer idle from browser-tab events, which counts a user
+// heads-down in their editor as idle and wrongly pauses the session. This reads
+// real OS-wide input idle time instead, so "no activity" means the machine, not
+// the tab. Windows: GetLastInputInfo via P/Invoke. macOS: IOHIDSystem's
+// HIDIdleTime. Linux: xprintidle when present. Unsupported platforms report
+// `supported:false` so the client can fall back to its old behaviour.
+const IDLE_PS = `Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public class OrbitIdle {
+  [StructLayout(LayoutKind.Sequential)] struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+  [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+  public static uint Seconds() {
+    LASTINPUTINFO l = new LASTINPUTINFO();
+    l.cbSize = (uint)Marshal.SizeOf(l);
+    GetLastInputInfo(ref l);
+    return ((uint)Environment.TickCount - l.dwTime) / 1000;
+  }
+}
+'@
+[Console]::Out.Write([OrbitIdle]::Seconds())`;
+
+function systemIdleSeconds() {
+  return new Promise((resolve) => {
+    const done = (v) => resolve(Number.isFinite(v) && v >= 0 ? Math.floor(v) : null);
+    if (isWin) {
+      execFile("powershell", ["-NoProfile", "-Command", IDLE_PS], { windowsHide: true, timeout: 5000 },
+        (err, out) => done(err ? NaN : parseInt(String(out).trim(), 10)));
+    } else if (platform() === "darwin") {
+      // HIDIdleTime is in nanoseconds.
+      exec("ioreg -c IOHIDSystem | awk '/HIDIdleTime/ {print $NF; exit}'", { timeout: 5000 },
+        (err, out) => done(err ? NaN : parseInt(String(out).trim(), 10) / 1e9));
+    } else {
+      exec("xprintidle", { timeout: 5000 }, (err, out) => done(err ? NaN : parseInt(String(out).trim(), 10) / 1000));
+    }
+  });
+}
+
+app.get("/system/idle", async (_req, res) => {
+  const seconds = await systemIdleSeconds();
+  if (seconds === null) return res.json({ ok: true, supported: false });
+  res.json({ ok: true, supported: true, seconds });
+});
+
+// ---- VS Code ----
+// Everything here shells out to the `code` CLI, same as /launch's openVSCode.
+// Capturing output (rather than fire-and-forget) is what separates these from
+// runShell: listing extensions and probing availability need the stdout back.
+const codeExec = (args, timeout = 20000) =>
+  new Promise((resolve) => {
+    // `code` on Windows is code.cmd, which execFile can't run without a shell.
+    exec(`code ${args}`, { timeout, windowsHide: true, maxBuffer: 1024 * 1024 * 4 },
+      (err, stdout, stderr) => resolve({ ok: !err, out: String(stdout || ""), err: String(stderr || err?.message || "") }));
+  });
+
+app.get("/vscode/status", async (_req, res) => {
+  const r = await codeExec("--version", 8000);
+  if (!r.ok) return res.json({ ok: true, available: false, error: "`code` CLI not on PATH — in VS Code run “Shell Command: Install 'code' command in PATH”" });
+  const [version] = r.out.trim().split(/\r?\n/);
+  res.json({ ok: true, available: true, version });
+});
+
+// Open a folder, or jump straight to a file at a line/column (`code -g`).
+app.post("/vscode/open", (req, res) => {
+  const { path: target, line, column, reuse = true, newWindow = false } = req.body || {};
+  if (!target) return res.status(400).json({ ok: false, error: "path required" });
+  const quoted = q(target);
+  if (!quoted) return res.status(400).json({ ok: false, error: "invalid path" });
+  const win = newWindow ? "-n" : reuse ? "-r" : "";
+  // -g takes file:line:col and must not be quoted apart from the path itself, so
+  // the suffix is appended inside the quotes.
+  const goto = Number.isFinite(Number(line))
+    ? `-g ${q(`${target}:${Number(line)}${Number.isFinite(Number(column)) ? `:${Number(column)}` : ""}`)}`
+    : quoted;
+  const okRun = runShell(`code ${win} ${goto}`.replace(/\s+/g, " ").trim());
+  if (!okRun) return res.status(500).json({ ok: false, error: "couldn't launch VS Code" });
+  res.json({ ok: true });
+});
+
+app.post("/vscode/diff", (req, res) => {
+  const { left, right } = req.body || {};
+  const a = q(left), b = q(right);
+  if (!a || !b) return res.status(400).json({ ok: false, error: "left and right paths required" });
+  if (!runShell(`code --diff ${a} ${b}`)) return res.status(500).json({ ok: false, error: "couldn't launch VS Code" });
+  res.json({ ok: true });
+});
+
+app.get("/vscode/extensions", async (_req, res) => {
+  const r = await codeExec("--list-extensions --show-versions");
+  if (!r.ok) return res.status(500).json({ ok: false, error: r.err.slice(0, 200) || "couldn't list extensions" });
+  const extensions = r.out.trim().split(/\r?\n/).filter(Boolean).map((l) => {
+    const at = l.lastIndexOf("@");
+    return at > 0 ? { id: l.slice(0, at), version: l.slice(at + 1) } : { id: l, version: "" };
+  });
+  res.json({ ok: true, extensions });
+});
+
+// ---- ORBIT's own VS Code extension ----
+// Shipped as a .vsix next to the agent so ORBIT can offer a one-click install
+// rather than making the user hunt for a folder and reload. Checked in a few
+// places because the agent runs both from source (repo layout) and as a
+// packaged exe (vsix sits beside it).
+function findOrbitVsix() {
+  const dirs = [
+    join(__dir, "..", "extension"),   // running from source: agent/ -> extension/
+    join(__dir, "extension"),
+    __dir,                            // packaged: dropped beside orbit.exe
+  ];
+  for (const dir of dirs) {
+    try {
+      if (!existsSync(dir)) continue;
+      const hit = readdirSync(dir).filter((f) => /^orbit-vscode-.*\.vsix$/i.test(f)).sort().pop();
+      if (hit) return join(dir, hit);
+    } catch { /* unreadable dir — try the next */ }
+  }
+  return null;
+}
+
+app.get("/vscode/extension/package", (_req, res) => {
+  const file = findOrbitVsix();
+  if (!file) return res.json({ ok: true, available: false });
+  const version = (file.match(/orbit-vscode-(.+)\.vsix$/i) || [])[1] || null;
+  res.json({ ok: true, available: true, file, version });
+});
+
+app.post("/vscode/extension/install", async (req, res) => {
+  const file = findOrbitVsix();
+  if (!file) return res.status(404).json({ ok: false, error: "No ORBIT .vsix found next to the agent — run `npm run package` in extension/" });
+  const r = await codeExec(`--install-extension ${q(file)} --force`, 120000);
+  if (!r.ok) return res.status(500).json({ ok: false, error: (r.err || "install failed").slice(0, 300) });
+  // `code` exits 0 on "already installed" too — pass its own words back so the
+  // UI can say what actually happened instead of a generic success.
+  res.json({ ok: true, output: r.out.trim().slice(-300), reloadRequired: true });
+});
+
+app.post("/vscode/extensions/install", async (req, res) => {
+  const { id } = req.body || {};
+  // Marketplace ids are `publisher.name`; anything else is refused rather than
+  // interpolated into a shell string.
+  if (!id || !/^[A-Za-z0-9][\w-]*\.[\w.-]+$/.test(String(id))) {
+    return res.status(400).json({ ok: false, error: "invalid extension id" });
+  }
+  const r = await codeExec(`--install-extension ${id} --force`, 120000);
+  if (!r.ok) return res.status(500).json({ ok: false, error: r.err.slice(0, 200) || "install failed" });
+  res.json({ ok: true, output: r.out.trim().slice(-400) });
+});
+
+// Generate a multi-root .code-workspace from a project's folders and open it —
+// a project whose frontend and solution live in different trees opens as one
+// window instead of two. Written next to the first folder so it's stable across
+// calls (VS Code remembers per-workspace layout/state by path).
+app.post("/vscode/workspace", (req, res) => {
+  const { name, folders, open = true } = req.body || {};
+  const list = (Array.isArray(folders) ? folders : []).map((f) => String(f || "").trim()).filter(Boolean);
+  if (!list.length) return res.status(400).json({ ok: false, error: "at least one folder required" });
+  const safeName = String(name || "orbit").replace(/[^\w.-]+/g, "-").slice(0, 60) || "orbit";
+  try {
+    const base = clean(list[0]);
+    const file = join(base, `${safeName}.code-workspace`);
+    writeFileSync(file, JSON.stringify({ folders: list.map((p) => ({ path: clean(p) })), settings: {} }, null, 2));
+    if (open && !runShell(`code ${q(file)}`)) return res.status(500).json({ ok: false, error: "wrote workspace but couldn't open VS Code" });
+    res.json({ ok: true, file });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message.slice(0, 200) }); }
+});
+
+// ---- Editor activity (posted by the ORBIT VS Code extension) ----
+// Kept in memory only: it's a live signal (what am I editing right now), not a
+// record — the durable version is focus_events, which the browser writes.
+const editorState = new Map(); // userId -> { file, language, workspace, project, at, editing }
+const EDITOR_STALE_MS = 90_000;
+
+app.post("/editor/activity", (req, res) => {
+  const { file, language, workspace, project, editing } = req.body || {};
+  editorState.set(req.userId, {
+    file: file ? String(file).slice(0, 500) : null,
+    language: language ? String(language).slice(0, 40) : null,
+    workspace: workspace ? String(workspace).slice(0, 300) : null,
+    project: project ? String(project).slice(0, 120) : null,
+    editing: !!editing,
+    at: Date.now(),
+  });
+  res.json({ ok: true });
+});
+
+app.get("/editor/state", (req, res) => {
+  const s = editorState.get(req.userId);
+  // A closed editor stops posting; don't report minutes-old state as current.
+  if (!s || Date.now() - s.at > EDITOR_STALE_MS) return res.json({ ok: true, connected: false });
+  res.json({ ok: true, connected: true, ...s, idleSeconds: Math.floor((Date.now() - s.at) / 1000) });
+});
+
+// ---- Work list bridge (ORBIT tab -> agent -> VS Code extension) ----
+// The agent has no Supabase client (it only verifies the JWT, it never queries),
+// and giving it one would mean shipping project URL + anon key into the agent's
+// config for every user. The browser already holds this data, so it pushes a
+// compact snapshot here instead and the extension reads it back. Trade-off: the
+// sidebar is only as fresh as the last time an ORBIT tab was open — the
+// extension surfaces that rather than showing stale rows as current.
+const workList = new Map(); // userId -> { tasks, tickets, timer, at }
+const WORKLIST_STALE_MS = 10 * 60_000;
+
+app.post("/worklist", (req, res) => {
+  const { tasks, tickets, timer } = req.body || {};
+  const trim = (arr) => (Array.isArray(arr) ? arr : []).slice(0, 50).map((t) => ({
+    id: String(t?.id || "").slice(0, 64),
+    title: String(t?.title || "").slice(0, 200),
+    status: String(t?.status || "").slice(0, 40),
+    priority: String(t?.priority || "").slice(0, 16),
+    project: t?.project ? String(t.project).slice(0, 80) : null,
+  }));
+  const { hours, projects, break: brk, ai } = req.body || {};
+  workList.set(req.userId, {
+    tasks: trim(tasks),
+    tickets: trim(tickets),
+    timer: timer && typeof timer === "object"
+      ? {
+          running: !!timer.running, projectId: timer.projectId ?? null, taskId: timer.taskId ?? null,
+          seconds: Number(timer.seconds) || 0,
+          startedAt: Number(timer.startedAt) || null, project: timer.project ?? null,
+        }
+      : { running: false },
+    hours: hours && typeof hours === "object" ? { today: Number(hours.today) || 0, total: Number(hours.total) || 0 } : null,
+    projects: (Array.isArray(projects) ? projects : []).slice(0, 40)
+      .map((p) => ({ id: String(p?.id || "").slice(0, 64), name: String(p?.name || "").slice(0, 80) })),
+    break: brk && typeof brk === "object"
+      ? { onBreak: !!brk.onBreak, startedAt: Number(brk.startedAt) || null, idlePaused: !!brk.idlePaused }
+      : null,
+    // Ranking is expensive to produce, so it's kept verbatim until ORBIT replaces it.
+    ai: ai && Array.isArray(ai.items)
+      ? { rankedAt: Number(ai.rankedAt) || Date.now(), items: ai.items.slice(0, 40).map((x) => ({ id: String(x?.id || "").slice(0, 64), reason: String(x?.reason || "").slice(0, 120) })) }
+      : null,
+    at: Date.now(),
+  });
+  res.json({ ok: true });
+});
+
+/** Live ORBIT tabs for this user — lets the extension distinguish "stale data" from "nothing is driving it". */
+function orbitTabCount(userId) {
+  if (!wss) return 0;
+  let n = 0;
+  for (const c of wss.clients) if (c.readyState === 1 && c.userId === userId) n++;
+  return n;
+}
+
+app.get("/worklist", (req, res) => {
+  const orbitOpen = orbitTabCount(req.userId) > 0;
+  const w = workList.get(req.userId);
+  if (!w) return res.json({ ok: true, fresh: false, orbitOpen, tasks: [], tickets: [], timer: { running: false } });
+  res.json({ ok: true, fresh: Date.now() - w.at <= WORKLIST_STALE_MS, ageMs: Date.now() - w.at, orbitOpen, ...w });
+});
+
+// The extension can't act on ORBIT state directly — the timer lives in the
+// browser's localStorage and task writes go through the browser's RLS-scoped
+// Supabase client. So commands are relayed over the existing websocket to the
+// ORBIT tab, which performs them as if the user had clicked.
+const ORBIT_COMMANDS = new Set(["timer:start", "timer:stop", "task:status", "task:create", "ai:rank", "open"]);
+
+app.post("/orbit/command", (req, res) => {
+  const { command, payload } = req.body || {};
+  if (!ORBIT_COMMANDS.has(String(command))) return res.status(400).json({ ok: false, error: "unknown command" });
+  const delivered = sendToUser(req.userId, "orbit:command", { command, payload: payload || {} });
+  if (!delivered) return res.status(409).json({ ok: false, error: "ORBIT isn't open — open the ORBIT tab and try again" });
+  res.json({ ok: true });
 });
 
 // Open a native folder/file dialog and return the selected absolute path.
@@ -1662,10 +1972,15 @@ function broadcast(event, payload = {}) {
   const msg = JSON.stringify({ event, payload, at: Date.now() });
   for (const c of wss.clients) { if (c.readyState === 1) { try { c.send(msg); } catch { /**/ } } }
 }
+/** Returns how many live sockets received it, so callers can tell "nobody is listening" from "sent". */
 function sendToUser(userId, event, payload = {}) {
-  if (!wss) return;
+  if (!wss) return 0;
   const msg = JSON.stringify({ event, payload, at: Date.now() });
-  for (const c of wss.clients) { if (c.readyState === 1 && c.userId === userId) { try { c.send(msg); } catch { /**/ } } }
+  let sent = 0;
+  for (const c of wss.clients) {
+    if (c.readyState === 1 && c.userId === userId) { try { c.send(msg); sent++; } catch { /**/ } }
+  }
+  return sent;
 }
 
 // Routine checkup, run for every currently-connected user every 45s, pushed

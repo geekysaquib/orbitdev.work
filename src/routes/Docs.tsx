@@ -52,9 +52,9 @@ export default function Docs() {
           <p>ORBIT is your personal developer command center. It keeps every project, work item, task,
             and time log in one place, and — through a small companion agent running on your machine —
             lets you launch your whole dev environment for a project in one click.</p>
-          <p>Your account and all data are stored in Supabase and scoped to you with row-level security,
-            so nobody else can read your projects. Sign in once and every screen is populated from your
-            own workspace.</p>
+          <p>Your account and data are private to you — nobody else can see your projects, tasks, or
+            tickets unless you choose to share them with a team. Sign in once and every screen is
+            populated from your own workspace.</p>
           <ol>
             <li>Add your projects on the <b>Projects</b> screen (name, client, frontend folder, backend <code>.sln</code>).</li>
             <li>Start the local agent so ORBIT can open apps, run git/Docker, and browse Postgres for you (see below).</li>
@@ -65,24 +65,14 @@ export default function Docs() {
 
           <h2 id="d-agent">The local agent</h2>
           <p>Browsers can't open native apps like VS Code or Visual Studio, read your Docker containers, or
-            run <code>git</code>. ORBIT solves this with a tiny background service — the agent — that runs
-            on your machine and exposes a local endpoint ORBIT talks to. When the agent is running, the
-            topbar pill turns green and reads "Agent connected". Beyond launching apps, the same agent
-            powers the Docker and PostgreSQL tabs, the project terminal, AI commit/PR writing, break
-            chores, and the in-app SQL/Docker tooling — most of the app degrades gracefully (with a clear
-            "agent offline" notice) rather than breaking when it isn't running.</p>
-          <p>Easiest path: download the prebuilt Windows app from <b>Settings → Local agent</b> and
-            double-click it — no install, no console window. Building it from source instead:</p>
-          <div className="cq">cd agent
-npm install
-npm start        # listens on http://localhost:47600</div>
-          <p>For a deployed (HTTPS) ORBIT to reach the agent without browser mixed-content warnings, serve
-            the agent over HTTPS with a locally-trusted certificate:</p>
-          <div className="cq">mkcert -install
-mkcert localhost 127.0.0.1</div>
-          <p>Prefer .NET? The agent is swappable — any service exposing the same endpoints works; ORBIT
-            doesn't care what language it's written in. If a packaged agent behaves oddly after an ORBIT
-            update, rebuild or re-download it — an old build can be missing newer routes.</p>
+            run git commands. ORBIT solves this with a small companion app — the agent — that runs quietly
+            on your machine. When it's running, the topbar pill turns green and reads "Agent connected".
+            Beyond launching apps, the same agent powers the Docker and PostgreSQL tabs, the project
+            terminal, AI commit/PR writing, break chores, and the in-app SQL/Docker tooling — most of the
+            app keeps working without it, just with a clear "agent offline" notice instead of breaking.</p>
+          <p>Download it from <b>Settings → Local agent</b> and double-click it — no install, no setup
+            screens. If it ever behaves oddly after an ORBIT update, just download the latest version
+            again from that same page.</p>
 
           <h2 id="d-launch">Start Work & launching apps</h2>
           <p>Each project card and the project detail page have launch buttons. With the agent running:</p>
@@ -378,19 +368,18 @@ mkcert localhost 127.0.0.1</div>
             at a time.</p>
 
           <h2 id="d-data">Data & security</h2>
-          <p>All app data lives in your Supabase Postgres with row-level security, so every row is tied to
-            your user id. Integration secrets (like Zoho, GitHub, Gmail) stay server-side. The agent only
-            listens on localhost and only accepts requests from ORBIT's origins.</p>
-          <p>Sign-in is ORBIT's own — it never touches Supabase Auth. Passwords are hashed with bcrypt and
-            verified server-side; a forgotten password requires an emailed one-time code, never a
-            plaintext reset link. Every sign-in also emails you the time, approximate location, and
-            device, so you'd notice if it wasn't you. Break-chore digests are retained in a
-            <code> break_logs</code> table for your own history.</p>
+          <p>Your data is private to your account — nobody else can see your projects, tasks, or tickets
+            unless you explicitly share them with a team. Integration credentials (like your Zoho, GitHub,
+            or Gmail login) are stored securely and never exposed in the browser. The local agent only
+            listens on your own machine and only accepts requests from ORBIT itself.</p>
+          <p>Your password is encrypted and never stored in plain text. If you forget it, resetting always
+            requires a one-time code emailed to you — never a plain reset link. Every sign-in also emails
+            you the time, approximate location, and device, so you'd notice right away if it wasn't you.
+            Your break-chore history is saved so you can look back on it any time.</p>
 
           <h2 id="d-faq">FAQ</h2>
-          <div className="docs-card"><b>The Agent pill says offline.</b><p style={{ margin: "6px 0 0" }}>Start it with <code>npm start</code> in the <code>agent</code> folder, then click the pill to re-check. On a deployed site, the agent needs HTTPS (mkcert).</p></div>
-          <div className="docs-card"><b>Sync pulls nothing from Zoho.</b><p style={{ margin: "6px 0 0" }}>Confirm the <code>ZOHO_*</code> env vars are set in Netlify and your data center is right (<code>ZOHO_DC=in</code> for India). The function returns <code>meta.sampleKeys</code> to help map fields.</p></div>
-          <div className="docs-card"><b>The app is blank after deploy.</b><p style={{ margin: "6px 0 0" }}>Env vars must be set before the build — add them in Netlify and trigger a fresh deploy.</p></div>
+          <div className="docs-card"><b>The Agent pill says offline.</b><p style={{ margin: "6px 0 0" }}>Open the agent app (download it from Settings → Local agent if you haven't already), then click the pill to re-check.</p></div>
+          <div className="docs-card"><b>Sync pulls nothing from Zoho.</b><p style={{ margin: "6px 0 0" }}>Reconnect from Settings → Zoho Sprints, and double-check you picked the right data center for your account (e.g. India vs. US vs. EU) when connecting.</p></div>
           <div className="docs-card"><b>Ask AI / AI triage says no provider is available.</b><p style={{ margin: "6px 0 0" }}>Add a key for any of Anthropic/Gemini/OpenAI/Grok in Settings → AI providers, or just wait — the free local model is the automatic fallback and needs no key, though its first run downloads a small model.</p></div>
           <div className="docs-card"><b>Mail says "Start the ORBIT agent".</b><p style={{ margin: "6px 0 0" }}>Gmail is read through the local agent, not directly from the browser — start the agent, then reopen Mail.</p></div>
           <div className="docs-card"><b>An Automation rule isn't firing.</b><p style={{ margin: "6px 0 0" }}>Check it isn't paused (the rule list shows "paused" and its run count/last-run time), and that the trigger's project filter (if any) matches the item you changed.</p></div>

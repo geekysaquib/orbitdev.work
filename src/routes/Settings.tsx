@@ -14,11 +14,13 @@ import { useTheme, THEMES, ACCENTS, FONTS, DENSITIES, type ThemeId, type AccentI
 import { useDashboardLayout } from "../hooks/useDashboardLayout";
 import { DASH_TILES } from "../lib/dashboardLayout";
 import { recordAudit } from "../lib/audit";
-import { fetchDocker } from "../lib/agent";
+import { fetchDocker, killAgentSessions } from "../lib/agent";
 import { ORBIT_AGENT_DOWNLOAD_URL } from "../lib/downloads";
 import { pgServers, pgDeleteServer, type PgServer } from "../lib/pg";
 import { PgServerModal } from "../components/PgServerModal";
 import { ChoresCard } from "../components/ChoresCard";
+import { ConfirmModal } from "../components/ConfirmModal";
+import { VscodePanel } from "../components/VscodePanel";
 import { ZohoSetupPanel } from "../components/ZohoSetupPanel";
 import { GmailSetupPanel } from "../components/GmailSetupPanel";
 import { AiKeySetupPanel } from "../components/AiKeySetupPanel";
@@ -76,6 +78,8 @@ export default function Settings() {
     return (SECTIONS_IDS.has(s || "") ? s : "account") as SectionId;
   });
   const [draft, setDraft] = useState(url);
+  const [killConfirmOpen, setKillConfirmOpen] = useState(false);
+  const [killing, setKilling] = useState(false);
   const [docker, setDocker] = useState<{ available: boolean; count: number } | null>(null);
   const [dockerChecking, setDockerChecking] = useState(false);
   const [onboardedAt, setOnboardedAt] = useState<string | null | undefined>(undefined);
@@ -105,6 +109,18 @@ export default function Settings() {
     setDockerChecking(false);
   }
   useEffect(() => { checkDocker(); }, [status]); // eslint-disable-line
+
+  async function confirmKillSessions() {
+    if (killing) return;
+    setKilling(true);
+    const r = await killAgentSessions();
+    setKilling(false);
+    setKillConfirmOpen(false);
+    if (!r.ok) { toast(r.error || "Couldn't reach the agent"); return; }
+    const total = r.killed.length + (r.killedSelf ? 1 : 0);
+    toast(total ? `Exited ${total} agent session${total === 1 ? "" : "s"}` : "No other agent sessions were running");
+    recheck();
+  }
 
   const agentPill = status === "online"
     ? <span className="pill live"><Icon name="zap" size={15} />Connected<span className="dotled" /></span>
@@ -328,7 +344,22 @@ export default function Settings() {
                     <button className="btn" onClick={() => { updateUrl(draft); recordAudit({ action: "integration.update", entityType: "integration", entityId: "agent_url" }); toast("Agent URL saved"); }}>Save</button>
                     <button className="btn" onClick={() => { recheck(); toast("Checking agent…"); }}><Icon name="refresh" size={15} />Test</button>
                   </div></div>
+                <div className="setrow">
+                  <div className="l"><div className="nm">Stuck on "port already in use"?</div>
+                    <div className="ds">Kills every ORBIT agent process on this machine — leftover sessions from a crash or a duplicate launch — so a fresh <code className="mono">npm start</code> can bind the port again.</div></div>
+                  <button className="btn ghost" onClick={() => setKillConfirmOpen(true)}><Icon name="logout" size={15} />Exit all agent sessions</button>
+                </div>
               </div>
+              <VscodePanel />
+              {killConfirmOpen && (
+                <ConfirmModal
+                  title="Exit all agent sessions?"
+                  message="This force-kills every ORBIT agent process on this machine, including the one this page is currently connected to. Use it when a stale session is blocking a restart with a “port already in use” error. You'll need to relaunch the agent afterward."
+                  confirmLabel={killing ? "Exiting…" : "Exit all sessions"} danger
+                  onConfirm={confirmKillSessions}
+                  onCancel={() => setKillConfirmOpen(false)}
+                />
+              )}
             </>
           )}
 
