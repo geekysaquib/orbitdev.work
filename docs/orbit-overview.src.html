@@ -150,6 +150,15 @@
   .ob-dot.b { background: var(--ob-blue); box-shadow: 0 0 0 3px rgba(91, 141, 239, .14); }
   .ob-dot.v { background: var(--ob-violet); box-shadow: 0 0 0 3px rgba(169, 139, 245, .14); }
 
+  .ob-root code {
+    font-family: var(--ob-mono);
+    font-size: .92em;
+    color: var(--ob-text2);
+    background: rgba(255, 255, 255, .04);
+    border-radius: 4px;
+    padding: 1px 4px;
+  }
+
   .ob-path {
     font-family: var(--ob-mono);
     font-size: 11.5px;
@@ -352,6 +361,136 @@
     max-width: 76ch;
   }
 
+  /* ---------- stack rows ---------- */
+  .ob-stackrows {
+    margin-top: 30px;
+    display: grid;
+    gap: 1px;
+    background: var(--ob-hair);
+    border: 1px solid var(--ob-border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .ob-stackrow {
+    background: var(--ob-panel);
+    padding: 17px 18px;
+    display: grid;
+    grid-template-columns: 150px 1fr;
+    gap: 18px;
+    align-items: start;
+  }
+  @media (max-width: 720px) { .ob-stackrow { grid-template-columns: 1fr; gap: 10px; } }
+  .ob-stackrow .lab {
+    font-family: var(--ob-mono);
+    font-size: 11px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ob-mint);
+    padding-top: 3px;
+  }
+  .ob-stackrow p {
+    margin: 10px 0 0;
+    font-size: 13.5px;
+    color: var(--ob-muted);
+    max-width: 72ch;
+  }
+  .ob-ver-chip { color: var(--ob-text2); }
+
+  /* ---------- schema table cards ---------- */
+  .ob-erd {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(252px, 1fr));
+    gap: 12px;
+    margin-top: 28px;
+  }
+  .ob-tbl {
+    background: var(--ob-panel);
+    border: 1px solid var(--ob-border);
+    border-radius: 11px;
+    overflow: hidden;
+  }
+  .ob-tbl h4 {
+    margin: 0;
+    font-family: var(--ob-mono);
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--ob-hair);
+    background: var(--ob-bg2);
+    color: var(--ob-text);
+  }
+  .ob-tbl h4 em { font-style: normal; color: var(--ob-dim); font-weight: 400; }
+  .ob-tbl ul { list-style: none; margin: 0; padding: 5px 0 7px; }
+  .ob-tbl li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 12px;
+    font-family: var(--ob-mono);
+    font-size: 11.5px;
+    color: var(--ob-text2);
+  }
+  .ob-tbl li .ty { margin-left: auto; color: var(--ob-dim); font-size: 10.5px; }
+  .ob-tbl li .k {
+    font-size: 8.5px;
+    font-style: normal;
+    font-weight: 700;
+    letter-spacing: .06em;
+    padding: 1px 4px;
+    border-radius: 3px;
+    flex: none;
+  }
+  .ob-tbl li .k.pk { background: rgba(55, 223, 160, .13); color: var(--ob-mint); }
+  .ob-tbl li .k.fk { background: rgba(91, 141, 239, .13); color: var(--ob-blue); }
+  .ob-tbl li .k.uq { background: rgba(169, 139, 245, .13); color: var(--ob-violet); }
+
+  .ob-rels {
+    margin: 22px 0 0;
+    padding: 16px 18px;
+    border: 1px solid var(--ob-border);
+    border-radius: 11px;
+    background: var(--ob-bg2);
+    display: grid;
+    gap: 7px;
+  }
+  .ob-rels code {
+    font-family: var(--ob-mono);
+    font-size: 11.5px;
+    color: var(--ob-text2);
+  }
+  .ob-rels code em { font-style: normal; color: var(--ob-dim); }
+
+  /* table catalog */
+  .ob-cat { margin-top: 34px; display: grid; gap: 12px; }
+  .ob-catgroup {
+    border: 1px solid var(--ob-border);
+    border-radius: 11px;
+    background: var(--ob-panel);
+    padding: 15px 17px;
+  }
+  .ob-catgroup h4 {
+    margin: 0 0 4px;
+    font-family: var(--ob-mono);
+    font-size: 12px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ob-mint);
+  }
+  .ob-catgroup dl {
+    margin: 10px 0 0;
+    display: grid;
+    grid-template-columns: 190px 1fr;
+    gap: 7px 18px;
+  }
+  @media (max-width: 700px) { .ob-catgroup dl { grid-template-columns: 1fr; gap: 2px 0; } }
+  .ob-catgroup dt {
+    font-family: var(--ob-mono);
+    font-size: 11.5px;
+    color: var(--ob-text2);
+  }
+  .ob-catgroup dd { margin: 0; font-size: 13.5px; color: var(--ob-muted); }
+  @media (max-width: 700px) { .ob-catgroup dd { margin-bottom: 8px; } }
+
   /* ---------- security list ---------- */
   .ob-seclist {
     margin: 30px 0 0;
@@ -498,10 +637,10 @@
   <header class="ob-topbar">
     <div class="ob-wrap">
       <a class="ob-brand" href="#top">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <circle cx="12" cy="12" r="8.4" stroke="#37DFA0" stroke-width="1.5"/>
-          <circle cx="12" cy="12" r="3" fill="#37DFA0"/>
-          <circle cx="17.9" cy="6.1" r="2.1" fill="#37DFA0" stroke="#08090A" stroke-width="1.2"/>
+        <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="#37DFA0" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3.4" fill="#37DFA0" stroke="none"/>
+          <ellipse cx="12" cy="12" rx="10" ry="4.6" transform="rotate(-28 12 12)"/>
+          <ellipse cx="12" cy="12" rx="10" ry="4.6" transform="rotate(28 12 12)" opacity=".45"/>
         </svg>
         <span class="ob-wordmark">ORBIT</span>
         <span class="ob-ver">v0.1</span>
@@ -512,6 +651,8 @@
         <a href="#ecosystem">Ecosystem</a>
         <a href="#engines">Engines</a>
         <a href="#integrations">Integrations</a>
+        <a href="#stack">Stack</a>
+        <a href="#data">Data</a>
         <a href="#security">Security</a>
       </nav>
     </div>
@@ -1091,6 +1232,334 @@
     </div>
   </section>
 
+  <!-- ============ stack ============ -->
+  <section class="ob-section ob-rev" id="stack">
+    <div class="ob-wrap">
+      <p class="ob-eyebrow">Built with <span class="ob-path">package.json</span></p>
+      <h2 class="ob-h2">A deliberately small stack, chosen per layer.</h2>
+      <p class="ob-lede">
+        Three runtimes — a browser app, serverless functions and a local Node process — share one
+        TypeScript codebase. Nothing here is picked for novelty; each choice earns its place by removing
+        a problem the layer above it would otherwise have to solve.
+      </p>
+
+      <div class="ob-stackrows">
+        <div class="ob-stackrow">
+          <div class="lab">Interface</div>
+          <div>
+            <div class="ob-chiprow">
+              <span class="ob-chip ob-ver-chip">React 19</span>
+              <span class="ob-chip ob-ver-chip">Vite 7</span>
+              <span class="ob-chip ob-ver-chip">TypeScript 5.6</span>
+              <span class="ob-chip ob-ver-chip">React Router 7</span>
+            </div>
+            <p>
+              A single-page app, every authenticated route lazy-loaded so the first paint stays small.
+              There is <b>no CSS framework</b> — the control-room look is one hand-written stylesheet of
+              semantic classes, themed entirely through custom properties, which is why theme, accent
+              colour, font and density are all user settings rather than a rebuild.
+            </p>
+          </div>
+        </div>
+
+        <div class="ob-stackrow">
+          <div class="lab">Data</div>
+          <div>
+            <div class="ob-chiprow">
+              <span class="ob-chip ob-ver-chip">Supabase Postgres</span>
+              <span class="ob-chip">PostgREST</span>
+              <span class="ob-chip">Row-level security</span>
+              <span class="ob-chip">supabase-js 2</span>
+            </div>
+            <p>
+              Supabase is used purely as Postgres plus its REST layer — <b>Supabase Auth is not used at
+              all</b>. Access control lives in the database as row-level security, so the browser can talk
+              to the API directly without that being a way around permissions.
+            </p>
+          </div>
+        </div>
+
+        <div class="ob-stackrow">
+          <div class="lab">Server</div>
+          <div>
+            <div class="ob-chiprow">
+              <span class="ob-chip ob-ver-chip">Netlify Functions 5</span>
+              <span class="ob-chip">jsonwebtoken</span>
+              <span class="ob-chip">bcryptjs</span>
+              <span class="ob-chip">nodemailer</span>
+            </div>
+            <p>
+              Serverless handlers own everything the browser must not: OAuth code exchanges, provider
+              proxying with server-side secrets, and the scheduled brief, digest, anomaly-scan and
+              mail-send jobs. Auth is custom — passwords hashed with bcrypt, sessions signed as JWTs
+              carrying the same claim shape the database policies already expect.
+            </p>
+          </div>
+        </div>
+
+        <div class="ob-stackrow">
+          <div class="lab">Local agent</div>
+          <div>
+            <div class="ob-chiprow">
+              <span class="ob-chip ob-ver-chip">Node + Express 5</span>
+              <span class="ob-chip">pg</span>
+              <span class="ob-chip">imapflow</span>
+              <span class="ob-chip">mailparser</span>
+              <span class="ob-chip">ws</span>
+              <span class="ob-chip">@anthropic-ai/sdk</span>
+              <span class="ob-chip">faker</span>
+            </div>
+            <p>
+              The companion process: an Express server on localhost exposing 77 endpoints for git, Docker,
+              terminals, native app launches, IMAP mail, Postgres and AI. It ships as a <b>single
+              executable</b> — bundled with esbuild and injected into the Node runtime with postject, so
+              there is nothing to install.
+            </p>
+          </div>
+        </div>
+
+        <div class="ob-stackrow">
+          <div class="lab">In-app tools</div>
+          <div>
+            <div class="ob-chiprow">
+              <span class="ob-chip">jsPDF</span>
+              <span class="ob-chip">html-to-image</span>
+              <span class="ob-chip">@sentry/react</span>
+              <span class="ob-chip">AWS SDK · Cost Explorer</span>
+            </div>
+            <p>
+              The schema diagram exports to PNG through html-to-image and to PDF through jsPDF, both in
+              the browser. Sentry reports Orbit's own front-end errors, and the AWS SDK reads cost data
+              for the Cloud health card.
+            </p>
+          </div>
+        </div>
+
+        <div class="ob-stackrow">
+          <div class="lab">Tests</div>
+          <div>
+            <div class="ob-chiprow">
+              <span class="ob-chip ob-ver-chip">Vitest 4</span>
+              <span class="ob-chip ob-ver-chip">Playwright 1.61</span>
+            </div>
+            <p>
+              Vitest covers the engines and pure logic — every engine takes its dependencies by injection,
+              so tests run against in-memory stores rather than a live database. Playwright drives the
+              real UI end to end.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ data model ============ -->
+  <section class="ob-section ob-rev" id="data">
+    <div class="ob-wrap">
+      <p class="ob-eyebrow">The data model <span class="ob-path">supabase/schema.sql</span></p>
+      <h2 class="ob-h2">Twenty-four tables, and one rule that guards all of them.</h2>
+      <p class="ob-lede">
+        Everything Orbit knows lives in one Postgres database. The shape is deliberately boring —
+        UUID keys, timestamps on every row, foreign keys that cascade from the owner down — because the
+        interesting part is where the rules live: in the database, not the client.
+      </p>
+
+      <h3 class="ob-h2" style="font-size:19px;margin-top:40px">The core</h3>
+      <p class="ob-lede" style="margin-top:8px">
+        A user owns projects; projects carry tasks and tickets; time is logged against both. Teams
+        overlay that ownership without replacing it.
+      </p>
+
+      <div class="ob-erd">
+        <div class="ob-tbl">
+          <h4><em>public.</em>users</h4>
+          <ul>
+            <li><i class="k pk">PK</i>id<span class="ty">uuid</span></li>
+            <li><i class="k uq">UQ</i>email<span class="ty">text</span></li>
+            <li>password_hash<span class="ty">text</span></li>
+            <li>full_name<span class="ty">text</span></li>
+            <li>email_verified<span class="ty">bool</span></li>
+            <li>lockout_until<span class="ty">timestamptz</span></li>
+          </ul>
+        </div>
+
+        <div class="ob-tbl">
+          <h4><em>public.</em>teams</h4>
+          <ul>
+            <li><i class="k pk">PK</i>id<span class="ty">uuid</span></li>
+            <li>name<span class="ty">text</span></li>
+            <li><i class="k fk">FK</i>owner_id<span class="ty">users</span></li>
+            <li>created_at<span class="ty">timestamptz</span></li>
+          </ul>
+        </div>
+
+        <div class="ob-tbl">
+          <h4><em>public.</em>team_members</h4>
+          <ul>
+            <li><i class="k pk">PK</i>team_id<span class="ty">teams</span></li>
+            <li><i class="k pk">PK</i>user_id<span class="ty">users</span></li>
+            <li>role<span class="ty">owner · admin · member · viewer</span></li>
+          </ul>
+        </div>
+
+        <div class="ob-tbl">
+          <h4><em>public.</em>projects</h4>
+          <ul>
+            <li><i class="k pk">PK</i>id<span class="ty">uuid</span></li>
+            <li><i class="k fk">FK</i>user_id<span class="ty">users</span></li>
+            <li><i class="k fk">FK</i>team_id<span class="ty">teams · null</span></li>
+            <li>name · client<span class="ty">text</span></li>
+            <li>stacks<span class="ty">text[]</span></li>
+            <li>status<span class="ty">active · hold · archived</span></li>
+            <li>fe_path · sln_path<span class="ty">text</span></li>
+            <li>repo_provider<span class="ty">github · gitlab · ado</span></li>
+            <li>sprint_project_id<span class="ty">text</span></li>
+          </ul>
+        </div>
+
+        <div class="ob-tbl">
+          <h4><em>public.</em>tasks</h4>
+          <ul>
+            <li><i class="k pk">PK</i>id<span class="ty">uuid</span></li>
+            <li><i class="k fk">FK</i>user_id<span class="ty">users</span></li>
+            <li><i class="k fk">FK</i>project_id<span class="ty">projects</span></li>
+            <li><i class="k fk">FK</i>team_id<span class="ty">teams · null</span></li>
+            <li>status<span class="ty">todo · doing · review · done</span></li>
+            <li>priority<span class="ty">low · med · high</span></li>
+            <li>estimate_minutes<span class="ty">int</span></li>
+            <li>completed_at<span class="ty">timestamptz</span></li>
+          </ul>
+        </div>
+
+        <div class="ob-tbl">
+          <h4><em>public.</em>tickets</h4>
+          <ul>
+            <li><i class="k pk">PK</i>id<span class="ty">uuid</span></li>
+            <li><i class="k fk">FK</i>user_id<span class="ty">users</span></li>
+            <li><i class="k fk">FK</i>project_id<span class="ty">projects</span></li>
+            <li><i class="k uq">UQ</i>zoho_id<span class="ty">per user</span></li>
+            <li>priority · status<span class="ty">text</span></li>
+            <li>ai_note<span class="ty">text</span></li>
+          </ul>
+        </div>
+
+        <div class="ob-tbl">
+          <h4><em>public.</em>time_entries</h4>
+          <ul>
+            <li><i class="k pk">PK</i>id<span class="ty">uuid</span></li>
+            <li><i class="k fk">FK</i>user_id<span class="ty">users</span></li>
+            <li><i class="k fk">FK</i>project_id<span class="ty">projects</span></li>
+            <li><i class="k fk">FK</i>task_id<span class="ty">tasks</span></li>
+            <li>started_at · ended_at<span class="ty">timestamptz</span></li>
+            <li>seconds<span class="ty">int</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="ob-rels">
+        <code>users.id <em>←</em> projects.user_id <em>· on delete cascade</em></code>
+        <code>projects.id <em>←</em> tasks.project_id, tickets.project_id, time_entries.project_id <em>· on delete set null</em></code>
+        <code>tasks.id <em>←</em> time_entries.task_id <em>· so an estimate can be compared with logged time</em></code>
+        <code>teams.id <em>←</em> projects.team_id, tasks.team_id <em>· null until you deliberately share</em></code>
+      </div>
+
+      <p class="ob-note">
+        <b>Deleting a user removes their world.</b> Ownership cascades, but the links between records
+        only null out — losing a project leaves its time entries intact rather than quietly deleting
+        hours you already logged.
+      </p>
+
+      <h3 class="ob-h2" style="font-size:19px;margin-top:44px">Every table, by domain</h3>
+
+      <div class="ob-cat">
+        <div class="ob-catgroup">
+          <h4>Identity and access · 5</h4>
+          <dl>
+            <dt>users</dt><dd>The identity table. Every <code>user_id</code> in the database points here — not at Supabase Auth, which Orbit does not use.</dd>
+            <dt>otp_codes</dt><dd>Short-lived one-time codes for signup verification and password reset, with an attempt counter and a consumed flag.</dd>
+            <dt>teams</dt><dd>A workspace with one owner.</dd>
+            <dt>team_members</dt><dd>Membership and role, keyed by team and user together.</dd>
+            <dt>team_invites</dt><dd>Pending invitations. Only a SHA-256 hash of the token is stored — the usable token exists solely in the email.</dd>
+          </dl>
+        </div>
+
+        <div class="ob-catgroup">
+          <h4>Work · 5</h4>
+          <dl>
+            <dt>projects</dt><dd>The registry: local paths, stack, dev port, and the linked repository and Zoho board.</dd>
+            <dt>tasks</dt><dd>The kanban, with priority, estimate and a completion timestamp kept in step with status.</dd>
+            <dt>tickets</dt><dd>Mirrors Zoho items, unique per user and Zoho id, plus the AI triage note.</dd>
+            <dt>events</dt><dd>Calendar entries — focus blocks, meetings, deadlines and reviews, with a meeting URL when one was generated.</dd>
+            <dt>notifications</dt><dd>The notification centre, published over realtime so a new one appears without a refresh.</dd>
+          </dl>
+        </div>
+
+        <div class="ob-catgroup">
+          <h4>Time and focus · 3</h4>
+          <dl>
+            <dt>time_entries</dt><dd>Every tracked session, optionally bound to the exact task it was spent on.</dd>
+            <dt>focus_events</dt><dd>Append-only idle, resume and route-change events — the raw material behind focus analytics.</dd>
+            <dt>break_logs</dt><dd>Completed breaks with their duration and the chores swept during them.</dd>
+          </dl>
+        </div>
+
+        <div class="ob-catgroup">
+          <h4>Credentials and connections · 3</h4>
+          <dl>
+            <dt>integrations</dt><dd>One row per user holding Zoho, Gmail and AI provider credentials, plus the preferred model.</dd>
+            <dt>provider_connections</dt><dd>One row per user and provider — GitHub, GitLab, Azure DevOps, Sentry, Teams, Netlify, Vercel, AWS — with tokens, scope and status.</dd>
+            <dt>pg_servers</dt><dd>Saved database connections for the Postgres explorer.</dd>
+          </dl>
+        </div>
+
+        <div class="ob-catgroup">
+          <h4>Mail · 3</h4>
+          <dl>
+            <dt>mail_templates</dt><dd>Reusable subject and body snippets to drop into a compose.</dd>
+            <dt>mail_rules</dt><dd>Simple “notify me when from or subject contains…” rules.</dd>
+            <dt>scheduled_emails</dt><dd>A send queue drained by a scheduled function, tracking status and any failure reason.</dd>
+          </dl>
+        </div>
+
+        <div class="ob-catgroup">
+          <h4>Platform · 5</h4>
+          <dl>
+            <dt>user_settings</dt><dd>One JSON blob per user for theme, layout and preferences, merged atomically in the database.</dd>
+            <dt>automation_rules</dt><dd>Trigger and action as JSON, with a run count and last-run timestamp.</dd>
+            <dt>audit_log</dt><dd>Sign-ins, integration changes and work-item edits — also the source of the team activity feed.</dd>
+            <dt>metric_snapshots</dt><dd>One value per user, metric and day: open Sentry issues, open bugs, failed CI runs. Unique per day, so trends survive.</dd>
+            <dt>domain_events</dt><dd>The Event Engine's durable log. Published over realtime, which is how one browser tab's change reaches another.</dd>
+          </dl>
+        </div>
+      </div>
+
+      <h3 class="ob-h2" style="font-size:19px;margin-top:44px">Where the rules actually live</h3>
+      <p class="ob-lede" style="margin-top:8px">
+        Four things are pushed into Postgres rather than left to the client, each because the client is
+        the wrong place to be trusted with them.
+      </p>
+
+      <ul class="ob-seclist" style="margin-top:24px">
+        <li>
+          <span class="t">Row-level security</span>
+          <span class="d">Enabled on every table, with policies scoping rows to <code>auth.uid()</code>. Because sessions are signed with the same claim shape Supabase Auth would issue, the policies work unchanged despite auth being custom.</span>
+        </li>
+        <li>
+          <span class="t">Service-role-only writes</span>
+          <span class="d">Team membership and invites have no client-facing write policy at all. They are only reachable through a serverless function using the service-role key, which runs its own authorization checks — that is what stops anyone inserting themselves as owner of an arbitrary team.</span>
+        </li>
+        <li>
+          <span class="t">Triggers that keep data honest</span>
+          <span class="d">A task's <code>completed_at</code> is stamped by the database whenever its status becomes done, so every call site feeds the retrospective and estimate-accuracy views without having to remember to. Separate triggers fan out team-activity and @mention notifications, which a client could not do without write access to other people's rows.</span>
+        </li>
+        <li>
+          <span class="t">Functions instead of round trips</span>
+          <span class="d"><code>merge_user_settings</code> merges a settings patch in one statement, so two concurrent saves cannot clobber each other. <code>orbit_hours</code> totals your tracked time server-side, taking your local midnight as an argument so “today” means your day, not the server's.</span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
   <!-- ============ security ============ -->
   <section class="ob-section ob-rev" id="security">
     <div class="ob-wrap">
@@ -1115,12 +1584,16 @@
           <span class="d">A new sign-in emails you the time, location and device it came from, so an unfamiliar one is obvious immediately.</span>
         </li>
         <li>
-          <span class="t">Secrets stay server-side</span>
-          <span class="d">Provider tokens and service-role keys live in serverless functions. The browser is never handed a raw provider token.</span>
+          <span class="t">OAuth tokens stay server-side</span>
+          <span class="d">Repository, Sentry, Teams and cloud tokens live in <code>provider_connections</code> and are used only by serverless functions, which proxy the calls. The browser never holds one.</span>
         </li>
         <li>
-          <span class="t">Local credentials stay local</span>
-          <span class="d">Your AI provider keys, Gmail app password and database passwords are held by the agent on your own machine, which listens only to that machine.</span>
+          <span class="t">Agent credentials are yours alone</span>
+          <span class="d">The credentials the local agent needs — Gmail app password, database passwords, AI keys — sit in your own row-level-secured rows and are passed to the agent per request; it keeps no copy. They are protected by database access control rather than separate encryption at rest, so treat the database as the sensitive store it is.</span>
+        </li>
+        <li>
+          <span class="t">The agent listens locally</span>
+          <span class="d">It binds to your own machine only, so nothing on the network can drive git, Docker or your filesystem through it.</span>
         </li>
         <li>
           <span class="t">Everything is recorded</span>
@@ -1135,10 +1608,10 @@
     <div class="ob-wrap">
       <div style="display:flex;flex-direction:column;gap:10px">
         <div class="ob-brand">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <circle cx="12" cy="12" r="8.4" stroke="#37DFA0" stroke-width="1.5"/>
-            <circle cx="12" cy="12" r="3" fill="#37DFA0"/>
-            <circle cx="17.9" cy="6.1" r="2.1" fill="#37DFA0" stroke="#08090A" stroke-width="1.2"/>
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#37DFA0" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3.4" fill="#37DFA0" stroke="none"/>
+            <ellipse cx="12" cy="12" rx="10" ry="4.6" transform="rotate(-28 12 12)"/>
+            <ellipse cx="12" cy="12" rx="10" ry="4.6" transform="rotate(28 12 12)" opacity=".45"/>
           </svg>
           <span class="ob-wordmark" style="font-size:14px">ORBIT</span>
         </div>

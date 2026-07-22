@@ -1,5 +1,8 @@
 # Marketing landing at the root (static, from public/landing.html)
 /                /landing.html   200
 
+# Static About page (public/about.html, built by docs/build-overview.mjs)
+/about           /about.html     200
+
 # Everything else is the ORBIT single-page app
 /*               /index.html     200

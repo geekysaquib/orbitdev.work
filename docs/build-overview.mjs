@@ -111,7 +111,46 @@ const leftover = html.match(/\{\{[A-Z]+:[^}]+\}\}/g);
 if (leftover) throw new Error("unreplaced tokens: " + leftover.join(", "));
 
 fs.writeFileSync(OUT, html);
+
+/* ---------------------------------------------------------------
+ * Second output: public/about.html, served at /about by Netlify.
+ *
+ * OUT is a *fragment* — the Artifact host supplies <html>/<head>/<body>
+ * around it. Served directly that would have no charset and, worse, no
+ * viewport meta, so phones would lay it out at desktop width. The site
+ * copy therefore gets a real document wrapper.
+ * ------------------------------------------------------------- */
+const MARK =
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#37DFA0" stroke-width="1.7">` +
+  `<circle cx="12" cy="12" r="3.4" fill="#37DFA0" stroke="none"/>` +
+  `<ellipse cx="12" cy="12" rx="10" ry="4.6" transform="rotate(-28 12 12)"/>` +
+  `<ellipse cx="12" cy="12" rx="10" ry="4.6" transform="rotate(28 12 12)" opacity=".45"/></svg>`;
+
+const DESC = "ORBIT — your personal developer command center. Its modules, ecosystem, stack and data model.";
+const page = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="${DESC}">
+<meta name="color-scheme" content="dark">
+<meta property="og:title" content="ORBIT — Developer Command Center">
+<meta property="og:description" content="${DESC}">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,${encodeURIComponent(MARK)}">
+<style>html,body{margin:0;padding:0;background:#0A0B0D}</style>
+</head>
+<body>
+${html}
+</body>
+</html>
+`;
+
+const PUBLIC = path.join(DOCS, "..", "public", "about.html");
+fs.writeFileSync(PUBLIC, page);
+
 fs.rmSync(tmp, { recursive: true, force: true });
 
-const mb = (fs.statSync(OUT).size / 1024 / 1024).toFixed(2);
-console.log(`\nwrote ${path.relative(process.cwd(), OUT)}  (${mb} MB)`);
+const mb = (p) => (fs.statSync(p).size / 1024 / 1024).toFixed(2);
+console.log(`\nwrote ${path.relative(process.cwd(), OUT)}  (${mb(OUT)} MB)  — artifact fragment`);
+console.log(`wrote ${path.relative(process.cwd(), PUBLIC)}  (${mb(PUBLIC)} MB)  — served at /about`);
