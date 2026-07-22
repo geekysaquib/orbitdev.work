@@ -1,0 +1,1248 @@
+<title>ORBIT — Developer Command Center</title>
+
+<style>
+  /* ---------- tokens: Orbit control-room, committed single (dark) theme ---------- */
+  :root,
+  :root[data-theme="dark"],
+  :root[data-theme="light"] {
+    --ob-bg: #0A0B0D;
+    --ob-bg2: #08090A;
+    --ob-panel: #0C0E11;
+    --ob-raised: #16191F;
+    --ob-border: #20242C;
+    --ob-hair: rgba(255, 255, 255, .055);
+    --ob-text: #ECEEF2;
+    --ob-text2: #C3CCDB;
+    --ob-muted: #8B92A0;
+    --ob-dim: #565C68;
+    --ob-mint: #37DFA0;
+    --ob-blue: #5B8DEF;
+    --ob-amber: #E4A951;
+    --ob-violet: #A98BF5;
+    --ob-red: #EF6D6D;
+    --ob-on-accent: #06110D;
+
+    --ob-mono: ui-monospace, "Cascadia Code", "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+    --ob-sans: system-ui, "Segoe UI Variable Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
+    --ob-col: 1120px;
+    --ob-pad: clamp(20px, 4vw, 40px);
+    color-scheme: dark;
+  }
+
+  .ob-root *,
+  .ob-root *::before,
+  .ob-root *::after { box-sizing: border-box; }
+
+  .ob-root {
+    background: var(--ob-bg);
+    color: var(--ob-text);
+    font-family: var(--ob-sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+    scroll-behavior: smooth;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ob-root { scroll-behavior: auto; }
+    .ob-root *, .ob-root *::before, .ob-root *::after {
+      animation-duration: .01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .01ms !important;
+    }
+  }
+
+  .ob-root :focus-visible {
+    outline: 2px solid var(--ob-mint);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+
+  /* ---------- shared primitives ---------- */
+  .ob-wrap {
+    width: 100%;
+    max-width: var(--ob-col);
+    margin-inline: auto;
+    padding-inline: var(--ob-pad);
+  }
+
+  .ob-eyebrow {
+    font-family: var(--ob-mono);
+    font-size: 11px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ob-dim);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0;
+  }
+  .ob-eyebrow::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--ob-hair);
+  }
+
+  .ob-h2 {
+    font-family: var(--ob-mono);
+    font-size: clamp(24px, 3.4vw, 34px);
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -.02em;
+    text-wrap: balance;
+    margin: 18px 0 0;
+    color: var(--ob-text);
+  }
+
+  .ob-lede {
+    max-width: 65ch;
+    color: var(--ob-muted);
+    font-size: 16.5px;
+    margin: 14px 0 0;
+  }
+
+  .ob-section {
+    padding-block: clamp(56px, 8vw, 92px);
+    border-top: 1px solid var(--ob-hair);
+  }
+
+  .ob-grid { display: grid; gap: 14px; }
+  .ob-g3 { grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); }
+  .ob-g2 { grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); }
+
+  .ob-card {
+    position: relative;
+    background: linear-gradient(180deg, rgba(255, 255, 255, .022), transparent 62%), var(--ob-panel);
+    border: 1px solid var(--ob-border);
+    border-radius: 12px;
+    padding: 18px 18px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: border-color .18s ease, transform .18s ease;
+  }
+  .ob-card:hover { border-color: #2C323C; transform: translateY(-2px); }
+  .ob-card h3 {
+    font-family: var(--ob-mono);
+    font-size: 14.5px;
+    font-weight: 600;
+    margin: 0;
+    color: var(--ob-text);
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  .ob-card p {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.62;
+    color: var(--ob-muted);
+  }
+  .ob-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--ob-mint);
+    flex: none;
+    box-shadow: 0 0 0 3px rgba(55, 223, 160, .14);
+  }
+  .ob-dot.b { background: var(--ob-blue); box-shadow: 0 0 0 3px rgba(91, 141, 239, .14); }
+  .ob-dot.v { background: var(--ob-violet); box-shadow: 0 0 0 3px rgba(169, 139, 245, .14); }
+
+  .ob-path {
+    font-family: var(--ob-mono);
+    font-size: 11.5px;
+    color: var(--ob-dim);
+    background: var(--ob-bg2);
+    border: 1px solid var(--ob-hair);
+    border-radius: 5px;
+    padding: 1px 6px;
+  }
+
+  /* ---------- screenshot figure ---------- */
+  .ob-fig { margin: 30px 0 0; }
+  .ob-shot {
+    border: 1px solid var(--ob-border);
+    border-radius: 13px;
+    overflow: hidden;
+    background: var(--ob-bg2);
+    box-shadow: 0 34px 70px -40px rgba(0, 0, 0, .95);
+  }
+  .ob-shot-bar {
+    height: 34px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 0 13px;
+    border-bottom: 1px solid var(--ob-border);
+    background: var(--ob-panel);
+  }
+  .ob-shot-bar i {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    background: var(--ob-raised);
+    display: block;
+  }
+  .ob-shot-bar span {
+    margin-left: 6px;
+    font-family: var(--ob-mono);
+    font-size: 10.5px;
+    color: var(--ob-dim);
+    letter-spacing: .04em;
+  }
+  .ob-shot img {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+  .ob-fig figcaption {
+    margin-top: 11px;
+    font-size: 13.5px;
+    color: var(--ob-muted);
+    max-width: 78ch;
+  }
+  .ob-fig figcaption b { color: var(--ob-text2); font-weight: 600; }
+
+  /* ---------- problem strip ---------- */
+  .ob-problems {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    margin-top: 34px;
+    border: 1px solid var(--ob-border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .ob-problem {
+    padding: 20px;
+    border-right: 1px solid var(--ob-hair);
+    border-bottom: 1px solid var(--ob-hair);
+  }
+  .ob-problem h3 {
+    font-family: var(--ob-mono);
+    font-size: 13px;
+    font-weight: 600;
+    margin: 0 0 7px;
+    color: var(--ob-text2);
+  }
+  .ob-problem p { margin: 0; font-size: 13.5px; color: var(--ob-muted); line-height: 1.6; }
+
+  /* ---------- module group ---------- */
+  .ob-group { margin-top: 44px; }
+  .ob-grouphead {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+  }
+  .ob-grouphead h3 {
+    font-family: var(--ob-mono);
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0;
+    color: var(--ob-text);
+  }
+  .ob-grouphead span { font-size: 13.5px; color: var(--ob-dim); }
+
+  /* ---------- layer diagram ---------- */
+  .ob-layers { display: flex; flex-direction: column; margin-top: 36px; }
+  .ob-layer {
+    border: 1px solid var(--ob-border);
+    border-radius: 14px;
+    background: var(--ob-panel);
+    padding: 22px;
+    display: grid;
+    grid-template-columns: 210px 1fr;
+    gap: 22px;
+  }
+  @media (max-width: 760px) { .ob-layer { grid-template-columns: 1fr; gap: 14px; } }
+  .ob-layer-id { display: flex; flex-direction: column; gap: 7px; }
+  .ob-layer-id h3 {
+    font-family: var(--ob-mono);
+    font-size: 17px;
+    font-weight: 700;
+    margin: 0;
+  }
+  .ob-layer-id .role { font-size: 13px; color: var(--ob-muted); line-height: 1.5; }
+  .ob-layer-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .ob-layer-body > p { margin: 0; font-size: 14.5px; color: var(--ob-text2); max-width: 68ch; }
+  .ob-chiprow { display: flex; flex-wrap: wrap; gap: 7px; }
+  .ob-chip {
+    font-family: var(--ob-mono);
+    font-size: 11.5px;
+    padding: 4px 9px;
+    border-radius: 6px;
+    background: var(--ob-bg2);
+    border: 1px solid var(--ob-hair);
+    color: var(--ob-muted);
+    white-space: nowrap;
+  }
+  .ob-connector {
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    font-family: var(--ob-mono);
+    font-size: 10.5px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ob-dim);
+  }
+  .ob-connector::before,
+  .ob-connector::after {
+    content: "";
+    width: 1px;
+    height: 100%;
+    background: linear-gradient(180deg, transparent, var(--ob-border), transparent);
+  }
+
+  .ob-note {
+    margin-top: 26px;
+    border: 1px solid var(--ob-border);
+    border-radius: 10px;
+    background: var(--ob-bg2);
+    padding: 16px 18px;
+    font-size: 14px;
+    color: var(--ob-muted);
+    max-width: 78ch;
+  }
+  .ob-note b { color: var(--ob-text2); font-weight: 600; }
+
+  /* ---------- integrations ---------- */
+  .ob-ints {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+    gap: 10px;
+    margin-top: 28px;
+  }
+  .ob-int {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    padding: 13px 14px;
+    border: 1px solid var(--ob-border);
+    border-radius: 10px;
+    background: var(--ob-panel);
+    font-family: var(--ob-mono);
+    font-size: 12.5px;
+    color: var(--ob-text2);
+    transition: border-color .18s ease, color .18s ease;
+  }
+  .ob-int:hover { border-color: #2C323C; }
+  .ob-int svg { width: 19px; height: 19px; flex: none; color: var(--ob-muted); transition: color .18s ease; }
+  .ob-int:hover svg { color: var(--brand, var(--ob-mint)); }
+  .ob-int .mono {
+    width: 19px; height: 19px;
+    border-radius: 5px;
+    background: var(--ob-raised);
+    border: 1px solid var(--ob-hair);
+    display: grid;
+    place-items: center;
+    font-size: 8.5px;
+    font-weight: 700;
+    color: var(--ob-muted);
+    flex: none;
+  }
+  .ob-intnote {
+    margin-top: 16px;
+    font-size: 12.5px;
+    color: var(--ob-dim);
+    max-width: 76ch;
+  }
+
+  /* ---------- security list ---------- */
+  .ob-seclist {
+    margin: 30px 0 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 1px;
+    background: var(--ob-hair);
+    border: 1px solid var(--ob-border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .ob-seclist li {
+    background: var(--ob-panel);
+    padding: 16px 18px;
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 18px;
+    align-items: start;
+  }
+  @media (max-width: 700px) { .ob-seclist li { grid-template-columns: 1fr; gap: 6px; } }
+  .ob-seclist .t {
+    font-family: var(--ob-mono);
+    font-size: 12.5px;
+    color: var(--ob-text);
+    font-weight: 600;
+  }
+  .ob-seclist .d { font-size: 14px; color: var(--ob-muted); }
+
+  /* ---------- topbar ---------- */
+  .ob-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    height: 52px;
+    background: rgba(8, 9, 10, .86);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--ob-border);
+  }
+  .ob-topbar .ob-wrap { height: 100%; display: flex; align-items: center; gap: 14px; }
+  .ob-brand { display: flex; align-items: center; gap: 9px; text-decoration: none; color: var(--ob-text); }
+  .ob-wordmark { font-family: var(--ob-mono); font-weight: 700; font-size: 16px; letter-spacing: .18em; }
+  .ob-ver { font-family: var(--ob-mono); font-size: 10px; color: var(--ob-dim); letter-spacing: .08em; }
+  .ob-navlinks { margin-left: auto; display: flex; gap: 4px; align-items: center; }
+  .ob-navlinks a {
+    font-family: var(--ob-mono);
+    font-size: 12px;
+    color: var(--ob-muted);
+    text-decoration: none;
+    padding: 7px 10px;
+    border-radius: 7px;
+    transition: color .16s ease, background .16s ease;
+  }
+  .ob-navlinks a:hover { color: var(--ob-text); background: var(--ob-raised); }
+  @media (max-width: 860px) { .ob-navlinks { display: none; } }
+
+  /* ---------- hero ---------- */
+  .ob-hero { position: relative; padding-block: clamp(54px, 8vw, 92px) clamp(40px, 6vw, 64px); overflow: hidden; }
+  #ob-orbit-canvas {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    display: block; pointer-events: none; opacity: .8;
+  }
+  .ob-hero .ob-wrap { position: relative; z-index: 1; }
+
+  .ob-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 30px;
+    padding: 0 12px;
+    border-radius: 8px;
+    font-family: var(--ob-mono);
+    font-size: 11.5px;
+    border: 1px solid rgba(55, 223, 160, .34);
+    background: rgba(55, 223, 160, .09);
+    color: var(--ob-mint);
+  }
+  .ob-livedot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--ob-mint);
+    animation: ob-pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes ob-pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(55, 223, 160, .5); }
+    50% { opacity: .75; box-shadow: 0 0 0 5px rgba(55, 223, 160, 0); }
+  }
+
+  .ob-h1 {
+    font-family: var(--ob-mono);
+    font-size: clamp(34px, 6.2vw, 60px);
+    font-weight: 700;
+    line-height: 1.04;
+    letter-spacing: -.035em;
+    text-wrap: balance;
+    margin: 22px 0 0;
+    max-width: 17ch;
+  }
+  .ob-h1 em { font-style: normal; color: var(--ob-mint); }
+  .ob-herolede {
+    max-width: 62ch;
+    margin: 20px 0 0;
+    font-size: clamp(16px, 1.6vw, 18.5px);
+    color: var(--ob-text2);
+  }
+  .ob-metarow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 26px;
+    margin-top: 28px;
+    font-family: var(--ob-mono);
+    font-size: 12px;
+    color: var(--ob-dim);
+  }
+  .ob-metarow b { color: var(--ob-text2); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* ---------- footer ---------- */
+  .ob-footer {
+    border-top: 1px solid var(--ob-border);
+    background: var(--ob-bg2);
+    padding-block: 40px 48px;
+  }
+  .ob-footer .ob-wrap {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+  .ob-footer p { margin: 0; font-size: 13px; color: var(--ob-dim); max-width: 52ch; }
+  .ob-stack { display: flex; flex-wrap: wrap; gap: 7px; justify-content: flex-end; align-items: center; }
+  .ob-stack .ob-int { background: transparent; }
+
+  /* reveal */
+  .ob-rev { opacity: 0; transform: translateY(14px); transition: opacity .55s ease, transform .55s ease; }
+  .ob-rev.in { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) { .ob-rev { opacity: 1; transform: none; } }
+</style>
+
+<div class="ob-root">
+
+  <!-- ============ topbar ============ -->
+  <header class="ob-topbar">
+    <div class="ob-wrap">
+      <a class="ob-brand" href="#top">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="8.4" stroke="#37DFA0" stroke-width="1.5"/>
+          <circle cx="12" cy="12" r="3" fill="#37DFA0"/>
+          <circle cx="17.9" cy="6.1" r="2.1" fill="#37DFA0" stroke="#08090A" stroke-width="1.2"/>
+        </svg>
+        <span class="ob-wordmark">ORBIT</span>
+        <span class="ob-ver">v0.1</span>
+      </a>
+      <nav class="ob-navlinks">
+        <a href="#workspace">Workspace</a>
+        <a href="#intelligence">Intelligence</a>
+        <a href="#ecosystem">Ecosystem</a>
+        <a href="#engines">Engines</a>
+        <a href="#integrations">Integrations</a>
+        <a href="#security">Security</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- ============ hero ============ -->
+  <section class="ob-hero" id="top">
+    <canvas id="ob-orbit-canvas" aria-hidden="true"></canvas>
+    <div class="ob-wrap">
+      <span class="ob-pill"><span class="ob-livedot"></span>Agent connected</span>
+
+      <h1 class="ob-h1">Your personal developer <em>command center</em>.</h1>
+
+      <p class="ob-herolede">
+        One place to launch every project, track tickets, tasks and time, run your
+        Start&#8209;Work macro, and see it all in a control-room UI — with a local agent
+        that reaches the things a browser cannot.
+      </p>
+
+      <div class="ob-metarow">
+        <span><b>23</b> live modules</span>
+        <span><b>4</b> engines</span>
+        <span><b>14</b> integrations</span>
+        <span><b>77</b> agent endpoints</span>
+      </div>
+
+      <figure class="ob-fig">
+        <div class="ob-shot">
+          <div class="ob-shot-bar"><i></i><i></i><i></i><span>orbit — home</span></div>
+          <img {{IMG:dashboard}} alt="The ORBIT dashboard: a greeting with the date and weather, stat tiles for active projects, Orbit hours, Zoho hours and containers up, and a row of project bays each with launch buttons." loading="lazy">
+        </div>
+        <figcaption>
+          The dashboard on opening: a time-of-day greeting with today's weather, four live stat tiles, and
+          <b>project bays</b> — each project one click from opening its UI, backend or everything at once.
+        </figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============ problem ============ -->
+  <section class="ob-section ob-rev">
+    <div class="ob-wrap">
+      <p class="ob-eyebrow">Why Orbit exists</p>
+      <h2 class="ob-h2">Every tool is good. The distance between them is the problem.</h2>
+      <p class="ob-lede">
+        A working day already spans a ticket tracker, a terminal, an editor, a mail client,
+        a database console and a container dashboard. Each is fine on its own. None of them
+        share context, so the person in the middle pays for it.
+      </p>
+
+      <div class="ob-problems">
+        <div class="ob-problem">
+          <h3>Context lives everywhere</h3>
+          <p>Tickets in one system, tasks in another, sprints in a third — and the whole picture in none of them.</p>
+        </div>
+        <div class="ob-problem">
+          <h3>Switching costs compound</h3>
+          <p>Terminal for git, browser for pull requests, editor for code. Each hop is small; the day is not.</p>
+        </div>
+        <div class="ob-problem">
+          <h3>Time is reconstructed</h3>
+          <p>Timers sit outside the work they measure, so logged hours get rebuilt from memory at 6pm.</p>
+        </div>
+        <div class="ob-problem">
+          <h3>Infrastructure sits apart</h3>
+          <p>Databases and containers live far from the tickets and commits that actually drive them.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ workspace ============ -->
+  <section class="ob-section ob-rev" id="workspace">
+    <div class="ob-wrap">
+      <p class="ob-eyebrow">The workspace <span class="ob-path">src/routes</span></p>
+      <h2 class="ob-h2">Twenty-three modules, one window.</h2>
+      <p class="ob-lede">
+        These are the screens as they ship today — ten on the permanent icon rail, the rest a
+        keystroke away in the command palette or the “Time &amp; more” menu.
+      </p>
+
+      <!-- plan and ship -->
+      <div class="ob-group">
+        <div class="ob-grouphead">
+          <h3>Plan and ship</h3>
+          <span>The work itself, from a one-line task to a full sprint.</span>
+        </div>
+        <div class="ob-grid ob-g3">
+          <div class="ob-card">
+            <h3><span class="ob-dot"></span>Projects</h3>
+            <p>Your registry of client and personal work. Filter by client, personal, active or on hold; the Branch column reads each project's live git branch and uncommitted count straight from the agent.</p>
+          </div>
+          <div class="ob-card">
+            <h3><span class="ob-dot"></span>Tasks</h3>
+            <p>A kanban across todo, doing, review and done — scoped per project or team, with priorities and estimates that later feed estimate-accuracy reporting.</p>
+          </div>
+          <div class="ob-card">
+            <h3><span class="ob-dot"></span>Tickets</h3>
+            <p>A tracker where incoming tickets arrive pre-triaged: AI proposes the priority, the owning project and a written summary, which you accept or override.</p>
+          </div>
+          <div class="ob-card">
+            <h3><span class="ob-dot"></span>Sprints</h3>
+            <p>The full Zoho Sprints board — sprint tabs, type, priority and assignee filters, inline attachment previews, and a velocity view once a project has more than one sprint.</p>
+          </div>
+          <div class="ob-card">
+            <h3><span class="ob-dot"></span>Launcher</h3>
+            <p>Start Work walks each project through <code>git pull</code>, checks whether its dev port is taken, then starts it with the command detected for its stack — with a live status and log tail per project.</p>
+          </div>
+          <div class="ob-card">
+            <h3><span class="ob-dot"></span>Project detail</h3>
+            <p>Six tabs per project: Overview, Tasks, Git, Terminal, Environment and Notes — covering paths, a scoped kanban, working-tree status with linked-repo pull requests, and a live shell.</p>
+          </div>
+        </div>
+
+        <figure class="ob-fig">
+          <div class="ob-shot">
+            <div class="ob-shot-bar"><i></i><i></i><i></i><span>orbit — projects</span></div>
+            <img {{IMG:projects}} alt="The Projects registry listing five projects with stack chips, Active status, current git branch with uncommitted file counts, and dev port." loading="lazy">
+          </div>
+          <figcaption>
+            Every workspace in one registry. <b>Branch</b> and <b>uncommitted</b> counts are read live from the
+            local agent, so the list reflects the actual state of your working tree.
+          </figcaption>
+        </figure>
+
+        <figure class="ob-fig">
+          <div class="ob-shot">
+            <div class="ob-shot-bar"><i></i><i></i><i></i><span>orbit — start work</span></div>
+            <img {{IMG:startwork}} alt="The Start Work modal listing five projects with their stacks and the detected start command and port for each, and a Pull and start button." loading="lazy">
+          </div>
+          <figcaption>
+            <b>Start Work</b> detects the right command per stack — <code>npm run dev</code> for Vite,
+            <code>npm start</code> for the rest — pulls, checks the port, and boots everything you ticked.
+          </figcaption>
+        </figure>
+
+        <figure class="ob-fig">
+          <div class="ob-shot">
+            <div class="ob-shot-bar"><i></i><i></i><i></i><span>orbit — sprints</span></div>
+            <img {{IMG:sprints}} alt="A Zoho Sprints board for the Obayashi Road Project showing QA Failed, To Do, Done and Code Review columns with bug, story and task cards carrying assignee avatars." loading="lazy">
+          </div>
+          <figcaption>
+            The live Zoho Sprints board, in Orbit. Sprint tabs carry their item counts; cards show type,
+            priority, links and assignees without a round trip to Zoho.
+          </figcaption>
+        </figure>
+
+        <figure class="ob-fig">
+          <div class="ob-shot">
+            <div class="ob-shot-bar"><i></i><i></i><i></i><span>orbit — project detail</span></div>
+            <img {{IMG:projectdetail}} alt="A project detail Overview tab showing the description, stack chips, frontend and backend paths, the linked Zoho Sprints board, and team sharing set to personal." loading="lazy">
+          </div>
+          <figcaption>
+            A project's Overview: description, stack, local paths, its linked Zoho board and who it is shared
+            with — with launch buttons for the UI, workspace, backend, terminal and browser in the header.
+          </figcaption>
+        </figure>
+      </div>
+
+      <!-- time, focus and team -->
+      <div class="ob-group">
+        <div class="ob-grouphead">
+          <h3>Time, focus and team</h3>
+          <span>Attention measured where it is actually spent.</span>
+        </div>
+        <div class="ob-grid ob-g3">
+          <div class="ob-card">
+            <h3><span class="ob-dot b"></span>Time</h3>
+            <p>Orbit focus hours and Zoho logged hours side by side. Pick a project and task before starting, and the running timer shows exactly what it is logging to.</p>
+          </div>
+          <div class="ob-card">
+            <h3><span class="ob-dot b"></span>Breaks and idle detection</h3>
+            <p>“Take a break” pauses the running timer and resumes it exactly where it stopped, surviving a refresh and syncing across devices. Idle detection pauses it for you after a set quiet period.</p>
+          </div>
+          <div class="ob-card">
+            <h3><span class="ob-dot b"></span>Calendar</h3>
+            <p>A month view of deadlines, meetings, focus blocks and reviews. Meetings can generate a real Microsoft Teams join link, one click from the event.</p>
+          </div>
+          <div class="ob-card">
+            <h3><span class="ob-dot b"></span>Teams</h3>
+            <p>Invite by email as Member, Admin or Viewer. Invite links expire in seven days and only work for that address. Live presence shows who is online, with a shared activity feed.</p>
+          </div>
+          <div class="ob-card">
+            <h3><span class="ob-dot b"></span>Insights</h3>
+            <p>Four tabs computed from data you already have: project health scored 0–100, a weekly retrospective, estimate accuracy, and focus analytics built from idle events.</p>
+          </div>
+          <div class="ob-card">
+            <h3><span class="ob-dot b"></span>Home</h3>
+            <p>Your dashboard: greeting, weather, active timer, tasks and insights needing attention. <b>Customise</b> lets you drag tiles to reorder, resize them, and hide what you never look at.</p>
+          </div>
+        </div>
+
+        <figure class="ob-fig">
+          <div class="ob-shot">
+            <div class="ob-shot-bar"><i></i><i></i><i></i><span>orbit — home</span></div>
+            <img {{IMG:home}} alt="The Home screen showing an active timer card, a count of insights needing attention, a My tasks list, Orbit Insights warning rows, and an Ask Orbit input." loading="lazy">
+          </div>
+          <figcaption>
+            The same dashboard, configured differently — the active timer, your open tasks, the insights that
+            want attention, and an <b>Ask Orbit</b> box right on the page.
+          </figcaption>
+        </figure>
+
+        <figure class="ob-fig">
+          <div class="ob-shot">
+            <div class="ob-shot-bar"><i></i><i></i><i></i><span>orbit — insights · health</span></div>
+            <img {{IMG:insights}} alt="The Insights Health tab showing per-project health scores of 93, 33, 40 and 50 with Healthy and Needs attention badges, and Not enough data for projects without a linked source." loading="lazy">
+          </div>
+          <figcaption>
+            Health scores each active project from open-PR age, commit staleness, open bugs and velocity trend.
+            A project with no linked repo or board reads <b>“Not enough data”</b> rather than inventing a number.
+          </figcaption>
+        </figure>
+
+        <figure class="ob-fig">
+          <div class="ob-shot">
+            <div class="ob-shot-bar"><i></i><i></i><i></i><span>orbit — teams</span></div>
+            <img {{IMG:teams}} alt="The Teams screen showing the Meritech team with two members and their roles, a live-now presence section, an activity feed, and an invite form with a role selector." loading="lazy">
+          </div>
+          <figcaption>
+            Membership, roles, live presence and activity in one place. Projects stay personal until you
+            deliberately share them with a team.
+          </figcaption>
+        </figure>
+      </div>
+
+      <!-- communicate and operate -->
+      <div class="ob-group">
+        <div class="ob-grouphead">
+          <h3>Communicate and operate</h3>
+          <span>The surfaces a developer reaches for between commits.</span>
+        </div>
+        <div class="ob-grid ob-g3">
+          <div class="ob-card">
+            <h3><span class="ob-dot v"></span>Mail</h3>
+            <p>A Gmail inbox and composer running through the agent — rich text, attachments, templates, rules and scheduled send. AI drafts replies grounded only in the open thread, so it cannot invent commitments.</p>
+          </div>
+          <div class="ob-card">
+            <h3><span class="ob-dot v"></span>Postgres</h3>
+            <p>Add a server, browse databases and tables, and run SQL in a multi-tab query runner. Export the schema diagram to PNG or PDF, diff it against a snapshot, seed dummy data, or back up to a <code>.sql</code> file.</p>
+          </div>
+          <div class="ob-card">
+            <h3><span class="ob-dot v"></span>Docker</h3>
+            <p>Read local Docker Desktop through the agent: build an image from a project, start, stop, tail logs, exec into a container, watch live CPU and memory, or bring a compose stack up.</p>
+          </div>
+          <div class="ob-card">
+            <h3><span class="ob-dot v"></span>Command palette</h3>
+            <p>Ctrl/Cmd+K jumps to any of eighteen destinations, and runs four actions directly: Ask AI, new project, compose an email, or open a new SQL query.</p>
+          </div>
+          <div class="ob-card">
+            <h3><span class="ob-dot v"></span>Audit log and Health</h3>
+            <p>A filterable record of sign-ins, integration changes and work-item edits; and a Health screen that checks every integration at a glance with a deep link to fix whatever is failing.</p>
+          </div>
+          <div class="ob-card">
+            <h3><span class="ob-dot v"></span>Docs, Settings and Appearance</h3>
+            <p>Twenty-four documentation sections covering every screen, plus theme, accent colour, font, density, timezone, idle threshold and a re-runnable setup guide.</p>
+          </div>
+        </div>
+
+        <figure class="ob-fig">
+          <div class="ob-shot">
+            <div class="ob-shot-bar"><i></i><i></i><i></i><span>orbit — mail</span></div>
+            <img {{IMG:mail}} alt="The Mail screen with an inbox list on the left and an opened ORBIT sign-in alert message on the right, with AI draft and Reply buttons and Templates, Rules and Scheduled in the header." loading="lazy">
+          </div>
+          <figcaption>
+            A two-pane Gmail client with All, Unread and Promotions tabs. <b>AI draft</b> writes a reply from the
+            open thread only — and the message itself renders in a sandboxed reading pane.
+          </figcaption>
+        </figure>
+
+        <figure class="ob-fig">
+          <div class="ob-shot">
+            <div class="ob-shot-bar"><i></i><i></i><i></i><span>orbit — postgres</span></div>
+            <img {{IMG:postgres}} alt="The Postgres schema diagram showing tenants and users tables joined by a foreign key, with an Instant explain side panel describing public.users as an authentication table with its relationships and notable columns." loading="lazy">
+          </div>
+          <figcaption>
+            The schema diagram, exportable to PNG or PDF. Clicking a table opens <b>Instant explain</b> — a plain
+            reading of what it stores, its keys and relationships, generated locally from the schema rather than
+            sent to a model.
+          </figcaption>
+        </figure>
+
+        <figure class="ob-fig">
+          <div class="ob-shot">
+            <div class="ob-shot-bar"><i></i><i></i><i></i><span>orbit — health</span></div>
+            <img {{IMG:health}} alt="The Health screen showing thirteen integration cards including the local agent, Zoho Sprints, Gmail, GitHub, GitLab, Azure DevOps, Microsoft Teams, Sentry, Cloud, Docker, Postgres, Local AI and Cloud AI keys, each marked Healthy or Not set up." loading="lazy">
+          </div>
+          <figcaption>
+            Every integration Orbit relies on, continuously checked. Anything not connected says so plainly and
+            links straight to the setting that fixes it — including a free <b>Local AI</b> that needs no key.
+          </figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ intelligence ============ -->
+  <section class="ob-section ob-rev" id="intelligence">
+    <div class="ob-wrap">
+      <p class="ob-eyebrow">Intelligence <span class="ob-path">src/lib/ai.ts</span></p>
+      <h2 class="ob-h2">AI that already has the context.</h2>
+      <p class="ob-lede">
+        Because Orbit holds the tickets, commits, calendar and history, its AI works from real
+        context instead of asking you to paste it in. Where a signal is missing, Orbit says so
+        rather than inventing one.
+      </p>
+
+      <div class="ob-grid ob-g3" style="margin-top:32px">
+        <div class="ob-card">
+          <h3><span class="ob-dot"></span>Ask AI</h3>
+          <p>A grounded assistant on the top bar and command palette that answers from your projects, tasks, tickets and sprints — and returns the answer with actions, so you can open the ticket it cited or start a timer on it.</p>
+        </div>
+        <div class="ob-card">
+          <h3><span class="ob-dot"></span>Commit and PR writer</h3>
+          <p>Reads your staged or unstaged diff and drafts the commit message; on a non-default branch it will draft the pull-request description too.</p>
+        </div>
+        <div class="ob-card">
+          <h3><span class="ob-dot"></span>Ticket triage</h3>
+          <p>New tickets get a suggested priority, owning project and summary the moment they arrive, so the queue is never raw.</p>
+        </div>
+        <div class="ob-card">
+          <h3><span class="ob-dot"></span>Standup summary</h3>
+          <p>Writes your Done, In progress and Blockers from the tasks, tickets and hours already recorded — and tells you which model wrote it, including when that was the free local one.</p>
+        </div>
+        <div class="ob-card">
+          <h3><span class="ob-dot"></span>Daily brief and weekly digest</h3>
+          <p>Scheduled jobs that mail you a written summary of pull requests, CI runs, Sentry issues and sprint movement — daily, and again as a Monday review.</p>
+        </div>
+        <div class="ob-card">
+          <h3><span class="ob-dot"></span>Velocity, explained</h3>
+          <p>The sprint velocity chart comes with a written read of the trend — what the dip meant, what you can safely commit to next sprint — regenerable on demand.</p>
+        </div>
+      </div>
+
+      <figure class="ob-fig">
+        <div class="ob-shot">
+          <div class="ob-shot-bar"><i></i><i></i><i></i><span>orbit — ask ai</span></div>
+          <img {{IMG:askai}} alt="The Ask AI modal answering a question about the Obayashi Project, listing its current in-progress tasks and open tickets, with a follow-up input and a note that it was answered by Gemini grounded in projects, tasks, tickets and Zoho sprints." loading="lazy">
+        </div>
+        <figcaption>
+          Ask AI answers from your own workspace and says which model answered. The footer shows how fresh the
+          underlying snapshot is, and follow-ups keep the thread.
+        </figcaption>
+      </figure>
+
+      <figure class="ob-fig">
+        <div class="ob-shot">
+          <div class="ob-shot-bar"><i></i><i></i><i></i><span>orbit — intelligence</span></div>
+          <img {{IMG:intelligence}} alt="Orbit Intelligence listing insight rows: a disconnected integration, four projects that have gone quiet, two tasks that have not moved in 13 days, and several unusually long time entries, each badged Warning or Info." loading="lazy">
+        </div>
+        <figcaption>
+          <b>Orbit Intelligence</b> is the deterministic half: disconnected integrations, projects gone quiet,
+          tasks that have not moved, timers likely left running. Every answer is computed from your own
+          workspace data, not forwarded to a model.
+        </figcaption>
+      </figure>
+
+      <figure class="ob-fig">
+        <div class="ob-shot">
+          <div class="ob-shot-bar"><i></i><i></i><i></i><span>orbit — velocity</span></div>
+          <img {{IMG:velocity}} alt="The Velocity modal showing a three-sprint bar chart averaging 24.7 items per sprint, with a What this means paragraph interpreting the trend and a Regenerate button." loading="lazy">
+        </div>
+        <figcaption>
+          Velocity with a reading attached: what the first-sprint drop probably signalled, and what the current
+          average means you can commit to next.
+        </figcaption>
+      </figure>
+
+      <figure class="ob-fig">
+        <div class="ob-shot">
+          <div class="ob-shot-bar"><i></i><i></i><i></i><span>orbit — automation</span></div>
+          <img {{IMG:automation}} alt="The Automation new-rule dialog with a name field, a WHEN section set to a task moving to any status on any project, and a THEN section set to send a notification with a title and body." loading="lazy">
+        </div>
+        <figcaption>
+          Automation is plain when-this-then-that: a task or ticket status changes, or a timer starts, and Orbit
+          creates a task, sets a status, notifies you or starts a timer. Rules run with <b>your</b> permissions —
+          one can never do something you could not do by hand.
+        </figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============ ecosystem ============ -->
+  <section class="ob-section ob-rev" id="ecosystem">
+    <div class="ob-wrap">
+      <p class="ob-eyebrow">The ecosystem</p>
+      <h2 class="ob-h2">Orbit is not one program. It is three cooperating layers.</h2>
+      <p class="ob-lede">
+        Each layer owns exactly what only it can do — and the split is a security boundary as
+        much as an architectural one. Secrets and machine access stay local; shared state stays hosted.
+      </p>
+
+      <div class="ob-layers">
+        <div class="ob-layer">
+          <div class="ob-layer-id">
+            <h3>Orbit on the Web</h3>
+            <div class="role">The hosted interface and backend. Always on, shared across your devices.</div>
+            <span class="ob-path">netlify/functions</span>
+          </div>
+          <div class="ob-layer-body">
+            <p>
+              A React 19 and Vite 7 single-page app is the control room itself. Behind it,
+              serverless functions handle the things a browser must never do: OAuth code
+              exchanges, provider proxying with server-side secrets, and scheduled jobs that
+              run whether or not anyone is signed in. Supabase Postgres is the system of
+              record, with row-level security scoping every row to its owner.
+            </p>
+            <div class="ob-chiprow">
+              <span class="ob-chip">React 19 + Vite 7</span>
+              <span class="ob-chip">Netlify Functions</span>
+              <span class="ob-chip">Supabase Postgres + RLS</span>
+              <span class="ob-chip">daily-brief</span>
+              <span class="ob-chip">weekly-digest</span>
+              <span class="ob-chip">anomaly-scan</span>
+              <span class="ob-chip">OAuth exchanges</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="ob-connector">authenticated session · realtime</div>
+
+        <div class="ob-layer">
+          <div class="ob-layer-id">
+            <h3>The Engines</h3>
+            <div class="role">The logic layer, composed once in the browser and shared by every screen.</div>
+            <span class="ob-path">src/engines</span>
+          </div>
+          <div class="ob-layer-body">
+            <p>
+              Four framework-free TypeScript engines hold Orbit's reasoning: they know nothing
+              about React and are wired together at startup by the runtime, which mounts inside
+              the authenticated guard so signed-out pages never open a connection. Components
+              read from the runtime rather than constructing engines themselves.
+            </p>
+            <div class="ob-chiprow">
+              <span class="ob-chip">Event Engine</span>
+              <span class="ob-chip">Knowledge Engine</span>
+              <span class="ob-chip">Integration Engine</span>
+              <span class="ob-chip">AI Engine</span>
+              <span class="ob-chip">OrbitRuntime</span>
+              <span class="ob-chip">useOrbitRuntime()</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="ob-connector">local http · 127.0.0.1</div>
+
+        <div class="ob-layer">
+          <div class="ob-layer-id">
+            <h3>The Agent</h3>
+            <div class="role">A small companion process on your own machine. The only part with OS-level reach.</div>
+            <span class="ob-path">agent/server.mjs</span>
+          </div>
+          <div class="ob-layer-body">
+            <p>
+              Browsers cannot open VS Code, read your Docker containers or run git. The agent
+              can. It is a single download with no installer — when it is running, the top-bar
+              pill turns green. Most of Orbit keeps working without it; those screens simply
+              show a clear “agent offline” notice instead of breaking.
+            </p>
+            <div class="ob-chiprow">
+              <span class="ob-chip">git status, pull, diff</span>
+              <span class="ob-chip">Docker</span>
+              <span class="ob-chip">Gmail</span>
+              <span class="ob-chip">Postgres</span>
+              <span class="ob-chip">project terminal</span>
+              <span class="ob-chip">native app launch</span>
+              <span class="ob-chip">local AI model</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p class="ob-note">
+        <b>An honest note on what runs where.</b> The Event and Knowledge engines are genuinely
+        live in the browser. The Integration and AI engines are constructed there for a consistent
+        API, but they are deliberately inert client-side: real provider calls need credentials the
+        browser is never given, so they happen server-side or through the agent instead.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ engines ============ -->
+  <section class="ob-section ob-rev" id="engines">
+    <div class="ob-wrap">
+      <p class="ob-eyebrow">Inside the engines <span class="ob-path">src/engines</span></p>
+      <h2 class="ob-h2">Four engines, one shared model of your work.</h2>
+      <p class="ob-lede">
+        Adding a provider or a model means writing one adapter, not touching call sites. That is
+        the whole point of separating them.
+      </p>
+
+      <div class="ob-grid ob-g2" style="margin-top:32px">
+        <div class="ob-card">
+          <h3><span class="ob-dot"></span>Event Engine</h3>
+          <p>
+            A publish-and-subscribe backbone for immutable domain events. A task moved, a build
+            finished, a ticket raised — each becomes an event, durably stored and then dispatched,
+            so the rest of Orbit can react in order and after the fact rather than polling.
+          </p>
+        </div>
+        <div class="ob-card">
+          <h3><span class="ob-dot"></span>Knowledge Engine</h3>
+          <p>
+            Turns that event stream into an entity and relationship graph: which project a ticket
+            belongs to, who touched it, what it blocks. This graph is what the Intelligence answers
+            and the proactive detectors read from — not a fresh query each time.
+          </p>
+        </div>
+        <div class="ob-card">
+          <h3><span class="ob-dot"></span>Integration Engine</h3>
+          <p>
+            One adapter registry where providers declare typed capabilities instead of being
+            special-cased. Seven capability slots are defined; source control is the one fully
+            built out today, with GitHub, GitLab and Azure DevOps behind a single interface.
+            Status changes publish back as domain events, so a disconnected provider is something
+            the workspace knows about.
+          </p>
+        </div>
+        <div class="ob-card">
+          <h3><span class="ob-dot"></span>AI Engine</h3>
+          <p>
+            A provider-agnostic router that tries your preferred model first and falls back through
+            the rest — Claude Haiku 4.5, Gemini 3.6 Flash, GPT-4o mini and Grok 3 mini. Callers ask
+            for a completion; every provider difference stays inside its adapter. The locally hosted
+            model is reached through the agent rather than this router.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ integrations ============ -->
+  <section class="ob-section ob-rev" id="integrations">
+    <div class="ob-wrap">
+      <p class="ob-eyebrow">Integrations</p>
+      <h2 class="ob-h2">Connected to what your team already runs.</h2>
+      <p class="ob-lede">
+        Repository, tracker, error reporting, mail and infrastructure — each connected once in
+        Settings with your own credentials, then verified continuously on the Health screen.
+      </p>
+
+      <div class="ob-ints">
+        <div class="ob-int" style="--brand:#ffffff">{{ICON:github}}GitHub</div>
+        <div class="ob-int" style="--brand:#FC6D26">{{ICON:gitlab}}GitLab</div>
+        <div class="ob-int"><span class="mono">AZ</span>Azure DevOps</div>
+        <div class="ob-int" style="--brand:#C8202F">{{ICON:zoho}}Zoho Sprints</div>
+        <div class="ob-int" style="--brand:#8C5393">{{ICON:sentry}}Sentry</div>
+        <div class="ob-int"><span class="mono">MT</span>Microsoft Teams</div>
+        <div class="ob-int" style="--brand:#EA4335">{{ICON:gmail}}Gmail</div>
+        <div class="ob-int" style="--brand:#2496ED">{{ICON:docker}}Docker</div>
+        <div class="ob-int" style="--brand:#4169E1">{{ICON:postgresql}}PostgreSQL</div>
+        <div class="ob-int" style="--brand:#00C7B7">{{ICON:netlify}}Netlify</div>
+        <div class="ob-int" style="--brand:#ffffff">{{ICON:vercel}}Vercel</div>
+        <div class="ob-int"><span class="mono">AW</span>AWS cost</div>
+        <div class="ob-int"><span class="mono">VS</span>VS Code</div>
+        <div class="ob-int"><span class="mono">VI</span>Visual Studio</div>
+      </div>
+
+      <div class="ob-grouphead" style="margin-top:34px;margin-bottom:0">
+        <h3>Models</h3>
+        <span>Bring your own key, or run the local model for free.</span>
+      </div>
+      <div class="ob-ints" style="margin-top:14px">
+        <div class="ob-int" style="--brand:#D97757">{{ICON:anthropic}}Claude</div>
+        <div class="ob-int" style="--brand:#8E75F8">{{ICON:googlegemini}}Gemini</div>
+        <div class="ob-int"><span class="mono">AI</span>OpenAI</div>
+        <div class="ob-int"><span class="mono">GR</span>Grok</div>
+        <div class="ob-int" style="--brand:#37DFA0"><span class="mono">LO</span>Local model</div>
+      </div>
+
+      <p class="ob-intnote">
+        Brand marks are shown for identification only and remain the property of their owners. A few —
+        Microsoft and Amazon products among them — no longer publish a reusable mark, so they carry a
+        lettered tile instead.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ security ============ -->
+  <section class="ob-section ob-rev" id="security">
+    <div class="ob-wrap">
+      <p class="ob-eyebrow">Data and security</p>
+      <h2 class="ob-h2">Your workspace is yours by default.</h2>
+      <p class="ob-lede">
+        Nobody sees your projects, tasks or tickets unless you deliberately share them with a team.
+        That is enforced in the database, not just in the interface.
+      </p>
+
+      <ul class="ob-seclist">
+        <li>
+          <span class="t">Row-level security</span>
+          <span class="d">Every table scopes rows to their owner in Postgres itself, so a bug in the client cannot widen access.</span>
+        </li>
+        <li>
+          <span class="t">One-time-code auth</span>
+          <span class="d">Sign-up, verification and password reset run on emailed one-time codes — never a reset link — issuing session tokens with the same claim shape row-level security expects.</span>
+        </li>
+        <li>
+          <span class="t">Sign-in alerts</span>
+          <span class="d">A new sign-in emails you the time, location and device it came from, so an unfamiliar one is obvious immediately.</span>
+        </li>
+        <li>
+          <span class="t">Secrets stay server-side</span>
+          <span class="d">Provider tokens and service-role keys live in serverless functions. The browser is never handed a raw provider token.</span>
+        </li>
+        <li>
+          <span class="t">Local credentials stay local</span>
+          <span class="d">Your AI provider keys, Gmail app password and database passwords are held by the agent on your own machine, which listens only to that machine.</span>
+        </li>
+        <li>
+          <span class="t">Everything is recorded</span>
+          <span class="d">Sign-ins, integration changes and work-item edits land in a filterable audit log — including anything an automation rule performed on your behalf.</span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============ footer ============ -->
+  <footer class="ob-footer">
+    <div class="ob-wrap">
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div class="ob-brand">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="8.4" stroke="#37DFA0" stroke-width="1.5"/>
+            <circle cx="12" cy="12" r="3" fill="#37DFA0"/>
+            <circle cx="17.9" cy="6.1" r="2.1" fill="#37DFA0" stroke="#08090A" stroke-width="1.2"/>
+          </svg>
+          <span class="ob-wordmark" style="font-size:14px">ORBIT</span>
+        </div>
+        <p>Your personal developer command center — one place to launch every project, track tickets, tasks and time, and see it all in a control-room UI.</p>
+      </div>
+      <div class="ob-stack">
+        <div class="ob-int" style="--brand:#61DAFB">{{ICON:react}}React 19</div>
+        <div class="ob-int" style="--brand:#646CFF">{{ICON:vite}}Vite 7</div>
+        <div class="ob-int" style="--brand:#3178C6">{{ICON:typescript}}TypeScript</div>
+        <div class="ob-int" style="--brand:#5FA04E">{{ICON:nodedotjs}}Node agent</div>
+        <div class="ob-int" style="--brand:#3FCF8E">{{ICON:supabase}}Supabase</div>
+      </div>
+    </div>
+  </footer>
+
+</div>
+
+<script>
+  (function () {
+    var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    /* ---- hero orbit field ---- */
+    var cv = document.getElementById("ob-orbit-canvas");
+    if (cv && cv.getContext) {
+      var ctx = cv.getContext("2d");
+      var w = 0, h = 0, dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+      var rings = [
+        { rx: 0.50, ry: 0.175, tilt: -0.19, speed: 0.00022, sats: 1, alpha: 0.36 },
+        { rx: 0.36, ry: 0.30,  tilt: 0.34,  speed: -0.00031, sats: 1, alpha: 0.26 },
+        { rx: 0.64, ry: 0.115, tilt: 0.12,  speed: 0.00015, sats: 2, alpha: 0.20 }
+      ];
+
+      function size() {
+        var r = cv.getBoundingClientRect();
+        w = r.width; h = r.height;
+        cv.width = Math.floor(w * dpr);
+        cv.height = Math.floor(h * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+
+      function draw(t) {
+        ctx.clearRect(0, 0, w, h);
+        var cx = w * 0.78, cy = h * 0.34;
+        var base = Math.min(w, h);
+
+        for (var i = 0; i < rings.length; i++) {
+          var r = rings[i];
+          var rx = base * r.rx, ry = base * r.ry;
+
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(r.tilt);
+          ctx.beginPath();
+          ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+          ctx.strokeStyle = "rgba(55,223,160," + r.alpha * 0.5 + ")";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          for (var s = 0; s < r.sats; s++) {
+            var a = t * r.speed + (s * Math.PI * 2) / r.sats;
+            var px = Math.cos(a) * rx, py = Math.sin(a) * ry;
+            var g = ctx.createRadialGradient(px, py, 0, px, py, 16);
+            g.addColorStop(0, "rgba(55,223,160,.85)");
+            g.addColorStop(1, "rgba(55,223,160,0)");
+            ctx.fillStyle = g;
+            ctx.beginPath();
+            ctx.arc(px, py, 16, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "#37DFA0";
+            ctx.beginPath();
+            ctx.arc(px, py, 2.4, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          ctx.restore();
+        }
+
+        var cg = ctx.createRadialGradient(cx, cy, 0, cx, cy, base * 0.09);
+        cg.addColorStop(0, "rgba(55,223,160,.30)");
+        cg.addColorStop(1, "rgba(55,223,160,0)");
+        ctx.fillStyle = cg;
+        ctx.beginPath();
+        ctx.arc(cx, cy, base * 0.09, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      function loop(ts) { draw(ts); requestAnimationFrame(loop); }
+
+      size();
+      if (reduce) { draw(0); } else { requestAnimationFrame(loop); }
+      window.addEventListener("resize", function () { size(); if (reduce) draw(0); });
+    }
+
+    /* ---- scroll reveal ---- */
+    var revs = document.querySelectorAll(".ob-rev");
+    if (!("IntersectionObserver" in window) || reduce) {
+      for (var i = 0; i < revs.length; i++) revs[i].classList.add("in");
+    } else {
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
+        });
+      }, { rootMargin: "0px 0px -6% 0px", threshold: 0.03 });
+      for (var j = 0; j < revs.length; j++) io.observe(revs[j]);
+    }
+  })();
+</script>

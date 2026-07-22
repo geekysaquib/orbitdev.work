@@ -4,6 +4,21 @@ import { dbSelect, dbInsert, dbUpdate, dbDelete, dbRpc } from "./_lib/db";
 import { sendMail } from "./_lib/mailer";
 import { teamInviteEmail } from "./_lib/email-templates";
 import { verifySession } from "./_lib/verifyToken";
+import { serverEventEngine } from "./_lib/serverEvents";
+
+/**
+ * Fire-and-forget, same principle as every other event-publish call in this
+ * codebase — a failed publish must never affect a team-membership response
+ * that already succeeded. `userId` here is the *subject* of the membership
+ * change (who joined/left/was re-roled), not necessarily the caller —
+ * consistent with the payload's own `userId` field, and it still means the
+ * affected person can see this in their own history later via
+ * domain_events' owner-select RLS policy, even after leaving the team. See
+ * docs/architecture/event-engine-adoption.md.
+ */
+function publishTeamEvent(type: string, teamId: string, userId: string, payload: Record<string, unknown>): void {
+  void serverEventEngine.publish({ source: "team-workflow", type, occurredAt: new Date().toISOString(), userId, teamId, payload }).catch(() => {});
+}
 
 /**
  * Everything that changes who's on a team lives here, behind the
@@ -127,6 +142,7 @@ export const handler: Handler = async (event) => {
         // One atomic DB-function call (see create_team_with_owner in supabase/schema.sql)
         // instead of insert-team-then-insert-member with a manual compensating delete.
         const team = await dbRpc<TeamRow>("create_team_with_owner", { p_name: name, p_owner_id: session.userId });
+        publishTeamEvent("member_joined", team.id, session.userId, { role: "owner" });
         return json(200, { team, role: "owner" });
       }
 
@@ -237,6 +253,7 @@ export const handler: Handler = async (event) => {
         const existingRole = await membershipRole(invite.team_id, session.userId);
         if (!existingRole) {
           await dbInsert("team_members", { team_id: invite.team_id, user_id: session.userId, role: invite.role });
+          publishTeamEvent("member_joined", invite.team_id, session.userId, { role: invite.role });
         }
         await dbUpdate("team_invites", `id=eq.${invite.id}`, { status: "accepted", accepted_at: new Date().toISOString() });
 
@@ -257,6 +274,7 @@ export const handler: Handler = async (event) => {
         if (callerRole === "admin" && targetRole === "admin") return json(403, { error: "Admins can't remove other admins." });
 
         await dbDelete("team_members", `team_id=eq.${teamId}&user_id=eq.${targetId}`);
+        publishTeamEvent("member_left", teamId, targetId, {});
         return json(200, { ok: true });
       }
 
@@ -273,6 +291,7 @@ export const handler: Handler = async (event) => {
         if (targetRole === "owner") return json(400, { error: "Use transfer-ownership to change the owner." });
 
         await dbUpdate("team_members", `team_id=eq.${teamId}&user_id=eq.${targetId}`, { role });
+        publishTeamEvent("member_role_changed", teamId, targetId, { role, previousRole: targetRole });
         return json(200, { ok: true });
       }
 
@@ -300,6 +319,7 @@ export const handler: Handler = async (event) => {
         if (callerRole === "owner") return json(400, { error: "Transfer ownership or delete the team before leaving." });
 
         await dbDelete("team_members", `team_id=eq.${teamId}&user_id=eq.${session.userId}`);
+        publishTeamEvent("member_left", teamId, session.userId, {});
         return json(200, { ok: true });
       }
 

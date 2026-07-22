@@ -9,6 +9,7 @@ import { ZohoProvider } from "./context/Zoho";
 import { TimezoneProvider } from "./context/Timezone";
 import { ThemeProvider } from "./context/Theme";
 import { BreakProvider } from "./context/Break";
+import { RuntimeProvider } from "./runtime";
 import { Layout } from "./components/Layout";
 import { OrbitLoader } from "./components/ui";
 import Login from "./routes/Login";
@@ -24,6 +25,7 @@ import type { JSX } from "react";
 // boards, etc.), unlike the small pre-auth pages above (the first thing any
 // visitor loads, kept eager on purpose — no benefit to an extra round-trip
 // before the very first paint).
+const AiMode = lazy(() => import("./routes/AiMode"));
 const Dashboard = lazy(() => import("./routes/Dashboard"));
 const Projects = lazy(() => import("./routes/Projects"));
 const ProjectDetail = lazy(() => import("./routes/ProjectDetail"));
@@ -45,6 +47,7 @@ const AuditLog = lazy(() => import("./routes/AuditLog"));
 const Automation = lazy(() => import("./routes/Automation"));
 const Health = lazy(() => import("./routes/Health"));
 const Insights = lazy(() => import("./routes/Insights"));
+const Intelligence = lazy(() => import("./routes/Intelligence"));
 
 function RouteLoader() {
   return <div className="page-loader"><OrbitLoader label="Loading…" /></div>;
@@ -77,10 +80,11 @@ export default function App() {
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/invite/:token" element={<InviteAccept />} />
             <Route path="/oauth/callback" element={<OAuthCallback />} />
-            <Route element={<Guard><Layout /></Guard>}>
+            <Route element={<Guard><RuntimeProvider><Layout /></RuntimeProvider></Guard>}>
               <Route path="/get-started" element={<GetStarted />} />
               <Route path="/onboarding" element={<Onboarding />} />
               <Route path="/app" element={<Dashboard />} />
+              <Route path="/ai-mode" element={<AiMode />} />
               <Route path="/projects" element={<Projects />} />
               <Route path="/projects/:id" element={<ProjectDetail />} />
               <Route path="/teams" element={<Teams />} />
@@ -98,6 +102,7 @@ export default function App() {
               <Route path="/automation" element={<Automation />} />
               <Route path="/health" element={<Health />} />
               <Route path="/insights" element={<Insights />} />
+              <Route path="/intelligence" element={<Intelligence />} />
               <Route path="/settings" element={<Settings />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />

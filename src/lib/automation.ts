@@ -17,6 +17,7 @@ import { startTimer, isTimerRunning } from "./timer";
 import { fetchIntegrations } from "./integrations";
 import { createTeamsMeeting } from "./msTeams";
 import { gmailSend, runInProject } from "./agent";
+import { orbitRuntime } from "../runtime";
 import type { TaskStatus, Priority } from "./types";
 
 export type TriggerType = "task_status" | "ticket_status" | "ticket_created" | "timer_started" | "timer_stopped" | "mail_rule_matched";
@@ -176,18 +177,36 @@ async function runAction(rule: AutomationRule, event: AutomationEvent): Promise<
   switch (rule.actionType) {
     case "create_task": {
       const projectId = cfg.useEventProject ? eventProject(event) : (cfg.projectId ?? null);
-      await supabase.from("tasks").insert({
+      const { data } = await supabase.from("tasks").insert({
         user_id: u.id, project_id: projectId,
         title: cfg.title?.trim() || `Follow-up from “${rule.name}”`,
         status: (cfg.status as TaskStatus) || "todo",
         priority: cfg.priority || "med",
-      });
+      }).select().single();
+      // This mutation path had no audit/event trail before — automation-created
+      // tasks were invisible to both. Fire-and-forget, same principle as every
+      // other event-publish call. See docs/architecture/event-engine-adoption.md.
+      if (data) {
+        void orbitRuntime.events.publish({
+          source: "task-workflow", type: "created", occurredAt: new Date().toISOString(), teamId: data.team_id ?? null,
+          payload: { taskId: data.id, projectId: data.project_id, teamId: data.team_id ?? null, title: data.title, status: data.status, priority: data.priority },
+        }).catch(() => {});
+      }
       break;
     }
     case "set_task_status": {
       // Only meaningful when a task raised the event.
       if (event.type !== "task_status" || !cfg.status) return;
-      await supabase.from("tasks").update({ status: cfg.status as TaskStatus }).eq("id", event.taskId);
+      const { data } = await supabase.from("tasks").update({ status: cfg.status as TaskStatus }).eq("id", event.taskId).select().single();
+      if (data) {
+        void orbitRuntime.events.publish({
+          source: "task-workflow", type: "status_changed", occurredAt: new Date().toISOString(), teamId: data.team_id ?? null,
+          payload: {
+            taskId: data.id, projectId: data.project_id, teamId: data.team_id ?? null, title: data.title,
+            status: data.status, previousStatus: event.status, priority: data.priority, dueDate: data.due_date, completedAt: data.completed_at,
+          },
+        }).catch(() => {});
+      }
       break;
     }
     case "set_ticket_status": {

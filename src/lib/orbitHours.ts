@@ -1,20 +1,26 @@
 import { supabase } from "./supabase";
 import { getUser } from "./auth";
 
-/** Save a completed focus-timer session to Supabase (Orbit hours). */
-export async function logOrbitSession(seconds: number, projectId?: string | null, taskId?: string | null) {
-  if (seconds < 1) return;
+/**
+ * Save a completed focus-timer session to Supabase (Orbit hours). Returns the
+ * new row's id (or `null` if it no-op'd) so callers that need to reference
+ * this specific session — e.g. `timer.ts`'s `timer-workflow.stopped` event —
+ * don't have to re-query for it.
+ */
+export async function logOrbitSession(seconds: number, projectId?: string | null, taskId?: string | null): Promise<{ id: string } | null> {
+  if (seconds < 1) return null;
   const u = getUser();
-  if (!u) return;
+  if (!u) return null;
   const now = new Date();
-  await supabase.from("time_entries").insert({
+  const { data } = await supabase.from("time_entries").insert({
     user_id: u.id,
     project_id: projectId ?? null,
     task_id: taskId ?? null,
     started_at: new Date(now.getTime() - seconds * 1000).toISOString(),
     ended_at: now.toISOString(),
     seconds,
-  });
+  }).select("id").single();
+  return data ? { id: data.id as string } : null;
 }
 
 export interface OrbitHours { todayH: number; totalH: number; }

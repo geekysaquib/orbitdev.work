@@ -61,7 +61,8 @@ export default function Calendar() {
       else toast(`Couldn't create the Teams meeting: ${r.error} — event saved without a link.`);
     }
 
-    await insert({ title: form.title, kind: form.kind, starts_at: startsAt, ends_at: endsAt, meeting_url: meetingUrl } as Partial<CalEvent>);
+    const { error } = await insert({ title: form.title, kind: form.kind, starts_at: startsAt, ends_at: endsAt, meeting_url: meetingUrl } as Partial<CalEvent>);
+    if (error) { toast(`Couldn't save the event: ${error}`); return; }
     setModal(null);
   }
 

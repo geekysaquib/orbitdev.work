@@ -29,6 +29,8 @@ export interface OrbitSettings {
   /** Auto-pause the focus timer after N idle minutes on this tab — browser-tab-based only, see src/hooks/useIdleDetection.ts. */
   idle_detection_enabled?: boolean;
   idle_minutes?: number;
+  /** Deterministic `Insight.id`s the user has dismissed — see src/lib/insights.ts. Permanent until manually undone; no auto-expiry. */
+  dismissed_insight_ids?: string[];
 }
 
 const TABLE = "user_settings";

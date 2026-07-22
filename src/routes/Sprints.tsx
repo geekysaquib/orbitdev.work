@@ -10,7 +10,9 @@ import {
   type SprintProject, type Board, type ZohoItem, type ItemDetail, type Thumb, type Attachment,
 } from "../lib/zoho";
 import { computeVelocity } from "../lib/velocity";
-import { VelocityChart } from "../components/VelocityChart";
+import { VelocityModal } from "../components/VelocityModal";
+import { fetchIntegrations, providerKeys } from "../lib/integrations";
+import type { ProviderKeys, CloudProvider } from "../lib/ai";
 
 const typeStyle = (name: string): { color: string; icon: string } => {
   const n = (name || "").toLowerCase();
@@ -41,6 +43,9 @@ export default function Sprints() {
   const [fPrio, setFPrio] = useState("all");
   const [fAssignee, setFAssignee] = useState("all");
   const [showVelocity, setShowVelocity] = useState(false);
+  const [aiKeys, setAiKeys] = useState<ProviderKeys>({});
+  const [aiProvider, setAiProvider] = useState<CloudProvider | undefined>(undefined);
+  useEffect(() => { fetchIntegrations().then((i) => { setAiKeys(providerKeys(i)); setAiProvider(i?.ai_provider ?? undefined); }); }, []);
 
   const [searchParams] = useSearchParams();
   const wantProject = searchParams.get("project");
@@ -162,16 +167,14 @@ export default function Sprints() {
               <div className="sub">{board ? `${board.sprints.length} sprints · ${board.sprints.reduce((a, s) => a + s.items.length, 0)} work items` : "Loading…"}</div>
             </div>
             {board && board.sprints.length > 1 && (
-              <button className="btn ghost" onClick={() => setShowVelocity((v) => !v)}>
-                <Icon name={showVelocity ? "chevL" : "chevR"} size={13} />Velocity
+              <button className="btn ghost" onClick={() => setShowVelocity(true)}>
+                <Icon name="activity" size={13} />Velocity
               </button>
             )}
           </div>
         )}
         {showVelocity && board && board.sprints.length > 1 && (
-          <div className="card" style={{ padding: 16, marginBottom: 16 }}>
-            <VelocityChart rows={velocity} />
-          </div>
+          <VelocityModal rows={velocity} keys={aiKeys} preferred={aiProvider} onClose={() => setShowVelocity(false)} />
         )}
         {loadingB && <div className="page-loader"><OrbitLoader label="Loading board…" /></div>}
 

@@ -16,7 +16,7 @@ export type AuditAction =
   | "project.create" | "project.update" | "project.delete"
   | "project.link_repo" | "project.unlink_repo"
   | "pg_server.create" | "pg_server.update" | "pg_server.delete"
-  | "team.invite" | "team.join" | "team.remove_member" | "team.transfer_ownership"
+  | "team.invite" | "team.join" | "team.remove_member" | "team.transfer_ownership" | "team.change_role" | "team.leave"
   | "onboarding.completed" | "onboarding.skipped";
 
 export interface AuditEntry {

@@ -14,6 +14,17 @@
  * resumes still attributed to its project.
  */
 import { logOrbitSession } from "./orbitHours";
+import { orbitRuntime } from "../runtime";
+
+// Published from this module directly (not a React hook) so every current and
+// future start/stop call site — TimeTracking.tsx, Ask AI's start_timer action,
+// the VS Code bridge, automation's start_timer action — gets event publishing
+// for free, with nothing to remember at each call site. Fire-and-forget: a
+// failed publish must never block starting/stopping a real timer. See
+// docs/architecture/event-engine-adoption.md.
+function publishTimerEvent(type: "started" | "stopped", payload: Record<string, unknown>): void {
+  void orbitRuntime.events.publish({ source: "timer-workflow", type, occurredAt: new Date().toISOString(), payload }).catch(() => {});
+}
 
 export const TIMER_KEY = "orbit.timerStart";
 export const TIMER_PAUSE_KEY = "orbit.timerPausedSec";
@@ -55,10 +66,12 @@ export const isTimerRunning = (): boolean => readTimer().startedAt !== null;
  */
 export function startTimer(projectId?: string | null, taskId?: string | null): void {
   if (isTimerRunning()) return;
-  ls.set(TIMER_KEY, String(Date.now()));
+  const startedAt = Date.now();
+  ls.set(TIMER_KEY, String(startedAt));
   if (projectId) ls.set(TIMER_PROJECT_KEY, projectId); else ls.del(TIMER_PROJECT_KEY);
   if (taskId) ls.set(TIMER_TASK_KEY, taskId); else ls.del(TIMER_TASK_KEY);
   emitTimerChange();
+  publishTimerEvent("started", { projectId: projectId ?? null, taskId: taskId ?? null, startedAt: new Date(startedAt).toISOString() });
 }
 
 /** Stop, log the session to Orbit hours with its project/task, and return the seconds logged. */
@@ -70,6 +83,13 @@ export async function stopTimer(): Promise<number> {
   ls.del(TIMER_TASK_KEY);
   ls.del(TIMER_PAUSE_KEY);
   emitTimerChange();
-  await logOrbitSession(seconds, projectId, taskId);
+  const entry = await logOrbitSession(seconds, projectId, taskId);
+  if (entry) {
+    const endedAt = new Date();
+    publishTimerEvent("stopped", {
+      timeEntryId: entry.id, projectId: projectId ?? null, taskId: taskId ?? null,
+      startedAt: new Date(startedAt).toISOString(), endedAt: endedAt.toISOString(), seconds,
+    });
+  }
   return seconds;
 }

@@ -17,7 +17,7 @@ export interface PresenceEntry {
 // so a presence label always reads like the nav rail without importing it
 // (that list is keyed by icon/route metadata this doesn't need).
 const PATH_LABELS: Record<string, string> = {
-  "/app": "Dashboard", "/projects": "Projects", "/tasks": "Tasks", "/sprints": "Sprints",
+  "/app": "Dashboard", "/ai-mode": "AI Mode", "/projects": "Projects", "/tasks": "Tasks", "/sprints": "Sprints",
   "/teams": "Teams", "/mail": "Mail", "/calendar": "Calendar",
   "/postgres": "Postgres", "/docker": "Docker", "/time": "Time",
   "/docs": "Docs", "/audit": "Audit log", "/health": "Health", "/settings": "Settings",
@@ -57,14 +57,19 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
   userRef.current = user;
   pathRef.current = location.pathname;
 
-  const trackAll = useCallback(() => {
+  const buildEntry = useCallback((): PresenceEntry | null => {
     const u = userRef.current;
-    if (!u) return;
+    if (!u) return null;
     const base = labelForPath(pathRef.current);
     const label = detailRef.current ? `${base} — ${detailRef.current}` : base;
-    const entry: PresenceEntry = { user_id: u.id, full_name: u.full_name || u.email, label, since: sinceRef.current };
-    for (const ch of channelsRef.current.values()) ch.track(entry);
+    return { user_id: u.id, full_name: u.full_name || u.email, label, since: sinceRef.current };
   }, []);
+
+  const trackAll = useCallback(() => {
+    const entry = buildEntry();
+    if (!entry) return;
+    for (const ch of channelsRef.current.values()) ch.track(entry);
+  }, [buildEntry]);
 
   useEffect(() => {
     if (!user) { setTeams([]); return; }
@@ -90,7 +95,7 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
         const list = Object.values(state).map((entries) => entries[0]).filter((e): e is PresenceEntry => !!e && e.user_id !== user.id);
         setTeamPresence((p) => ({ ...p, [teamId]: list }));
       });
-      ch.subscribe((status) => { if (status === "SUBSCRIBED") trackAll(); });
+      ch.subscribe((status) => { if (status === "SUBSCRIBED") { const entry = buildEntry(); if (entry) ch.track(entry); } });
       channelsRef.current.set(teamId, ch);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

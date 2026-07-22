@@ -146,7 +146,8 @@ export function AskAiModal({ open, onClose }: { open: boolean; onClose: () => vo
     }
     if (r.fellBackFrom) {
       const to = r.source === "local" ? "the local model" : PROVIDER_LABEL[r.source as CloudProvider];
-      toast(`${r.fellBackFrom} unavailable — answered with ${to} instead`);
+      const why = r.fellBackDetail ? ` (${r.fellBackDetail})` : "";
+      toast(`${r.fellBackFrom} unavailable${why} — answered with ${to} instead`);
     }
     const { prose, actions } = parseActions(r.text || "", indexRef.current ?? { tickets: new Map(), projects: new Map(), sprintItems: new Map(), timerProjects: new Map() });
     setTurns([...next, { role: "assistant", text: prose || "(no answer)", actions, source: r.source, ms: Date.now() - started }]);

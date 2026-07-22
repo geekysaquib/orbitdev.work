@@ -280,8 +280,12 @@ export default function Postgres() {
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <Empty icon="db" title="No databases" sub="This server has no databases, or they haven't loaded yet." />
         </div>
+      ) : !sel ? (
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <OrbitLoader label="Loading server…" />
+        </div>
       ) : mode === "diagram" ? (
-        <SchemaDiagram server={sel!} database={db} />
+        <SchemaDiagram server={sel} database={db} />
       ) : mode === "diff" ? (
         <SchemaDiffView
           snapshot={schemaSnapshot} current={schema}

@@ -28,7 +28,7 @@ export function VelocityChart({ rows }: { rows: SprintVelocity[] }) {
 
   return (
     <div>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block", overflow: "visible" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" style={{ display: "block", maxHeight: H, overflow: "visible" }}>
         <line x1={PAD_L} x2={W - PAD_R} y1={avgY} y2={avgY} stroke="var(--dim)" strokeWidth={1} strokeDasharray="3 3" />
         {bars.map((b, i) => (
           <g key={rows[i].sprintId}>

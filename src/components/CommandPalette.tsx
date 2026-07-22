@@ -16,6 +16,7 @@ export function CommandPalette({ onClose, onAskAi }: { onClose: () => void; onAs
   const commands: Cmd[] = useMemo(() => [
     ...(onAskAi ? [{ group: "Actions", label: "Ask AI", icon: "sparkles", run: () => { onAskAi(); onClose(); } }] : []),
     { group: "Go to", label: "Dashboard", icon: "grid", run: () => go("/app") },
+    { group: "Go to", label: "AI Mode", icon: "cpu", run: () => go("/ai-mode") },
     { group: "Go to", label: "Projects", icon: "boxes", run: () => go("/projects") },
     { group: "Go to", label: "Teams", icon: "users", run: () => go("/teams") },
     { group: "Go to", label: "Sprints", icon: "sprint", run: () => go("/sprints") },

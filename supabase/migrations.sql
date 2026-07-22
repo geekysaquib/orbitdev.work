@@ -747,3 +747,34 @@ alter table public.automation_rules add constraint automation_rules_trigger_type
 alter table public.automation_rules drop constraint if exists automation_rules_action_type_check;
 alter table public.automation_rules add constraint automation_rules_action_type_check
   check (action_type in ('create_task','set_task_status','set_ticket_status','notify','start_timer','send_email','create_teams_meeting','run_agent_command','webhook'));
+
+-- ---------- domain events (Event Engine — see docs/architecture/event-engine.md) ----------
+-- Immutable log every engine (AI, Integration, future ones) publishes
+-- through: `source` is the publishing engine ("integration-engine", ...),
+-- `type` is engine-defined ("connected", "sync_completed", ...). Append-only
+-- like audit_log above (no update/delete policy, ever) but a distinct table
+-- because its purpose is different — inter-engine domain events, not a
+-- user-audit trail (audit_log) or a user-facing inbox (notifications).
+create table if not exists public.domain_events (
+  id uuid primary key default gen_random_uuid(),
+  source text not null,
+  type text not null,
+  user_id uuid references public.users(id) on delete cascade,
+  team_id uuid references public.teams(id) on delete set null,
+  payload jsonb not null default '{}'::jsonb,
+  occurred_at timestamptz not null default now()
+);
+create index if not exists domain_events_source_type_idx on public.domain_events(source, type, occurred_at desc);
+create index if not exists domain_events_user_idx on public.domain_events(user_id, occurred_at desc);
+alter table public.domain_events enable row level security;
+do $$ begin
+  create policy "owner select" on public.domain_events for select using (user_id = auth.uid());
+exception when duplicate_object then null; end $$;
+do $$ begin
+  create policy "owner insert" on public.domain_events for insert with check (user_id = auth.uid());
+exception when duplicate_object then null; end $$;
+drop policy if exists "select: team member" on public.domain_events;
+create policy "select: team member" on public.domain_events for select using (
+  team_id is not null and public.is_team_member(team_id, auth.uid())
+);
+alter publication supabase_realtime add table public.domain_events;

@@ -215,6 +215,17 @@ export interface Database {
         },
         never // append-only — no update policy in schema.sql, rows are never edited after insert
       >;
+      domain_events: Table<
+        {
+          id: string; source: string; type: string; user_id: string | null; team_id: string | null;
+          payload: Json; occurred_at: string;
+        },
+        {
+          id?: string; source: string; type: string; user_id?: string | null; team_id?: string | null;
+          payload?: Json; occurred_at?: string;
+        },
+        never // append-only — no update policy in schema.sql, rows are never edited after insert
+      >;
     };
     Views: Record<string, never>;
     Functions: {

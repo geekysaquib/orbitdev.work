@@ -358,6 +358,25 @@ create table if not exists public.audit_log (
 );
 create index if not exists audit_log_user_created_idx on public.audit_log(user_id, created_at desc);
 
+-- ---------- domain events (Event Engine — see docs/architecture/event-engine.md) ----------
+-- Immutable log every engine (AI, Integration, future ones) publishes
+-- through: `source` is the publishing engine ("integration-engine", ...),
+-- `type` is engine-defined ("connected", "sync_completed", ...). Append-only
+-- like audit_log above (no update/delete policy, ever) but a distinct table
+-- because its purpose is different — inter-engine domain events, not a
+-- user-audit trail (audit_log) or a user-facing inbox (notifications).
+create table if not exists public.domain_events (
+  id uuid primary key default gen_random_uuid(),
+  source text not null,
+  type text not null,
+  user_id uuid references public.users(id) on delete cascade,
+  team_id uuid references public.teams(id) on delete set null,
+  payload jsonb not null default '{}'::jsonb,
+  occurred_at timestamptz not null default now()
+);
+create index if not exists domain_events_source_type_idx on public.domain_events(source, type, occurred_at desc);
+create index if not exists domain_events_user_idx on public.domain_events(user_id, occurred_at desc);
+
 -- ---------- metric snapshots (daily-brief/anomaly-scan crons' day-over-day deltas) ----------
 create table if not exists public.metric_snapshots (
   id uuid primary key default gen_random_uuid(),
@@ -397,7 +416,7 @@ create index if not exists automation_rules_user_idx on public.automation_rules(
 do $$
 declare t text;
 begin
-  foreach t in array array['users','otp_codes','teams','team_members','team_invites','projects','tasks','tickets','events','notifications','time_entries','focus_events','integrations','pg_servers','user_settings','break_logs','audit_log','provider_connections','mail_templates','scheduled_emails','mail_rules','metric_snapshots','automation_rules']
+  foreach t in array array['users','otp_codes','teams','team_members','team_invites','projects','tasks','tickets','events','notifications','time_entries','focus_events','integrations','pg_servers','user_settings','break_logs','audit_log','domain_events','provider_connections','mail_templates','scheduled_emails','mail_rules','metric_snapshots','automation_rules']
   loop
     execute format('alter table public.%I enable row level security;', t);
   end loop;
@@ -508,6 +527,17 @@ create policy "owner insert" on public.focus_events for insert with check (user_
 -- table is_team_member queries).
 drop policy if exists "select: team member" on public.audit_log;
 create policy "select: team member" on public.audit_log for select using (
+  team_id is not null and public.is_team_member(team_id, auth.uid())
+);
+
+-- domain_events (Event Engine) is append-only for the same reason as
+-- audit_log above — no update/delete policy, ever.
+drop policy if exists "owner select" on public.domain_events;
+create policy "owner select" on public.domain_events for select using (user_id = auth.uid());
+drop policy if exists "owner insert" on public.domain_events;
+create policy "owner insert" on public.domain_events for insert with check (user_id = auth.uid());
+drop policy if exists "select: team member" on public.domain_events;
+create policy "select: team member" on public.domain_events for select using (
   team_id is not null and public.is_team_member(team_id, auth.uid())
 );
 
@@ -768,6 +798,8 @@ for each row execute function public.notify_project_mentions();
 alter publication supabase_realtime add table public.notifications;
 -- realtime for the team activity feed (see src/lib/activity.ts)
 alter publication supabase_realtime add table public.audit_log;
+-- realtime for the Event Engine's cross-process subscribers (see src/lib/eventsRealtime.ts)
+alter publication supabase_realtime add table public.domain_events;
 
 -- Atomic partial-update of a user's settings blob (see src/lib/settings.ts).
 -- Runs as the caller (not security definer) so the existing "owner all" RLS

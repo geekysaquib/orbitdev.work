@@ -1,11 +1,18 @@
 import type { Handler, HandlerEvent } from "@netlify/functions";
 import { verifySession } from "./_lib/verifyToken";
-import { loadConnection } from "./_lib/providerConnections";
+import { credentialManager, accountNameOf } from "./_lib/credentialManager";
+import { serverEventEngine } from "./_lib/serverEvents";
+import { createDefaultRegistry, isScmAdapter } from "../../src/engines/integrations";
 
 /**
- * GitHub REST API proxy. Credentials are read strictly from the caller's own
- * row in `provider_connections` (via their JWT + RLS) — no environment
- * fallback, same trust model as netlify/functions/zoho-sprints.ts.
+ * GitHub REST API proxy. Credentials come from the shared `CredentialManager`
+ * (RLS-scoped to the caller's own `provider_connections` row) — this file
+ * never reads that table directly. Actual GitHub REST calls live in the
+ * shared `ScmAdapter` (src/engines/integrations) — see
+ * docs/architecture/integration-engine.md. The registry is wired to the
+ * shared server `EventEngine` so `checkStatus` calls publish real
+ * connected/disconnected/authentication_failed domain events — see
+ * docs/architecture/orbit-runtime.md.
  */
 
 const json = (statusCode: number, data: unknown) => ({
@@ -14,26 +21,23 @@ const json = (statusCode: number, data: unknown) => ({
   body: JSON.stringify(data),
 });
 
-async function gh(path: string, token: string): Promise<{ ok: boolean; status: number; body: any }> {
-  const r = await fetch(`https://api.github.com${path}`, {
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "orbit-app" },
-  });
-  const body = await r.json().catch(() => ({}));
-  return { ok: r.ok, status: r.status, body };
-}
+const registry = createDefaultRegistry({ events: { engine: serverEventEngine } });
+const adapter = registry.getCapable("github", isScmAdapter)!;
 
 export const handler: Handler = async (event: HandlerEvent) => {
   const session = await verifySession(event.headers.authorization || event.headers.Authorization);
   if (!session) return json(401, { error: "Sign in to ORBIT first." });
 
-  const conn = await loadConnection(event, "github");
+  const authHeader = event.headers.authorization || event.headers.Authorization || null;
+  const ctx = await credentialManager.getContext("github", { kind: "request", authHeader });
   const mode = event.queryStringParameters?.mode || "status";
 
   if (mode === "status") {
-    return json(200, { connected: !!conn?.access_token, account: conn?.external_account_name ?? null });
+    if (!ctx) return json(200, { connected: false, account: null });
+    const status = await adapter.checkStatus(ctx);
+    return json(200, { connected: status.connected, account: accountNameOf(ctx) });
   }
-  if (!conn?.access_token) return json(400, { error: "GitHub isn't connected — connect it in Settings first." });
-  const token = conn.access_token;
+  if (!ctx) return json(400, { error: "GitHub isn't connected — connect it in Settings first." });
 
   const repo = event.queryStringParameters?.repo || "";
   const branch = event.queryStringParameters?.branch || "";
@@ -41,36 +45,27 @@ export const handler: Handler = async (event: HandlerEvent) => {
   try {
     switch (mode) {
       case "repos": {
-        const r = await gh("/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member", token);
-        if (!r.ok) return json(r.status, { error: r.body?.message || "Couldn't list repos" });
-        return json(200, { repos: (r.body as any[]).map((x) => ({ id: String(x.id), fullName: x.full_name, defaultBranch: x.default_branch, private: x.private })) });
+        const r = await adapter.listRepos(ctx);
+        if (!r.ok) return json(r.status || 502, { error: r.error || "Couldn't list repos" });
+        return json(200, { repos: r.data });
       }
       case "pulls": {
         if (!repo) return json(400, { error: "repo required" });
-        const r = await gh(`/repos/${repo}/pulls?state=open&per_page=50`, token);
-        if (!r.ok) return json(r.status, { error: r.body?.message || "Couldn't list pull requests" });
-        return json(200, { pulls: (r.body as any[]).map((x) => ({ number: x.number, title: x.title, url: x.html_url, user: x.user?.login, createdAt: x.created_at, updatedAt: x.updated_at })) });
+        const r = await adapter.listPulls(ctx, repo);
+        if (!r.ok) return json(r.status || 502, { error: r.error || "Couldn't list pull requests" });
+        return json(200, { pulls: r.data });
       }
       case "commits": {
         if (!repo) return json(400, { error: "repo required" });
-        const qs = branch ? `?sha=${encodeURIComponent(branch)}&per_page=20` : "?per_page=20";
-        const r = await gh(`/repos/${repo}/commits${qs}`, token);
-        if (!r.ok) return json(r.status, { error: r.body?.message || "Couldn't list commits" });
-        return json(200, {
-          commits: (r.body as any[]).map((x) => ({
-            hash: x.sha, author: x.commit?.author?.name, date: x.commit?.author?.date, subject: (x.commit?.message || "").split("\n")[0], url: x.html_url,
-          })),
-        });
+        const r = await adapter.listCommits(ctx, repo, { branch });
+        if (!r.ok) return json(r.status || 502, { error: r.error || "Couldn't list commits" });
+        return json(200, { commits: r.data });
       }
       case "runs": {
         if (!repo) return json(400, { error: "repo required" });
-        const qs = branch ? `?branch=${encodeURIComponent(branch)}&per_page=5` : "?per_page=5";
-        const r = await gh(`/repos/${repo}/actions/runs${qs}`, token);
-        if (!r.ok) return json(r.status, { error: r.body?.message || "Couldn't list workflow runs" });
-        const runs = (r.body?.workflow_runs ?? []) as any[];
-        return json(200, {
-          runs: runs.map((x) => ({ id: x.id, name: x.name, status: x.status, conclusion: x.conclusion, url: x.html_url, createdAt: x.created_at })),
-        });
+        const r = await adapter.listRuns(ctx, repo, { branch, limit: 5 });
+        if (!r.ok) return json(r.status || 502, { error: r.error || "Couldn't list workflow runs" });
+        return json(200, { runs: r.data });
       }
       default:
         return json(400, { error: `Unknown mode "${mode}"` });

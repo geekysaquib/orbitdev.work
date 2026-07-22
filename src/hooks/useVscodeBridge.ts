@@ -22,6 +22,7 @@ import { getUser } from "../lib/auth";
 import { useAgent } from "../context/Agent";
 import { useBreak } from "../context/Break";
 import { ask } from "../lib/ai";
+import { orbitRuntime } from "../runtime";
 import { fetchIntegrations, providerKeys } from "../lib/integrations";
 import { useToast } from "../context/Toast";
 import type { Task, Ticket, TaskStatus } from "../lib/types";
@@ -188,8 +189,20 @@ export function useVscodeBridge(): void {
         if (!id || !TASK_STATUSES.includes(status)) return;
         // Goes through this tab's client so RLS applies, and so the automation
         // engine's task_status trigger fires exactly as it would on a drag.
-        void supabase.from("tasks").update({ status }).eq("id", id).then(({ error }) => {
+        // This path had no event trail before — closed here. Fire-and-forget,
+        // same principle as every other event-publish call in this codebase.
+        // See docs/architecture/event-engine-adoption.md.
+        void supabase.from("tasks").update({ status }).eq("id", id).select().single().then(({ data, error }) => {
           toastRef.current(error ? `Couldn't update task: ${error.message}` : `Task moved to ${status} from VS Code`);
+          if (data) {
+            void orbitRuntime.events.publish({
+              source: "task-workflow", type: "status_changed", occurredAt: new Date().toISOString(), teamId: data.team_id ?? null,
+              payload: {
+                taskId: data.id, projectId: data.project_id, teamId: data.team_id ?? null, title: data.title,
+                status: data.status, previousStatus: null, priority: data.priority, dueDate: data.due_date, completedAt: data.completed_at,
+              },
+            }).catch(() => {});
+          }
         });
       } else if (command === "ai:rank") {
         void rankTasks().then((r) => {
@@ -206,8 +219,17 @@ export function useVscodeBridge(): void {
           user_id: u.id, title, status: "todo",
           priority: (args?.priority as "low" | "med" | "high") ?? "med",
           project_id: (args?.projectId as string) ?? null,
-        }).then(({ error }) => {
+        }).select().single().then(({ data, error }) => {
           toastRef.current(error ? `Couldn't create task: ${error.message}` : `Task created from VS Code · ${title}`);
+          // This path had no event trail before — closed here, same principle
+          // as every other event-publish call. See
+          // docs/architecture/event-engine-adoption.md.
+          if (data) {
+            void orbitRuntime.events.publish({
+              source: "task-workflow", type: "created", occurredAt: new Date().toISOString(), teamId: data.team_id ?? null,
+              payload: { taskId: data.id, projectId: data.project_id, teamId: data.team_id ?? null, title: data.title, status: data.status, priority: data.priority },
+            }).catch(() => {});
+          }
         });
       }
     });

@@ -9,6 +9,7 @@ import { useToast } from "../context/Toast";
 import { useAgent } from "../context/Agent";
 import { pickPath, type GitStatusResult } from "../lib/agent";
 import { recordAudit } from "../lib/audit";
+import { useOrbitRuntime } from "../runtime";
 import type { Project } from "../lib/types";
 
 const FILTERS: [string, string][] = [["all", "All"], ["work", "Client work"], ["personal", "Personal"], ["active", "Active"], ["hold", "On hold"]];
@@ -16,6 +17,7 @@ const FILTERS: [string, string][] = [["all", "All"], ["work", "Client work"], ["
 export default function Projects() {
   const nav = useNavigate();
   const { rows, insert, error, loading } = useTable<Project>("projects");
+  const { events } = useOrbitRuntime();
   const toast = useToast();
   const { status } = useAgent();
   const { gitByProject, gitLoading, refreshGit } = useProjectsGitStatus(rows, status === "online");
@@ -46,11 +48,14 @@ export default function Projects() {
   });
 
   async function add() {
-    await insert({
+    const { data } = await insert({
       name: form.name, client: form.client || null, fe_path: form.fe_path || null,
       sln_path: form.sln_path || null, stacks: [form.stack], status: "active", accent: ACCENT.mint,
     } as Partial<Project>);
     recordAudit({ action: "project.create", entityType: "project", meta: { name: form.name } });
+    // Fire-and-forget, same principle as recordAudit() — see
+    // docs/architecture/event-engine-adoption.md.
+    if (data) void events.publish({ source: "project-workflow", type: "created", occurredAt: new Date().toISOString(), teamId: data.team_id ?? null, payload: { projectId: data.id, name: data.name, status: data.status, client: data.client } }).catch(() => {});
     setModal(false); setForm({ name: "", client: "", fe_path: "", sln_path: "", stack: "React" });
   }
 

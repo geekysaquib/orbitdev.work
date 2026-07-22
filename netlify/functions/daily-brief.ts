@@ -1,21 +1,27 @@
 import { schedule } from "@netlify/functions";
 import { dbSelect, dbInsert } from "./_lib/db";
-import { askClaude } from "./_lib/anthropic";
+import { askAI, type CloudProvider } from "./_lib/aiProviders";
 import { fetchOpenPulls, fetchRecentRuns, fetchSentryUnresolvedCount, type RepoProvider } from "./_lib/providerFetch";
 import { buildCfg, accessToken, resolveTeam, listSprints, sprintItems, loadMaps, mapItem, loadCredsServiceRole, isOpenItemStatus, isBugType } from "./_lib/zohoAuth";
 
 /**
  * Weekday-morning "here's your day" brief — same scheduled-function shape as
- * weekly-digest.ts (service-role reads via _lib/db.ts, direct provider/
- * Anthropic calls since a cron invocation has no caller JWT or running local
- * agent). Gathers: tasks due soon, Zoho sprint items due soon + open bug
- * count, open PRs (with age) + recent CI runs across linked repos, and Sentry
- * unresolved issue count — then has Claude turn that fact list into a short
- * prose summary. Users without an `anthropic_api_key` are skipped (no
- * local-model fallback possible from cron, same rule as weekly-digest.ts).
+ * weekly-digest.ts (service-role reads via _lib/db.ts, direct provider calls
+ * since a cron invocation has no caller JWT or running local agent). Gathers:
+ * tasks due soon, Zoho sprint items due soon + open bug count, open PRs (with
+ * age) + recent CI runs across linked repos, and Sentry unresolved issue count
+ * — then has _lib/aiProviders.ts's askAI() turn that fact list into a short
+ * prose summary, trying every cloud provider the user has configured (in
+ * their preferred order) before giving up. Users with no provider key at all
+ * are skipped (no local-model fallback possible from cron, same rule as
+ * weekly-digest.ts).
  */
 
-interface IntegrationRow { user_id: string; anthropic_api_key: string | null; }
+interface IntegrationRow {
+  user_id: string;
+  anthropic_api_key: string | null; gemini_api_key: string | null; openai_api_key: string | null; grok_api_key: string | null;
+  ai_provider: CloudProvider | null;
+}
 interface ProjectRow {
   id: string; name: string; status: string;
   repo_provider: RepoProvider | null; repo_full_name: string | null; sprint_project_id: string | null;
@@ -68,14 +74,16 @@ async function fetchZohoSummary(userId: string): Promise<{ dueSoon: string[]; op
 async function run() {
   let integrations: IntegrationRow[];
   try {
-    integrations = await dbSelect<IntegrationRow>("integrations", "anthropic_api_key=not.is.null&select=user_id,anthropic_api_key");
+    integrations = await dbSelect<IntegrationRow>(
+      "integrations",
+      "or=(anthropic_api_key.not.is.null,gemini_api_key.not.is.null,openai_api_key.not.is.null,grok_api_key.not.is.null)&select=user_id,anthropic_api_key,gemini_api_key,openai_api_key,grok_api_key,ai_provider",
+    );
   } catch (e) {
     console.error("[daily-brief] couldn't load integrations", e);
     return { statusCode: 200, body: "ok" };
   }
 
   for (const intg of integrations) {
-    if (!intg.anthropic_api_key) continue;
     try {
       const userId = intg.user_id;
       const [projects, connections, tasksDue] = await Promise.all([
@@ -125,8 +133,9 @@ async function run() {
         sentryCount !== null ? `Unresolved Sentry issues: ${sentryCount}` : null,
       ].filter(Boolean).join("\n");
 
-      const text = await askClaude(
-        intg.anthropic_api_key,
+      const { text } = await askAI(
+        { anthropic: intg.anthropic_api_key, gemini: intg.gemini_api_key, openai: intg.openai_api_key, grok: intg.grok_api_key },
+        intg.ai_provider,
         "You write short, proactive \"here's your day\" briefs for a solo developer, based on raw facts about their tasks, sprint board, pull requests, CI, and error tracker. 3-5 sentences, specific numbers, no greeting or sign-off — just the brief itself. If everything looks calm, say so briefly rather than padding.",
         facts,
       );

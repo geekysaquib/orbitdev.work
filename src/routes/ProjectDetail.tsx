@@ -28,6 +28,7 @@ import { fetchAzureDevopsCommits, fetchAzureDevopsPulls, fetchAzureDevopsRuns } 
 import { LinkRepoModal, type RepoLinkPatch } from "../components/LinkRepoModal";
 import { MentionTextarea } from "../components/MentionTextarea";
 import { useMyTeamRoles } from "../hooks/useMyTeamRoles";
+import { useOrbitRuntime } from "../runtime";
 import type { Project, Task, Team } from "../lib/types";
 
 interface RemoteGitData { commits: GithubCommit[]; pulls: GithubPull[]; runs: GithubRun[]; }
@@ -42,6 +43,15 @@ export default function ProjectDetail() {
   const agentDown = agentStatus !== "online";
   const { rows, loading, update, remove } = useTable<Project>("projects");
   const { rows: tasks } = useTable<Task>("tasks");
+  const { events } = useOrbitRuntime();
+  // Fire-and-forget, same principle as recordAudit() next to each call below —
+  // a failed publish must never block a project mutation. `teamId` rides on
+  // the envelope (not just payload) so domain_events' existing team-member
+  // RLS policy makes a shared project's events visible to teammates too. See
+  // docs/architecture/event-engine-adoption.md.
+  const publishProjectEvent = (type: string, teamId: string | null, payload: Record<string, unknown>) => {
+    void events.publish({ source: "project-workflow", type, occurredAt: new Date().toISOString(), teamId, payload }).catch(() => {});
+  };
   const [tab, setTab] = useState("overview");
   const [sprintProjects, setSprintProjects] = useState<SprintProject[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -190,6 +200,7 @@ export default function ProjectDetail() {
     const { error } = await update(p!.id, { team_id: teamId || null } as Partial<Project>);
     if (error) { toast(`Couldn't update sharing: ${error}`); return; }
     recordAudit({ action: "project.update", entityType: "project", entityId: p!.id, teamId: teamId || p!.team_id, meta: { team_change: true } });
+    publishProjectEvent("shared", teamId || null, { projectId: p!.id, previousTeamId: p!.team_id, teamId: teamId || null });
     toast(teamId ? `Shared with ${teams.find((t) => t.id === teamId)?.name}` : "Made personal");
   }
   // robust: linked if an id exists; resolve a display name even if not stored
@@ -200,6 +211,11 @@ export default function ProjectDetail() {
     const sp = sprintProjects.find((x) => x.id === sprintProjectId);
     const { error } = await update(p!.id, { sprint_project_id: sprintProjectId || null, sprint_project_name: sp?.name || null } as Partial<Project>);
     if (error) { toast(`Couldn't save link: ${error}`); return; }
+    // This moment had no recordAudit call before — closed here alongside the
+    // new event publish rather than as a separate change.
+    recordAudit({ action: "project.update", entityType: "project", entityId: p!.id, teamId: p!.team_id, meta: { sprint_link_change: true } });
+    if (sprintProjectId) publishProjectEvent("sprint_linked", p!.team_id, { projectId: p!.id, sprintProjectId, sprintProjectName: sp?.name ?? null });
+    else publishProjectEvent("sprint_unlinked", p!.team_id, { projectId: p!.id });
     toast(sprintProjectId ? `Linked to ${sp?.name}` : "Unlinked from Sprints");
   }
 
@@ -233,6 +249,10 @@ export default function ProjectDetail() {
     setLinkRepoOpen(false);
     if (error) { toast(`Couldn't link repo: ${error}`); return; }
     recordAudit({ action: "project.link_repo", entityType: "project", entityId: p!.id, teamId: p!.team_id, meta: { repo_full_name: patch.repo_full_name } });
+    // status/client aren't changing here, but a mapper's upsertEntity() fully
+    // replaces the entity — carried along so linking a repo can't silently
+    // drop them from the graph. See docs/architecture/event-engine-adoption.md.
+    publishProjectEvent("repo_linked", p!.team_id, { projectId: p!.id, status: p!.status, client: p!.client, repoProvider: patch.repo_provider, repoFullName: patch.repo_full_name, repoDefaultBranch: patch.repo_default_branch ?? null });
     toast(`Linked to ${patch.repo_full_name}`);
   }
 
@@ -240,6 +260,7 @@ export default function ProjectDetail() {
     const { error } = await update(p!.id, { repo_provider: null, repo_full_name: null, repo_id: null, repo_default_branch: null } as Partial<Project>);
     if (error) { toast(`Couldn't unlink: ${error}`); return; }
     recordAudit({ action: "project.unlink_repo", entityType: "project", entityId: p!.id, teamId: p!.team_id });
+    publishProjectEvent("repo_unlinked", p!.team_id, { projectId: p!.id, status: p!.status, client: p!.client });
     setGitRemote(null);
     toast("Repository unlinked");
   }
@@ -527,8 +548,23 @@ export default function ProjectDetail() {
           <textarea placeholder="Project notes…" style={{ width: "100%", marginTop: 12, minHeight: 160, padding: 12, borderRadius: 11, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 13.5, resize: "vertical" }} /></div>}
       </div>
       {edit && <EditProjectModal p={p} onClose={() => setEdit(false)}
-        onSave={async (patch) => { await update(p.id, patch); recordAudit({ action: "project.update", entityType: "project", entityId: p.id, teamId: p.team_id }); setEdit(false); toast("Project updated"); }}
-        onDelete={async () => { await remove(p.id); recordAudit({ action: "project.delete", entityType: "project", entityId: p.id, teamId: p.team_id, meta: { name: p.name } }); toast(`Deleted ${p.name}`); nav("/projects"); }} />}
+        onSave={async (patch) => {
+          await update(p.id, patch);
+          recordAudit({ action: "project.update", entityType: "project", entityId: p.id, teamId: p.team_id });
+          // repo fields aren't editable from this modal, but carried along so
+          // this upsert can't silently drop them from the graph.
+          publishProjectEvent("updated", p.team_id, {
+            projectId: p.id, name: patch.name ?? p.name, status: patch.status ?? p.status, client: patch.client ?? p.client,
+            repoProvider: p.repo_provider, repoFullName: p.repo_full_name, repoDefaultBranch: p.repo_default_branch,
+          });
+          setEdit(false); toast("Project updated");
+        }}
+        onDelete={async () => {
+          await remove(p.id);
+          recordAudit({ action: "project.delete", entityType: "project", entityId: p.id, teamId: p.team_id, meta: { name: p.name } });
+          publishProjectEvent("deleted", p.team_id, { projectId: p.id, name: p.name });
+          toast(`Deleted ${p.name}`); nav("/projects");
+        }} />}
     </main>
   );
 }

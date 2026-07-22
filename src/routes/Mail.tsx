@@ -15,6 +15,7 @@ import { mailTemplates, type MailTemplate } from "../lib/mailTemplates";
 import { scheduleEmail } from "../lib/scheduledEmails";
 import { ask } from "../lib/ai";
 import { recordAudit } from "../lib/audit";
+import { useOrbitRuntime } from "../runtime";
 import type { Ticket } from "../lib/types";
 import { MailTemplatesModal } from "../components/MailTemplatesModal";
 import { ScheduledMailModal } from "../components/ScheduledMailModal";
@@ -305,6 +306,7 @@ export default function Mail() {
   const [rulesOpen, setRulesOpen] = useState(false);
   const [scheduledOpen, setScheduledOpen] = useState(false);
   const { insert: insertTicket } = useTable<Ticket>("tickets");
+  const { events } = useOrbitRuntime();
   const timer = useRef<number | null>(null);
   const [params, setParams] = useSearchParams();
 
@@ -385,9 +387,12 @@ export default function Mail() {
     if (!sel || !full) return;
     const attachNote = full.attachments?.length ? `\n\nAttachments: ${full.attachments.map((a) => a.filename).join(", ")}` : "";
     const body = `From: ${full.from}\n\n${(full.text || "").slice(0, 4000)}${attachNote}`;
-    const { error } = await insertTicket({ zoho_id: null, project_id: null, title: full.subject || "(no subject)", body, priority: "med", status: "Open" } as Partial<Ticket>);
+    const { error, data } = await insertTicket({ zoho_id: null, project_id: null, title: full.subject || "(no subject)", body, priority: "med", status: "Open" } as Partial<Ticket>);
     if (error) { toast(`Couldn't create ticket: ${error}`); return; }
     recordAudit({ action: "ticket.create", entityType: "ticket", meta: { source: "mail", subject: full.subject } });
+    // Fire-and-forget, same principle as recordAudit() — see
+    // docs/architecture/event-engine-adoption.md.
+    if (data) void events.publish({ source: "ticket-workflow", type: "created", occurredAt: new Date().toISOString(), payload: { ticketId: data.id, projectId: data.project_id, title: data.title, status: data.status, priority: data.priority, origin: "mail" } }).catch(() => {});
     toast("Ticket created from email");
   }
 

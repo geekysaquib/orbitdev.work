@@ -20,17 +20,21 @@
  *    having to branch.
  */
 import { agentCall } from "./agent";
+import { AI_PROVIDERS, orderedProviders as engineOrderedProviders, type AIProviderId, type AITurn, type ProviderKeys as EngineProviderKeys } from "../engines/ai";
 
-export type CloudProvider = "anthropic" | "gemini" | "openai" | "grok";
-export const CLOUD_PROVIDERS: CloudProvider[] = ["anthropic", "gemini", "openai", "grok"];
+// Re-exported from the AI Engine (src/engines/ai) so this file — the browser's
+// dispatch-to-agent client — and the engine's provider adapters share one
+// definition of "which providers exist" and "what order to try them in"
+// rather than each declaring their own. See docs/architecture/ai-engine.md.
+export type CloudProvider = AIProviderId;
+export const CLOUD_PROVIDERS: CloudProvider[] = AI_PROVIDERS;
+export const orderedProviders: (keys: ProviderKeys, preferred?: CloudProvider) => CloudProvider[] = engineOrderedProviders;
+
 export const PROVIDER_LABEL: Record<CloudProvider, string> = {
   anthropic: "Claude", gemini: "Gemini", openai: "ChatGPT", grok: "Grok",
 };
 
-/** One entry per provider Settings can hold a key for. Missing/empty = not configured. */
-export interface ProviderKeys {
-  anthropic?: string | null; gemini?: string | null; openai?: string | null; grok?: string | null;
-}
+export type ProviderKeys = EngineProviderKeys;
 
 export type AiSource = CloudProvider | "local";
 export interface AskResult {
@@ -39,16 +43,10 @@ export interface AskResult {
   emitted?: boolean;
   /** Set when earlier provider(s) failed before this result landed — comma-joined display names. */
   fellBackFrom?: string;
+  /** Same providers as `fellBackFrom`, paired with the actual error each one returned. */
+  fellBackDetail?: string;
 }
-export interface AiMessage { role: "user" | "assistant"; content: string; }
-
-/** Configured cloud providers, `preferred` first if it has a key — the order callers try them in. Empty if none configured. */
-export function orderedProviders(keys: ProviderKeys, preferred?: CloudProvider): CloudProvider[] {
-  const configured = CLOUD_PROVIDERS.filter((p) => keys[p]);
-  if (!configured.length) return [];
-  const first = preferred && configured.includes(preferred) ? preferred : configured[0];
-  return [first, ...configured.filter((p) => p !== first)];
-}
+export type AiMessage = AITurn;
 
 async function cloudOnce(provider: CloudProvider, apiKey: string, prompt: string | undefined, system: string | undefined, messages: AiMessage[] | undefined): Promise<AskResult> {
   try {
@@ -74,16 +72,19 @@ async function runChain(
   prompt: string | undefined, system: string | undefined, messages: AiMessage[] | undefined,
 ): Promise<AskResult> {
   const failed: string[] = [];
+  const failedDetail: string[] = [];
   for (const p of orderedProviders(keys, preferred)) {
     const r = await cloudOnce(p, keys[p]!, prompt, system, messages);
-    if (r.ok) return failed.length ? { ...r, fellBackFrom: failed.join(", ") } : r;
+    if (r.ok) return failed.length ? { ...r, fellBackFrom: failed.join(", "), fellBackDetail: failedDetail.join("; ") } : r;
     failed.push(PROVIDER_LABEL[p]);
+    failedDetail.push(`${PROVIDER_LABEL[p]} — ${r.error || "unknown error"}`);
   }
   const local = await localOnce(prompt, system, messages);
-  if (local.ok) return failed.length ? { ...local, fellBackFrom: failed.join(", ") } : local;
+  if (local.ok) return failed.length ? { ...local, fellBackFrom: failed.join(", "), fellBackDetail: failedDetail.join("; ") } : local;
   // Nothing worked — surface the local error (most actionable: usually "install Python" /
-  // "worker failed to start") but note the cloud attempts weren't silently skipped.
-  return failed.length ? { ...local, error: `${local.error || "Local AI failed"} (also tried: ${failed.join(", ")})` } : local;
+  // "worker failed to start") but keep each cloud attempt's real error, not just its name,
+  // so a misconfigured provider (bad model id, expired key, etc.) is actually diagnosable.
+  return failed.length ? { ...local, error: `${local.error || "Local AI failed"} (also tried: ${failedDetail.join("; ")})` } : local;
 }
 
 /** Cloud-chain-then-local — callers don't need to branch on which backend answered. */
@@ -135,9 +136,10 @@ export async function askThreadStream(
   localOverride?: { messages: AiMessage[]; system?: string },
 ): Promise<AskResult> {
   const failed: string[] = [];
+  const failedDetail: string[] = [];
   for (const p of orderedProviders(keys, preferred)) {
     const r = await streamOnce(p, keys[p]!, messages, system, onDelta, signal);
-    if (r.ok || r.error === "cancelled") return failed.length ? { ...r, fellBackFrom: failed.join(", ") } : r;
+    if (r.ok || r.error === "cancelled") return failed.length ? { ...r, fellBackFrom: failed.join(", "), fellBackDetail: failedDetail.join("; ") } : r;
     // A provider can fail for reasons another provider doesn't share — an expired
     // key, an exhausted credit balance, a rate limit. Trying the next configured
     // one (then local) keeps AI working instead of failing outright; `emitted`
@@ -145,6 +147,7 @@ export async function askThreadStream(
     // to the next backend when the failed attempt produced nothing.
     if (r.emitted) return r;
     failed.push(PROVIDER_LABEL[p]);
+    failedDetail.push(`${PROVIDER_LABEL[p]} — ${r.error || "unknown error"}`);
   }
   const local = await streamOnce(
     null, null,
@@ -152,8 +155,8 @@ export async function askThreadStream(
     localOverride ? localOverride.system : system,
     onDelta, signal,
   );
-  if (local.ok || local.error === "cancelled") return failed.length && local.ok ? { ...local, fellBackFrom: failed.join(", ") } : local;
-  return failed.length ? { ...local, error: `${local.error || "Local AI failed"} (also tried: ${failed.join(", ")})` } : local;
+  if (local.ok || local.error === "cancelled") return failed.length && local.ok ? { ...local, fellBackFrom: failed.join(", "), fellBackDetail: failedDetail.join("; ") } : local;
+  return failed.length ? { ...local, error: `${local.error || "Local AI failed"} (also tried: ${failedDetail.join("; ")})` } : local;
 }
 
 /** One SSE attempt against whichever backend `provider` selects (`null` = local). */

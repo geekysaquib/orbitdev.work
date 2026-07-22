@@ -201,13 +201,16 @@ export default function Teams() {
     if (!teamId) return;
     const res = await changeRole(teamId, userId, role);
     toast(res.ok ? "Role updated" : `Couldn't update role: ${res.error}`);
-    if (res.ok) listMembers(teamId).then(setMembers);
+    // This action had no audit record before — closed here alongside
+    // teams.ts's new member_role_changed event publish, not as a separate change.
+    if (res.ok) { recordAudit({ action: "team.change_role", entityType: "team", entityId: teamId, teamId, meta: { userId, role } }); listMembers(teamId).then(setMembers); }
   }
 
   async function handleLeaveTeam() {
     if (!teamId) return;
     const res = await leaveTeam(teamId);
     if (!res.ok) { toast(`Couldn't leave team: ${res.error}`); return; }
+    recordAudit({ action: "team.leave", entityType: "team", entityId: teamId, teamId });
     toast("Left the team");
     await loadTeams();
   }

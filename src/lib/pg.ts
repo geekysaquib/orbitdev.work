@@ -113,6 +113,7 @@ export async function pgQuery(server: PgServer, database: string, sql: string): 
     const r = await call("/pg/query", "POST", { server: connOf(server), database, sql });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) return { ok: false, error: j.error || `agent ${r.status}`, ms: j.ms };
+    if (!Array.isArray(j.rows) || !Array.isArray(j.fields)) return { ok: false, error: "Malformed response from agent", ms: j.ms };
     return { ok: true, result: j as PgResult };
   } catch { return { ok: false, error: "agent offline" }; }
 }

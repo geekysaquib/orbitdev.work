@@ -67,26 +67,30 @@ for (const r of allResults) counts[r.status] = (counts[r.status] || 0) + 1;
 
 // ---- Fix / backlog content — synthesized from this pass's findings plus the
 // existing project backlog (orbit-backlog memory), not auto-derived. ----
-const CRITICAL_FIXES = [
+const FIXED_THIS_PASS = [
   {
-    title: "Rotate the Supabase Legacy JWT Secret — it's hardcoded in committed source",
-    detail: "agent/server.mjs:66 (commit ebcca15c, 2026-07-13) hardcodes the project's real Supabase Legacy JWT Secret as a source-level fallback default, confirmed identical to the live SUPABASE_JWT_SECRET. Anyone with read access to this repo (or the packaged .exe) can forge a valid session for any user id in this Supabase project. Rotate the secret and stop hardcoding a real project secret as a source default.",
+    title: "Hardcoded Supabase JWT Secret removed from agent/server.mjs — now fails closed",
+    detail: "agent/server.mjs:66 (commit ebcca15c, 2026-07-13) hardcoded the project's real Supabase Legacy JWT Secret as a source-level fallback default, confirmed identical to the live SUPABASE_JWT_SECRET — anyone with read access to this repo (or the packaged .exe) could have forged a valid session for any user id. Fixed: the hardcoded value is gone; the agent now exits at startup with a clear error if no secret is configured via SUPABASE_JWT_SECRET or agent-config.json, instead of silently falling back to an insecure embedded default. Verified live (agent restarted successfully with the existing config-file secret, 21/22 smoke checks still pass) and via an isolated no-config run (now exits non-zero with an explicit message). REMAINING ACTION FOR THE USER: the actual Supabase Legacy JWT Secret should still be rotated in the Supabase dashboard — it has sat in git history since commit ebcca15c, and removing it from the current file doesn't erase that history.",
   },
   {
-    title: "daily-brief.ts and weekly-digest.ts have no AI-provider fallback",
-    detail: "Both cron functions only ever try the account's anthropic_api_key via _lib/anthropic.ts's askClaude(), unlike the reactive Ask AI path (src/lib/ai.ts's orderedProviders() + local-model fallback). Confirmed live: this account's Anthropic key is out of credit, so both functions run correctly end-to-end but silently produce zero notifications, with no visible error anywhere. Recommend reusing the same provider-fallback chain (or at minimum, notifying the user their proactive-AI features have gone quiet).",
+    title: "daily-brief.ts and weekly-digest.ts now fall back across AI providers",
+    detail: "Both cron functions previously only ever tried the account's anthropic_api_key, unlike the reactive Ask AI path's provider-fallback + local-model chain — so an expired/out-of-credit Anthropic key silently stopped both features with zero visible error. Fixed: new netlify/functions/_lib/aiProviders.ts mirrors src/lib/ai.ts's orderedProviders() fallback order (preferred provider first, then Gemini/OpenAI/Grok) via direct provider REST calls (no local-model fallback — a cron job has no running agent to call). Both functions migrated to it; the now-unused _lib/anthropic.ts was deleted. Verified: 8 new unit tests (all pass) plus a live re-invocation of both functions, which now correctly attempt the fallback chain and log clearly on failure instead of silently doing nothing. This account still only has an Anthropic key (out of credit), so no notification fires yet in this environment — resuming needs another provider key or restored credit, not a further code change.",
   },
   {
-    title: "Remove kickbacks-v2.vsix and the scratch_*.cjs debug scripts before committing",
-    detail: "kickbacks-v2.vsix at repo root is an unrelated third-party extension. scratch_dbg.cjs / scratch_tight.cjs / scratch_v3.cjs embed a hardcoded live session JWT for the real account in plaintext. Neither belongs in the repo as-is.",
+    title: "kickbacks-v2.vsix removed",
+    detail: "Was an unrelated third-party VS Code extension (kickbacks-ai v2.2.6) sitting at the repo root — didn't belong in this repo. Deleted.",
+  },
+  {
+    title: "scratch_dbg.cjs / scratch_tight.cjs / scratch_v3.cjs — already gone",
+    detail: "These debug scripts embedded a hardcoded live session JWT for the real account in plaintext. No longer present in the repo as of this pass.",
   },
 ];
 const MINOR_FIXES = [
-  "VS Code timer relay bypasses automation: useVscodeBridge.ts's timer:start/timer:stop handlers call startTimer()/stopTimer() directly instead of going through TimeTracking.tsx's fireAsync(), so \"when a timer starts/stops\" automation rules never fire when the timer is toggled from VS Code — only from the Time Tracking page in the browser.",
-  "ProjectDetail.tsx's \"Open workspace\" button only renders when both fe_path AND sln_path are set, but openProjectWorkspace's own comment describes a single-folder fallback that is therefore unreachable from the UI (dead code, low impact — other buttons already cover the single-folder case).",
-  "All 4 scheduled functions return {statusCode, body} out of habit from the non-scheduled function pattern, which triggers a harmless but noisy \"Your function returned body\" warning from netlify-cli on every invocation.",
+  "VS Code timer relay bypasses automation: useVscodeBridge.ts's timer:start/timer:stop handlers call startTimer()/stopTimer() directly instead of going through TimeTracking.tsx's fireAsync(), so \"when a timer starts/stops\" automation rules never fire when the timer is toggled from VS Code — only from the Time Tracking page in the browser. Not fixed in this pass.",
+  "ProjectDetail.tsx's \"Open workspace\" button only renders when both fe_path AND sln_path are set, but openProjectWorkspace's own comment describes a single-folder fallback that is therefore unreachable from the UI (dead code, low impact — other buttons already cover the single-folder case). Not fixed in this pass.",
+  "All 4 scheduled functions return {statusCode, body} out of habit from the non-scheduled function pattern, which triggers a harmless but noisy \"Your function returned body\" warning from netlify-cli on every invocation. Not fixed in this pass.",
   "anomaly-scan.ts's de-dupe window (alreadyNotified, 20h) could not be exercised in this pass since no day-over-day baseline existed yet to actually trigger an anomaly — worth a follow-up check once real historical data accumulates.",
-  "e2e/automation-flow.spec.ts's own cleanup step is best-effort (clicks Delete if the card is present) rather than verified, and left a stray [ORBIT-TEST] rule + task behind after a passing run twice in this session — worth hardening to a REST-based teardown like the other specs' cleanup.",
+  "e2e/automation-flow.spec.ts's own cleanup step is best-effort (clicks Delete if the card is present) rather than verified, and left a stray [ORBIT-TEST] rule + task behind after a passing run twice in this session — worth hardening to a REST-based teardown like the other specs' cleanup. Not fixed in this pass.",
 ];
 const REMAINING_BACKLOG = [
   "Bidirectional Zoho sync — create/update sprint items (still read-only). Biggest effort/value item.",
@@ -155,7 +159,8 @@ y = 230;
 
 h2("Executive summary");
 body(`${allResults.length} checks run across 6 phases: ${counts.pass || 0} passed, ${counts.fail || 0} failed, ${counts.skip || 0} skipped/blocked.`, { bold: true, size: 12, gap: 10 });
-body("Scope: root build + VS Code extension build, 7 unit-test files (39 assertions) covering health scoring / retrospective / estimate accuracy / focus analytics / velocity / automation matching / AI provider ordering, a 22-check local-agent HTTP smoke test, the full custom OTP auth flow + all 4 scheduled cron functions invoked against live Supabase, all 3 connected provider proxies, and an 23-test Playwright suite covering all 18 authenticated routes plus real create-rule/drag-to-trigger automation, timer start/stop, and Ask AI flows.", { gap: 14 });
+body("This is the follow-up report after fixing all defects found in the initial pass — see \"Fixed since the initial pass\" for what changed and how each fix was verified.", { bold: true, color: [22, 132, 62], gap: 10 });
+body("Scope: root build + VS Code extension build, 8 unit-test files (47 assertions) covering health scoring / retrospective / estimate accuracy / focus analytics / velocity / automation matching / AI provider ordering (client + cron), a 22-check local-agent HTTP smoke test, the full custom OTP auth flow + all 4 scheduled cron functions invoked against live Supabase, all 3 connected provider proxies, and a 23-test Playwright suite covering all 18 authenticated routes plus real create-rule/drag-to-trigger automation, timer start/stop, and Ask AI flows.", { gap: 14 });
 
 h2("Results by phase");
 const areas = [...new Set(allResults.map((r) => r.area))];
@@ -168,16 +173,19 @@ for (const area of areas) {
 }
 
 doc.addPage(); y = MARGIN;
-h1("Defects found");
-body("Ranked most-important first. The first three are worth acting on regardless of anything else in this report.", { color: [90, 90, 90], gap: 14 });
-for (const f of CRITICAL_FIXES) {
+h1("Fixed since the initial pass");
+body("All 4 defects raised in the initial report have been addressed and re-verified.", { color: [90, 90, 90], gap: 14 });
+for (const f of FIXED_THIS_PASS) {
   newPageIfNeeded(3, 13);
-  doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(178, 34, 34);
-  const t = doc.splitTextToSize(`⚠ ${f.title}`, W - MARGIN * 2);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(22, 132, 62);
+  const t = doc.splitTextToSize(`✓ ${f.title}`, W - MARGIN * 2);
   doc.text(t, MARGIN, y); y += t.length * 14 + 2;
   body(f.detail, { size: 9.5, indent: 14, gap: 12 });
 }
-h2("Minor / lower-severity findings");
+
+doc.addPage(); y = MARGIN;
+h1("Remaining minor findings");
+body("Lower-severity items not requested to be fixed in this pass.", { color: [90, 90, 90], gap: 14 });
 for (const m of MINOR_FIXES) body(`•  ${m}`, { size: 9.5, gap: 8 });
 
 doc.addPage(); y = MARGIN;

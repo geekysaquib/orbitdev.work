@@ -48,6 +48,8 @@ const NAV_PRIMARY: { to: string; label: string; icon: string; end?: boolean }[] 
 ];
 const NAV_MORE_GROUPS: { label: string; items: { to: string; label: string; icon: string }[] }[] = [
   { label: "Time & more", items: [
+    { to: "/intelligence", label: "Intelligence", icon: "sparkles" },
+    { to: "/ai-mode", label: "AI Mode", icon: "cpu" },
     { to: "/time", label: "Time", icon: "timer" },
     { to: "/automation", label: "Automation", icon: "zap" },
     { to: "/docs", label: "Docs", icon: "book" },

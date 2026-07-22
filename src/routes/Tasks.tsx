@@ -11,6 +11,7 @@ import { listMyTeams } from "../lib/teams";
 import { recordAudit } from "../lib/audit";
 import { fireAsync } from "../lib/automation";
 import { useMyTeamRoles } from "../hooks/useMyTeamRoles";
+import { useOrbitRuntime } from "../runtime";
 import type { Task, TaskStatus, Priority, Project, Team } from "../lib/types";
 
 const COLS: [TaskStatus, string, string][] = [
@@ -26,6 +27,15 @@ const nextPrio = (p: Priority): Priority => (p === "low" ? "med" : p === "med" ?
 export default function Tasks() {
   const { rows, insert, update, remove, error, loading } = useTable<Task>("tasks");
   const { rows: projects } = useTable<Project>("projects");
+  const { events } = useOrbitRuntime();
+  // Fire-and-forget, same principle as recordAudit() next to each call below —
+  // a failed publish must never block a task mutation. `teamId` rides on the
+  // envelope (not just payload) so domain_events' existing team-member RLS
+  // policy makes a shared task's events visible to teammates too. See
+  // docs/architecture/event-engine-adoption.md.
+  const publishTaskEvent = (type: string, teamId: string | null, payload: Record<string, unknown>) => {
+    void events.publish({ source: "task-workflow", type, occurredAt: new Date().toISOString(), teamId, payload }).catch(() => {});
+  };
   const toast = useToast();
   const { tz } = useTimezone();
   const myId = getUser()?.id;
@@ -46,6 +56,7 @@ export default function Tasks() {
     const { error } = await update(t.id, { team_id: teamId || null } as Partial<Task>);
     if (error) { toast(`Couldn't update sharing: ${error}`); return; }
     recordAudit({ action: "task.update", entityType: "task", entityId: t.id, teamId: teamId || t.team_id, meta: { title: t.title, team_change: true } });
+    publishTaskEvent("shared", teamId || null, { taskId: t.id, projectId: t.project_id, previousTeamId: t.team_id, teamId: teamId || null });
     toast(teamId ? `Shared with ${teamName[teamId]}` : "Made personal");
   }
 
@@ -56,9 +67,11 @@ export default function Tasks() {
   async function add() {
     if (!title.trim()) return;
     const t = title.trim();
-    await insert({ title: t, status: "todo", priority: prio, project_id: projFilter === "all" ? null : projFilter } as Partial<Task>);
+    const projectId = projFilter === "all" ? null : projFilter;
+    const { data } = await insert({ title: t, status: "todo", priority: prio, project_id: projectId } as Partial<Task>);
     setTitle("");
     recordAudit({ action: "task.create", entityType: "task", meta: { title: t } });
+    if (data) publishTaskEvent("created", data.team_id ?? null, { taskId: data.id, projectId, teamId: data.team_id ?? null, title: t, status: "todo", priority: prio });
     toast(`Task added · ${t}`);
     const u = getUser();
     if (u) await supabase.from("notifications").insert({ user_id: u.id, kind: "task", title: "New task added", body: t });
@@ -69,6 +82,14 @@ export default function Tasks() {
       if (t && t.status !== status) {
         update(t.id, { status } as Partial<Task>);
         fireAsync({ type: "task_status", taskId: t.id, title: t.title, status, priority: t.priority, projectId: t.project_id });
+        // Carries every graph-relevant field, not just what changed — a
+        // mapper's upsertEntity() fully replaces the entity, so a partial
+        // payload would silently drop priority/dueDate/completedAt from the
+        // graph. See docs/architecture/event-engine-adoption.md.
+        publishTaskEvent("status_changed", t.team_id, {
+          taskId: t.id, projectId: t.project_id, teamId: t.team_id, title: t.title,
+          status, previousStatus: t.status, priority: t.priority, dueDate: t.due_date, completedAt: status === "done" ? new Date().toISOString() : null,
+        });
       }
     }
     setDragId(null); setOverCol(null);
@@ -143,7 +164,7 @@ export default function Tasks() {
                     onDragStart={() => canEdit && setDragId(t.id)} onDragEnd={() => { setDragId(null); setOverCol(null); }}>
                     <div className="ttask-top">
                       <span className="ttask-title">{t.title}</span>
-                      {canEdit && <button className="ttask-del" title="Delete" onClick={() => { remove(t.id); recordAudit({ action: "task.delete", entityType: "task", entityId: t.id, teamId: t.team_id, meta: { title: t.title } }); toast("Task deleted"); }}><Icon name="x" size={12} /></button>}
+                      {canEdit && <button className="ttask-del" title="Delete" onClick={() => { remove(t.id); recordAudit({ action: "task.delete", entityType: "task", entityId: t.id, teamId: t.team_id, meta: { title: t.title } }); publishTaskEvent("deleted", t.team_id, { taskId: t.id, projectId: t.project_id, teamId: t.team_id, title: t.title }); toast("Task deleted"); }}><Icon name="x" size={12} /></button>}
                     </div>
                     <div className="ttask-meta">
                       {canEdit ? (

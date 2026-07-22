@@ -3,6 +3,7 @@ import { fetchSettings, saveSettings } from "../lib/settings";
 import { TIMER_KEY, TIMER_PAUSE_KEY as PAUSE_KEY, TIMER_PROJECT_KEY, TIMER_EVENT, ls, emitTimerChange } from "../lib/timer";
 import { useIdleDetection } from "../hooks/useIdleDetection";
 import { logFocusEvent } from "../lib/focusEvents";
+import { useOrbitRuntime } from "../runtime";
 
 const BREAK_KEY = "orbit.onBreak";
 const BREAK_START_KEY = "orbit.breakStart";
@@ -27,6 +28,7 @@ const Ctx = createContext<BreakShape | undefined>(undefined);
 const emit = emitTimerChange;
 
 export function BreakProvider({ children }: { children: ReactNode }) {
+  const { events } = useOrbitRuntime();
   // hydrate instantly from localStorage so a refresh never drops the break
   const [onBreak, setOnBreak] = useState(() => ls.get(BREAK_KEY) === "1");
   const [timerPaused, setTimerPaused] = useState(() => ls.get(PAUSE_KEY) !== null);
@@ -107,6 +109,9 @@ export function BreakProvider({ children }: { children: ReactNode }) {
     ls.set(BREAK_KEY, "1");
     ls.set(BREAK_START_KEY, String(now));
     saveSettings({ on_break: true, break_started_at: new Date(now).toISOString(), timer_paused: paused });
+    // Fire-and-forget, same principle as recordAudit() — a failed publish must
+    // never block starting a break. See docs/architecture/event-engine-adoption.md.
+    void events.publish({ source: "break-workflow", type: "started", occurredAt: new Date(now).toISOString(), payload: { startedAt: new Date(now).toISOString() } }).catch(() => {});
   };
 
   const endBreak = () => {
@@ -119,12 +124,20 @@ export function BreakProvider({ children }: { children: ReactNode }) {
         emit();
       }
     } catch { /* noop */ }
+    const now = Date.now();
+    const startedAt = breakStartedAt;
     setTimerPaused(false);
     setBreakStartedAt(null);
     setOnBreak(false);
     ls.del(BREAK_KEY);
     ls.del(BREAK_START_KEY);
     saveSettings({ on_break: false, break_started_at: null, timer_paused: false });
+    if (startedAt !== null) {
+      void events.publish({
+        source: "break-workflow", type: "ended", occurredAt: new Date(now).toISOString(),
+        payload: { startedAt: new Date(startedAt).toISOString(), endedAt: new Date(now).toISOString(), seconds: Math.max(0, Math.floor((now - startedAt) / 1000)) },
+      }).catch(() => {});
+    }
   };
 
   return (

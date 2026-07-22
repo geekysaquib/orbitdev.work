@@ -60,17 +60,25 @@ function readJson(path, fallback) {
 }
 
 // ---- Auth: verify the same JWT netlify/functions/auth.ts issues ----
-// Hardcoded as the default so the packaged .exe works with zero setup — this is
-// Supabase's Legacy JWT Secret and does not rotate. Still overridable via env
-// var or agent-config.json for local dev against a different Supabase project.
-const DEFAULT_JWT_SECRET = "OumYPgsct1FfKyVhsCzAXJ6xgCt0lyxZDLD1qVLq1FmnCpuiJBcO7eKpQ2HPzTl8BxprGC/5inJLGFfaIhaniA==";
+// No hardcoded fallback on purpose — a real project's Supabase Legacy JWT
+// Secret must never ship in source or in the packaged .exe, since anyone who
+// obtains either could forge a valid session for any user. Set it via
+// SUPABASE_JWT_SECRET (env) or agent-config.json (see agent-config.example.json).
 function jwtSecret() {
   if (process.env.SUPABASE_JWT_SECRET) return process.env.SUPABASE_JWT_SECRET;
   const fromConfig = readJson(AGENT_CFG, {}).jwtSecret;
   if (fromConfig) return fromConfig;
-  return DEFAULT_JWT_SECRET;
+  return null;
 }
 const JWT_SECRET = jwtSecret();
+if (!JWT_SECRET) {
+  console.error(
+    "[agent] No JWT secret configured — refusing to start.\n" +
+    "  Set SUPABASE_JWT_SECRET in the environment, or copy agent-config.example.json\n" +
+    "  to agent-config.json and paste in the same Legacy JWT Secret your Netlify env uses.",
+  );
+  process.exit(1);
+}
 function verifyToken(token) {
   const payload = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] });
   const userId = typeof payload === "object" ? payload.sub : null;
@@ -1473,7 +1481,7 @@ const CLOUD_MODELS = {
   // answers (triage lines, standup bullets, grounded Q&A, or Ask AI's threaded
   // prose+actions), so the fastest/cheapest tier per provider is plenty.
   anthropic: "claude-haiku-4-5-20251001",
-  gemini: "gemini-2.5-flash",
+  gemini: "gemini-3.6-flash",
   openai: "gpt-4o-mini",
   grok: "grok-3-mini",
 };
@@ -1508,27 +1516,52 @@ function geminiContents(turns) {
 function geminiBody(system, turns) {
   return {
     contents: geminiContents(turns),
-    generationConfig: { maxOutputTokens: CLOUD_MAX_TOKENS },
+    // gemini-3 models default to "medium" thinking, which spends CLOUD_MAX_TOKENS on hidden
+    // reasoning before ever writing a visible answer — these are short, bounded Ask AI/triage/
+    // standup answers, so turn thinking off (same fast/no-reasoning tier as the other providers).
+    generationConfig: { maxOutputTokens: CLOUD_MAX_TOKENS, thinkingConfig: { thinkingLevel: "minimal" } },
     ...(system ? { systemInstruction: { parts: [{ text: sliceText(system, 6000) }] } } : {}),
   };
+}
+// Google can report success with zero content — safety-filtered (finishReason
+// "SAFETY"), truncated before any output ("MAX_TOKENS"), or the whole prompt
+// blocked pre-generation (promptFeedback.blockReason). Without reading these,
+// that's indistinguishable from "the model said nothing" and silently looks
+// like a successful empty answer instead of the failure it actually is.
+function geminiEmptyReason(j) {
+  return j?.candidates?.[0]?.finishReason || j?.promptFeedback?.blockReason || null;
 }
 async function geminiComplete({ apiKey, system, turns }) {
   const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CLOUD_MODELS.gemini}:generateContent?key=${encodeURIComponent(apiKey)}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(geminiBody(system, turns)),
   });
   const j = await r.json().catch(() => ({}));
+  // TEMP DEBUG — remove once the empty-answer cause is confirmed from real output.
+  console.error("[gemini debug] geminiComplete raw response:", JSON.stringify(j).slice(0, 1000));
   if (!r.ok) return { ok: false, error: j.error?.message || `Gemini error ${r.status}` };
-  return { ok: true, text: j.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "" };
+  const text = j.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
+  if (!text) {
+    const reason = geminiEmptyReason(j);
+    return { ok: false, error: reason ? `Gemini returned no text (${reason})` : "Gemini returned no text" };
+  }
+  return { ok: true, text };
 }
 async function geminiStream({ apiKey, system, turns, onDelta }) {
   const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CLOUD_MODELS.gemini}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(geminiBody(system, turns)),
   });
   if (!r.ok || !r.body) { const j = await r.json().catch(() => ({})); return { ok: false, error: j.error?.message || `Gemini error ${r.status}` }; }
+  let emitted = false, lastReason = null, frameCount = 0;
+  // TEMP DEBUG — remove once the empty-answer cause is confirmed from real output.
   await pumpSse(r.body, (obj) => {
+    frameCount++;
+    console.error(`[gemini debug] frame #${frameCount}:`, JSON.stringify(obj).slice(0, 500));
     const text = obj?.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
-    if (text) onDelta(text);
+    if (text) { emitted = true; onDelta(text); }
+    lastReason = geminiEmptyReason(obj) || lastReason;
   });
+  console.error(`[gemini debug] stream done — frames=${frameCount} emitted=${emitted} lastReason=${lastReason}`);
+  if (!emitted) return { ok: false, error: lastReason ? `Gemini returned no text (${lastReason})` : "Gemini returned no text" };
   return { ok: true };
 }
 
@@ -1591,6 +1624,18 @@ async function pumpSse(body, onEvent) {
       let obj; try { obj = JSON.parse(raw); } catch { continue; }
       onEvent(obj, raw);
     }
+  }
+  // A stream can close right after its last (or only) event without a trailing
+  // blank-line delimiter — the loop above only ever emits a frame once it sees
+  // "\n\n", so that final frame would otherwise sit in `buf` and get silently
+  // dropped. Flush whatever's left once the reader is actually done.
+  const tail = buf.trim();
+  // TEMP DEBUG — remove once the empty-answer cause is confirmed from real output.
+  console.error("[gemini debug] pumpSse leftover tail:", JSON.stringify(tail).slice(0, 500));
+  if (tail.startsWith("data:")) {
+    const raw = tail.slice(5).trim();
+    if (raw === "[DONE]") { onEvent(null, raw); return; }
+    try { onEvent(JSON.parse(raw), raw); } catch { /* incomplete/garbled tail — nothing usable to flush */ }
   }
 }
 

@@ -9,6 +9,7 @@ import { fetchIntegrations, providerKeys } from "../lib/integrations";
 import { ask, type AiSource, type ProviderKeys, type CloudProvider } from "../lib/ai";
 import { recordAudit } from "../lib/audit";
 import { fireAsync } from "../lib/automation";
+import { useOrbitRuntime } from "../runtime";
 import type { Ticket, Project } from "../lib/types";
 
 const TRIAGE_SYSTEM = `You triage support/dev tickets. Given a title, description, and a list of projects, respond with exactly four lines:
@@ -26,7 +27,14 @@ function parseTriageLine(text: string, label: string): string | null {
 export default function Tickets() {
   const { rows, insert, update, reload, loading } = useTable<Ticket>("tickets");
   const { rows: projects } = useTable<Project>("projects");
+  const { events } = useOrbitRuntime();
   const toast = useToast();
+  // Fire-and-forget, same principle as recordAudit() next to each call below —
+  // a failed publish must never block a ticket mutation. See
+  // docs/architecture/event-engine-adoption.md.
+  const publishTicketEvent = (type: string, payload: Record<string, unknown>) => {
+    void events.publish({ source: "ticket-workflow", type, occurredAt: new Date().toISOString(), payload }).catch(() => {});
+  };
   const [sel, setSel] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [aiKeys, setAiKeys] = useState<ProviderKeys>({});
@@ -52,7 +60,7 @@ export default function Tickets() {
   }
 
   /** Parses the model's 4-line response and persists priority/project_id/ai_note — used both by the manual button and auto-triage on sync. Silently leaves fields unset when a line can't be parsed, rather than blocking. */
-  async function applyTriageResult(ticketId: string, text: string) {
+  async function applyTriageResult(ticket: Pick<Ticket, "id" | "title" | "status" | "priority" | "project_id">, text: string) {
     const priorityRaw = (parseTriageLine(text, "Priority") || "").toLowerCase();
     const priority = priorityRaw === "low" || priorityRaw === "med" || priorityRaw === "high" ? (priorityRaw as Ticket["priority"]) : null;
     const projectName = parseTriageLine(text, "Project");
@@ -62,7 +70,19 @@ export default function Tickets() {
     if (priority) patch.priority = priority;
     if (matched) patch.project_id = matched.id;
     if (note) patch.ai_note = note;
-    if (Object.keys(patch).length > 0) await update(ticketId, patch);
+    if (Object.keys(patch).length > 0) {
+      await update(ticket.id, patch);
+      // Carries status/priority/title regardless of which of them triage
+      // actually changed — a mapper's upsertEntity() fully replaces the
+      // entity, so a partial payload would drop fields silently. See
+      // docs/architecture/event-engine-adoption.md.
+      publishTicketEvent("updated", {
+        ticketId: ticket.id, title: ticket.title, status: ticket.status,
+        projectId: patch.project_id ?? ticket.project_id,
+        priority: patch.priority ?? ticket.priority,
+        hasAiNote: !!note,
+      });
+    }
   }
 
   /** Shared by the status buttons so audit, toast and automation stay in one place. */
@@ -70,6 +90,7 @@ export default function Tickets() {
     await update(t.id, { status } as Partial<Ticket>);
     recordAudit({ action: "ticket.update", entityType: "ticket", entityId: t.id, meta: { status } });
     fireAsync({ type: "ticket_status", ticketId: t.id, title: t.title, status, priority: t.priority, projectId: t.project_id });
+    publishTicketEvent("status_changed", { ticketId: t.id, projectId: t.project_id, title: t.title, status, previousStatus: t.status, priority: t.priority });
     toast(message);
   }
 
@@ -81,7 +102,7 @@ export default function Tickets() {
     if (!r.ok) { toast(`Triage failed: ${r.error}${r.source === "local" ? " — set up local AI in Settings, or add a cloud AI key" : ""}`); return; }
     const text = r.text || "";
     setTriage({ id: t.id, text, source: r.source });
-    await applyTriageResult(t.id, text);
+    await applyTriageResult(t, text);
   }
 
   async function syncZoho() {
@@ -103,8 +124,9 @@ export default function Tickets() {
           // Auto-triage only brand-new items — resyncing an existing ticket never re-triages it.
           if (data) {
             fireAsync({ type: "ticket_created", ticketId: data.id, title: data.title, priority: data.priority, projectId: data.project_id });
+            publishTicketEvent("created", { ticketId: data.id, projectId: data.project_id, title: data.title, status: data.status, priority: data.priority, origin: "zoho_sync" });
             const r = await ask(triagePrompt(data), TRIAGE_SYSTEM, aiKeys, aiProvider);
-            if (r.ok) await applyTriageResult(data.id, r.text || "");
+            if (r.ok) await applyTriageResult(data, r.text || "");
           }
         }
       }
