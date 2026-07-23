@@ -12,6 +12,7 @@ import { useBreak } from "../context/Break";
 import { PresenceProvider } from "../context/Presence";
 import { useSignOutGuard } from "../hooks/useSignOutGuard";
 import { useVscodeBridge } from "../hooks/useVscodeBridge";
+import { nonProductionEnvLabel } from "../lib/appEnv";
 import { CommandPalette } from "./CommandPalette";
 import { StartWorkModal } from "./StartWorkModal";
 import { AskAiModal } from "./AskAiModal";
@@ -59,6 +60,9 @@ const NAV_MORE_GROUPS: { label: string; items: { to: string; label: string; icon
   ] },
 ];
 const NAV_MORE_ROUTES = NAV_MORE_GROUPS.flatMap((g) => g.items.map((i) => i.to));
+// Static for the page's lifetime — env vars don't change at runtime. See
+// docs/architecture/staging-environment.md.
+const ENV_BADGE = nonProductionEnvLabel(import.meta.env.VITE_APP_ENV as string | undefined);
 
 const CHANGELOG = [
   { v: "0.1.0", date: "Jul 2026", notes: ["Secure sign-in, with your projects, tasks, calendar, and notifications kept private to your team", "Two-way sync with Zoho Sprints for tickets and sprints", "Open projects straight into VS Code or Visual Studio with a native folder picker", "More reliable connection to your local agent, with auto-reconnect and a status page", "New docs, a profile menu, and friendlier empty states throughout"] },
@@ -302,6 +306,11 @@ export function Layout() {
           <button className="hamburger" onClick={() => setNavOpen((v) => !v)} aria-label="Open navigation"><Icon name="menu" size={20} /></button>
           <div style={{ display: "flex", alignItems: "baseline", gap: 9 }}>
             <span className="wordmark">ORBIT</span><span className="ver">v0.1</span>
+            {ENV_BADGE && (
+              <span className="pill warn" style={{ height: 20, padding: "0 7px", fontSize: 9.5, textTransform: "uppercase", letterSpacing: ".5px" }} title="This is not the production environment">
+                {ENV_BADGE}
+              </span>
+            )}
           </div>
           <button className="searchbar" onClick={() => setCmdk(true)}><Icon name="search" size={14} /><span>Jump to project or action</span><kbd style={{ color: "var(--muted)" }}>⌘K</kbd></button>
           <div className="spacer" />

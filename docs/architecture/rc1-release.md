@@ -60,3 +60,34 @@ Tracks RC1 of the closed-beta Release Plan (see the Beta Readiness Review and Re
 **Operational step required, not code**: a real Sentry project + DSN need to exist and `VITE_SENTRY_DSN` needs to be set in Netlify's production env for this to actually report anything — this agent can't create a Sentry account/project. Until that's done, `console.warn("[ORBIT] Missing VITE_SENTRY_DSN...")` will show in every browser console, which is the intended, honest signal that this step is still outstanding.
 
 **Deferred**: source-map upload (see above) — worth revisiting once a Sentry org/token exists to configure it against.
+
+## 3. Staging environment
+
+**Problem**: One Netlify site, one Supabase project, `main`-push = instant full-population production deploy, no way to verify anything against a realistic environment first. Beta Readiness Review, Reliability §10 / Release process §15, Critical.
+
+**Scope reality check, stated up front**: creating an actual Netlify site and an actual Supabase project are dashboard/account-level actions this agent has no credentials for and shouldn't be given. What follows is everything that *is* achievable in code plus a complete, precise runbook for the account-provisioning steps — not a claim that staging already exists.
+
+**Change**:
+- `docs/architecture/staging-environment.md` (new) — the full runbook: Supabase project creation, Netlify site creation, a complete environment-variable table (with an explicit "must differ from production" column), first-deploy steps, and a staging verification checklist. Explicitly states migration work (RC1 tasks 4-5) is blocked until every checklist item passes, per the Release Plan's own sequencing.
+- `src/lib/appEnv.ts` + `src/lib/appEnv.test.ts` (new) — `nonProductionEnvLabel()`, a small pure function deciding whether to show a "not production" badge, extracted specifically so this logic is unit-testable without needing to render all of `Layout.tsx`'s heavy provider tree.
+- `src/components/Layout.tsx` — a small amber badge next to the `ORBIT` wordmark, shown whenever `VITE_APP_ENV` is set to anything other than `production`. Opt-in, not opt-out: unset (today's production) shows nothing, so this task makes zero behavioral change to the current production deploy unless staging's own env vars explicitly turn it on.
+- `.env.example` — added `VITE_APP_ENV`, plus two real pre-existing gaps found while compiling the complete env-var inventory: `PUBLIC_SITE_URL` and `AUTH_TOKEN_TTL_DAYS` were read by `netlify/functions/auth.ts`/`teams.ts` but were entirely missing from the example file (README referenced `PUBLIC_SITE_URL`'s existence but the example never had it). Fixed as part of building an accurate staging setup guide — couldn't write a trustworthy runbook off an incomplete template.
+
+**Notable finding while compiling the env-var inventory**: `PUBLIC_SITE_URL` (used to build team-invite email links) is exactly the kind of value that creates real cross-environment risk if staging copies production's — a staging-sent invite email would link to production. Flagged prominently in the runbook's env-var table, not just mentioned in passing.
+
+**Explicitly not done here**: the actual Supabase project, the actual Netlify site, and any real environment-variable values — all require dashboard access outside this agent's tools. Tagging Sentry errors with a distinct `environment` per deploy (vs. today's `MODE`, which is Vite's dev/prod build flag, a different concept from the new `VITE_APP_ENV`) — small follow-up, kept out to keep this task's diff focused.
+
+**Files changed**:
+- `docs/architecture/staging-environment.md` (new)
+- `src/lib/appEnv.ts` (new)
+- `src/lib/appEnv.test.ts` (new, 4 tests)
+- `src/components/Layout.tsx` (+environment badge)
+- `.env.example` (`+VITE_APP_ENV`, `+PUBLIC_SITE_URL`, `+AUTH_TOKEN_TTL_DAYS`, `+` server-only vars section)
+
+**Verification**: `npx tsc -b` clean. `npx vitest run` — 155/155 (151 prior + 4 new). `npm run build` clean (main chunk unchanged — a few lines of conditional JSX). No dedicated manual/browser smoke test for this task (unlike task 1) — the badge logic is fully covered by `appEnv.test.ts`'s pure-function tests, and the JSX wiring is a trivial, low-risk conditional render.
+
+**Rollback**: Pure code change, no data/schema involved. `git revert`, or restore the previous Netlify deploy. The badge is inert (shows nothing) unless a site explicitly sets `VITE_APP_ENV` to a non-production value, so there's no production behavior to roll back from in the first place.
+
+**Risk**: Low for the code shipped. The real risk in this task is entirely in the manual account-provisioning and verification steps described in the runbook — which is precisely why the runbook includes an explicit checklist and an explicit "don't proceed to migration work until it's all checked off" gate.
+
+**Deferred to the user, not later RC1 tasks**: everything in `staging-environment.md`'s setup steps 1-4 and the verification checklist in §6 — this agent cannot execute those. RC1 tasks 4 and 5 (migration tracking, applying pending migrations) do not start until that checklist is confirmed complete.
