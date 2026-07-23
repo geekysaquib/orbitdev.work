@@ -117,3 +117,13 @@ Tracks RC1 of the closed-beta Release Plan (see the Beta Readiness Review and Re
 **Risk**: Low. Additive-only, no policy grants to any client-facing role, no foreign keys from or to any existing table.
 
 **Deferred**: Retroactively splitting the ~25 historical sections into individually numbered migrations (explicitly decided against, not an oversight — see Design above). A CI check comparing `schema.sql`'s seed against `migrations.sql`'s highest version (same class of drift risk as the already-accepted `database.types.ts` gap) — RC2 scope per the original Beta Readiness Review, not introduced here to stay minimal.
+
+## 5. Apply pending migrations (staging first) — IN PROGRESS
+
+**Status**: Part 1 (staging verification procedure) written. Waiting on the user to execute it against staging and report results before Part 2 (production rollout procedure) is written and this task is marked complete.
+
+**What's pending**: everything appended to `supabase/migrations.sql` since the last time any environment actually ran this file — `projects.notes`, `tickets.converted_task_id` (the Trust Fixes columns backing Project Notes and Ticket→Task, both already implemented in the app and shipped in code, but never yet applied to a live database), the team-logo/user-profile columns and `create_team_with_owner` signature change, and task 4's `schema_migrations` table + baseline seed. None of this is new SQL — it's the first live application of work that was already sitting in the file.
+
+**Full procedure**: `docs/architecture/migration-rollout.md` — Part 1 is a precise, copy-pasteable staging checklist (apply migrations, verify every new schema object via `information_schema`, confirm the `schema_migrations` baseline row, verify Project Notes end-to-end, verify Ticket→Task end-to-end including link-survives-refresh, verify a real `domain_events` row gets written on task creation). Part 2 (production rollout) is deliberately left unwritten until Part 1's results come back, per the instruction to treat production deployment as an operational procedure documented from a proven-safe staging run, not drafted speculatively.
+
+**This agent's role, same boundary as tasks 3 and 4**: no live Supabase access, so the actual SQL execution and app click-through on staging is the user's step. This agent's contribution is the precision of the procedure itself — exact SQL, exact UI paths, exact expected results — so that step is fast and unambiguous to execute.
