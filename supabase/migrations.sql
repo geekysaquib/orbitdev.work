@@ -778,3 +778,47 @@ create policy "select: team member" on public.domain_events for select using (
   team_id is not null and public.is_team_member(team_id, auth.uid())
 );
 alter publication supabase_realtime add table public.domain_events;
+
+-- ---------- migration tracking (RC1 task 4 — see docs/architecture/rc1-release.md) ----------
+-- Until now, this file was applied by hand with no record of what any given
+-- environment had actually run — no way to answer "is this database fully
+-- up to date" except by inference. One row per migration from here on,
+-- `on conflict do nothing` so re-running the whole file (the established,
+-- safe way to run this file — see the header comment at the top of this
+-- file) never duplicates a row.
+create table if not exists public.schema_migrations (
+  version integer primary key,
+  description text not null,
+  applied_at timestamptz not null default now()
+);
+alter table public.schema_migrations enable row level security;
+-- No policy defined — same pattern as otp_codes above: reachable only via
+-- direct SQL with a service-role/superuser connection, never through the app.
+
+-- Baseline: marks everything above this line (the entire migration history
+-- prior to this table existing) as version 1 in one shot, rather than
+-- retroactively splitting ~25 already-applied historical sections into
+-- individually numbered rows — those already ran, on every environment that
+-- matters, before this table could have tracked them; re-deriving exact
+-- per-section history now would be a large, purely cosmetic diff for no
+-- operational benefit. Every migration ADDED FROM HERE ON gets its own
+-- version number.
+insert into public.schema_migrations (version, description) values
+  (1, 'baseline — everything above this line, before migration tracking existed')
+on conflict (version) do nothing;
+
+-- ---------- HOW TO ADD THE NEXT MIGRATION (read before editing this file) ----------
+-- 1. Add your SQL above this comment block.
+-- 2. Also fold the equivalent change into supabase/schema.sql (the
+--    fresh-install path) if it changes what a brand-new project needs —
+--    schema.sql has no per-migration granularity, so just edit the
+--    relevant `create table`/function there directly, the same way every
+--    prior migration in this file's history already has.
+-- 3. Register it here, picking the next integer after the highest `version`
+--    already used above:
+--      insert into public.schema_migrations (version, description) values
+--        (N, 'short, one-line description')
+--      on conflict (version) do nothing;
+-- 4. To check any environment's status:
+--      select max(version) from public.schema_migrations;
+--    — compare against the highest version number defined in this file.

@@ -416,7 +416,7 @@ create index if not exists automation_rules_user_idx on public.automation_rules(
 do $$
 declare t text;
 begin
-  foreach t in array array['users','otp_codes','teams','team_members','team_invites','projects','tasks','tickets','events','notifications','time_entries','focus_events','integrations','pg_servers','user_settings','break_logs','audit_log','domain_events','provider_connections','mail_templates','scheduled_emails','mail_rules','metric_snapshots','automation_rules']
+  foreach t in array array['users','otp_codes','teams','team_members','team_invites','projects','tasks','tickets','events','notifications','time_entries','focus_events','integrations','pg_servers','user_settings','break_logs','audit_log','domain_events','provider_connections','mail_templates','scheduled_emails','mail_rules','metric_snapshots','automation_rules','schema_migrations']
   loop
     execute format('alter table public.%I enable row level security;', t);
   end loop;
@@ -424,7 +424,8 @@ end $$;
 
 -- `otp_codes` holds verification codes — no client role gets a policy, so it's
 -- reachable only from a Netlify function using the service-role key (which
--- bypasses RLS entirely).
+-- bypasses RLS entirely). `schema_migrations` (see the end of this file)
+-- follows the identical pattern — no client access path exists for it at all.
 
 -- `team_members`'s own "am I a member of this row's team" policy needs to
 -- query team_members to answer that — which would normally re-trigger the
@@ -845,3 +846,22 @@ as $$
   where user_id = auth.uid();
 $$;
 grant execute on function public.orbit_hours(timestamptz) to authenticated;
+
+-- ---------- migration tracking (RC1 task 4 — see docs/architecture/rc1-release.md) ----------
+-- Answers "is this environment fully up to date" with certainty instead of
+-- inference. Same table/columns as the one appended to the end of
+-- supabase/migrations.sql — see that file's own comment for the versioning
+-- convention new migrations follow going forward. A fresh install via this
+-- file already includes everything the migration history represents, so it
+-- seeds straight to the current baseline rather than starting empty.
+create table if not exists public.schema_migrations (
+  version integer primary key,
+  description text not null,
+  applied_at timestamptz not null default now()
+);
+insert into public.schema_migrations (version, description) values
+  (1, 'baseline — fresh install via schema.sql already includes everything this represents')
+on conflict (version) do nothing;
+-- Whoever adds migration N to migrations.sql: bump this seed to match N too,
+-- same manual-sync discipline this project already applies to
+-- src/lib/database.types.ts (see that file's own header comment).
