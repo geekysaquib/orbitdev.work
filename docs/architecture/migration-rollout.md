@@ -102,4 +102,61 @@ Expect a row with `source = 'task-workflow'`, `type = 'created'`, and a `payload
 
 ## Part 2 — Production rollout procedure
 
-**Not written yet.** Once every item in Part 1 is confirmed on staging (including any issues found and how they were resolved), this section gets filled in with the exact production procedure — expected to closely mirror Part 1's step 1 (run the same idempotent `migrations.sql` against production) plus a pre/post checklist scoped to production's specific risk (real user data, no throwaway test rows, a rollback plan for each of the columns/table above). Report Part 1's results and this section will be completed next.
+Staging rollout succeeded and every Part 1 item passed. This is the production procedure, scoped to the same migration batch — additive only (new columns, one new table, one function signature change), nothing destructive, nothing that drops or renames existing data.
+
+### Preconditions
+
+Confirm all of these before starting. Any unchecked item stops the rollout.
+
+- [ ] **Production backup/PITR is available.** Confirm the current point-in-time-recovery window covers "now" (i.e., you could restore to a point after this rollout starts if needed). This is a standing Supabase project setting, not something this rollout creates — just confirm it's on before touching production.
+- [ ] **Staging rollout succeeded.** All six Part 1 items passed, with no unresolved errors. If anything in Part 1 needed a workaround, note it here before proceeding, and confirm the workaround doesn't apply to production's actual data (e.g., the throwaway test-ticket insert in step 5 is a staging-only convenience — production almost certainly already has real tickets to test against instead).
+- [ ] **No pending RC1 database changes remain.** `supabase/migrations.sql` on `main` is the exact file that was just proven on staging — nobody has appended a newer, unverified migration to it since. Diff staging's applied state against `main`'s current file if there's any doubt.
+- [ ] **Application code for the features this migration backs is merged to `main` and ready to deploy.** As of this writing, the Trust Fixes UI (`Tickets.tsx`'s Ticket→Task, `ProjectDetail.tsx`'s Notes tab) is implemented but not yet committed — it must land on `main` before or as part of this rollout's app deploy, otherwise step 1 below deploys nothing new and the columns sit unused. Confirm this explicitly; don't assume it's already merged.
+- [ ] **Maintenance window**: not required for this batch. Every change is additive (new columns default to `null`, new table, `create or replace function` with a new optional parameter that has a default) — existing reads/writes on `projects`, `tickets`, `teams`, `users`, `tasks` are unaffected before, during, and after. Re-confirm this holds if any migration is added to the file between now and the actual rollout — a destructive change (drop/rename/type change) would need a window and a different procedure.
+
+### Deployment order
+
+1. **Deploy application.** Ship the `main` build containing the Trust Fixes UI to production via the normal Netlify flow.
+2. **Apply `migrations.sql`.** In the **production** Supabase project's SQL editor, paste and run the entire contents of `supabase/migrations.sql`, same as Part 1 step 1. Confirm no errors.
+3. **Verify `schema_migrations`.** Same query as Part 1 step 3, run against production: `select * from public.schema_migrations order by version;` — expect the `version = 1` baseline row.
+4. **Run the production verification checklist** (below).
+
+**Expected transient behavior between steps 1 and 2**: between the app deploy and the migration completing, Notes saves and Ticket→Task conversions will fail with an honest "column does not exist" error toast (not a crash, not silent data loss — `ProjectDetail.tsx` and `Tickets.tsx` both surface the real Postgres error). This window is normally seconds, matching how long the SQL editor takes to run the file. No other feature is affected. If this window needs to be zero, reverse the order (migrate first, then deploy) — both orders are safe with this specific migration batch since it's purely additive; the order above is the one specified for this rollout.
+
+### Verification checklist
+
+Run against **production** after step 3 above:
+
+- [ ] `schema_migrations` contains the expected baseline entry (`version = 1`) — confirmed in deployment step 3.
+- [ ] `projects.notes` works: open a real project, save a note, reload, confirm it persists.
+- [ ] Ticket → Task conversion works: convert a real ticket, confirm a task is created.
+- [ ] `converted_task_id` persists after reload: refresh the Tickets page, confirm the button still reads "View task" for the ticket just converted (not reverted to "To task").
+- [ ] `domain_events` entries are created: `select * from public.domain_events where source = 'task-workflow' order by occurred_at desc limit 5;` — confirm a fresh row matching the task just created.
+- [ ] No application errors: check the Netlify function logs and browser console for the few minutes surrounding the rollout — expect nothing beyond the transient window noted above, and nothing after step 2 completes.
+- [ ] Sentry shows no unexpected migration-related errors: check the production Sentry project for the rollout window — expect either nothing, or only the expected transient "column does not exist" events timestamped between steps 1 and 2, none after.
+
+### Rollback procedure
+
+**When to stop immediately**: any verification item fails *after* the expected transient window (i.e., persists once the migration has completed), or the migration step itself errors out partway through.
+
+- **Application rollback**: redeploy the previous production build via Netlify's deploy history ("Publish deploy" on the last known-good deploy). This is independent of the database state — the previous app build never referenced `notes`/`converted_task_id`/`schema_migrations`, so it runs fine whether or not the migration applied.
+- **Database rollback**: this migration batch is additive-only, so the default rollback is to leave the schema as-is (extra unused columns/table are harmless) and only redeploy the previous app build. Only drop the new objects if something about their mere presence is causing a problem (unlikely, but the exact statements):
+  ```sql
+  alter table public.projects drop column if exists notes;
+  alter table public.tickets drop column if exists converted_task_id;
+  alter table public.teams drop column if exists logo_data_url;
+  alter table public.users drop column if exists avatar_data_url, drop column if exists phone, drop column if exists job_title;
+  drop table if exists public.schema_migrations;
+  ```
+  Dropping `converted_task_id` on a production table with real linked tasks loses that linkage (the tasks themselves are untouched — `on delete set null` only ever governed the reverse case). Confirm this tradeoff is actually necessary before running it; it usually isn't, since leaving unused additive columns in place is the lower-risk default.
+- **Full PITR restore**: only if something beyond this migration's own scope went wrong (e.g., an operator error while in the SQL editor touched unrelated data). Use the Supabase project's point-in-time recovery to a timestamp just before step 2 began. This is a last resort — it rolls back *everything* written to the database since that point, not just this migration, so exhaust the two options above first.
+- **Before retrying anything**: record the exact error message/stack trace, which step it occurred at, the production timestamp, and the operator running the rollout. Do not re-run `migrations.sql` a second time until the cause is understood — it's idempotent so a retry itself is safe, but retrying blind risks masking the actual root cause.
+
+### Post-deployment
+
+Record, in `docs/architecture/rc1-release.md`'s Task 5 section:
+
+- [ ] Migration version applied (`schema_migrations.version` after this rollout — expected `1`, the baseline, since no migration has been added past it yet).
+- [ ] Deployment timestamp (production).
+- [ ] Operator (who ran it).
+- [ ] Verification checklist completion (all items above, checked off, with a link/reference to the actual Netlify deploy and Supabase migration run if available).
