@@ -63,8 +63,14 @@ describe("schema.sql vs migrations.sql consistency", () => {
   });
 
   it("create_team_with_owner and transfer_team_ownership revoke PUBLIC execute in both files", () => {
+    // create_team_with_owner's signature varies by file/overload (migrations.sql
+    // keeps the original (text, uuid) alongside a later (text, uuid, text)
+    // overload added when team logos shipped; schema.sql only ever has the
+    // current one) — check for a revoke on *a* create_team_with_owner
+    // signature rather than pinning to one, since which overload(s) exist is
+    // legitimately not the same in both files.
     for (const sql of [schema, migrations]) {
-      expect(sql).toMatch(/revoke execute on function public\.create_team_with_owner\(text, uuid\) from public/);
+      expect(sql).toMatch(/revoke execute on function public\.create_team_with_owner\([^)]*\) from public/);
       expect(sql).toMatch(/revoke execute on function public\.transfer_team_ownership\(uuid, uuid, uuid\) from public/);
     }
   });
