@@ -446,12 +446,27 @@ as $$
     where team_id = p_team_id and user_id = p_user_id
   );
 $$;
+-- SECURITY DEFINER means this bypasses RLS internally by design (that's the
+-- whole point — see above), and it takes arbitrary team_id/user_id
+-- parameters rather than self-scoping to auth.uid(). Postgres grants EXECUTE
+-- on every new function to PUBLIC by default, which would let it be called
+-- directly as an RPC (not just from inside a policy) to probe arbitrary
+-- team-membership pairs. `authenticated` still needs EXECUTE for the
+-- policies above that call it to evaluate at all — only `anon` (and PUBLIC
+-- generally) is the access being closed here. RC1 task 6.
+revoke execute on function public.is_team_member(uuid, uuid) from public;
+grant execute on function public.is_team_member(uuid, uuid) to authenticated;
 
 -- Both of the below are called only from netlify/functions/teams.ts via the
 -- service-role key, after that function has already done its own explicit
 -- authorization checks — they just need to run their few statements as one
 -- atomic unit (a Postgres function body is an implicit transaction), so a
 -- mid-sequence failure can't leave membership/ownership half-updated.
+-- Both are SECURITY INVOKER (the default — neither specifies DEFINER), so a
+-- direct call from `authenticated`/`anon` would still be blocked by RLS on
+-- teams/team_members (no insert/update policy grants that). The explicit
+-- revoke below is defense-in-depth against that RLS layer alone changing in
+-- the future — these functions do no authorization of their own. RC1 task 6.
 create or replace function public.create_team_with_owner(p_name text, p_owner_id uuid)
 returns public.teams
 language plpgsql
@@ -464,6 +479,7 @@ begin
   return t;
 end;
 $$;
+revoke execute on function public.create_team_with_owner(text, uuid) from public;
 grant execute on function public.create_team_with_owner(text, uuid) to service_role;
 
 create or replace function public.transfer_team_ownership(p_team_id uuid, p_old_owner_id uuid, p_new_owner_id uuid)
@@ -477,6 +493,7 @@ begin
   update public.teams set owner_id = p_new_owner_id where id = p_team_id;
 end;
 $$;
+revoke execute on function public.transfer_team_ownership(uuid, uuid, uuid) from public;
 grant execute on function public.transfer_team_ownership(uuid, uuid, uuid) to service_role;
 
 -- `users` holds password_hash — no blanket policy. The one exception is
@@ -860,7 +877,8 @@ create table if not exists public.schema_migrations (
   applied_at timestamptz not null default now()
 );
 insert into public.schema_migrations (version, description) values
-  (1, 'baseline — fresh install via schema.sql already includes everything this represents')
+  (1, 'baseline — fresh install via schema.sql already includes everything this represents'),
+  (2, 'RC1 task 6 — RLS/schema hardening already folded into this file (see migrations.sql v2 for the itemized list)')
 on conflict (version) do nothing;
 -- Whoever adds migration N to migrations.sql: bump this seed to match N too,
 -- same manual-sync discipline this project already applies to

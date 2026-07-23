@@ -66,6 +66,13 @@ as $$
     where team_id = p_team_id and user_id = p_user_id
   );
 $$;
+-- RC1 task 6: SECURITY DEFINER + Postgres's default PUBLIC execute grant on
+-- every new function would let this be called directly as an RPC to probe
+-- arbitrary team_id/user_id pairs, not just from inside the policies that
+-- legitimately need it. `authenticated` still needs EXECUTE for those
+-- policies to evaluate — only PUBLIC/anon access is being closed here.
+revoke execute on function public.is_team_member(uuid, uuid) from public;
+grant execute on function public.is_team_member(uuid, uuid) to authenticated;
 
 drop policy if exists "teammates are visible" on public.users;
 create policy "teammates are visible" on public.users for select using (
@@ -323,8 +330,14 @@ alter table public.projects add column if not exists sprint_project_id text;
 alter table public.projects add column if not exists sprint_project_name text;
 
 -- Per-user integration credentials (Zoho + Gmail), replacing env-only config.
+-- References public.users, NOT auth.users — this app's auth is custom (see
+-- schema.sql's header comment); every table's user_id points at public.users.
+-- (RC1 task 6: this line previously said `auth.users`, a leftover from before
+-- the custom-auth migration. `create table if not exists` made it a dormant
+-- no-op on every environment that already had this table with the correct
+-- reference, but it was still wrong for anyone running this file fresh.)
 create table if not exists public.integrations (
-  user_id uuid primary key references auth.users(id) on delete cascade,
+  user_id uuid primary key references public.users(id) on delete cascade,
   zoho_client_id text, zoho_client_secret text, zoho_refresh_token text,
   zoho_dc text default 'in', zoho_team_id text, zoho_project_id text,
   gmail_user text, gmail_app_password text,
@@ -335,10 +348,16 @@ create table if not exists public.integrations (
 alter table public.integrations add column if not exists anthropic_api_key text;
 
 alter table public.integrations enable row level security;
-do $$ begin
-  create policy "own integrations" on public.integrations
-    for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
-exception when duplicate_object then null; end $$;
+-- RC1 task 6: this used to be named "own integrations" (and used a
+-- skip-if-exists idiom, so a re-run could never update it). Renamed to
+-- "owner all" to match every other table's convention and schema.sql's
+-- fresh-install path (which creates it under that name via the generic
+-- per-table loop) — same underlying rule, just consistent naming so a future
+-- policy edit here can't silently miss an already-upgraded environment.
+drop policy if exists "own integrations" on public.integrations;
+drop policy if exists "owner all" on public.integrations;
+create policy "owner all" on public.integrations
+  using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 -- Login lockout (brute-force throttling) + password-change tracking, used by
 -- netlify/functions/auth.ts and _lib/verifyToken.ts (which revokes any JWT
@@ -357,6 +376,11 @@ alter table public.users alter column password_changed_at set default now();
 -- Atomic team create/transfer-ownership, used by netlify/functions/teams.ts
 -- instead of separate insert/update calls that could leave membership/
 -- ownership inconsistent if a step failed mid-sequence.
+-- RC1 task 6: SECURITY INVOKER (the default — not specified as DEFINER), so
+-- a direct call from authenticated/anon is already blocked by teams/
+-- team_members' own RLS (no insert policy grants that). The revoke below is
+-- defense-in-depth against that RLS layer alone changing in the future —
+-- this function does no authorization of its own, it trusts its caller.
 create or replace function public.create_team_with_owner(p_name text, p_owner_id uuid)
 returns public.teams
 language plpgsql
@@ -369,6 +393,7 @@ begin
   return t;
 end;
 $$;
+revoke execute on function public.create_team_with_owner(text, uuid) from public;
 grant execute on function public.create_team_with_owner(text, uuid) to service_role;
 
 create or replace function public.transfer_team_ownership(p_team_id uuid, p_old_owner_id uuid, p_new_owner_id uuid)
@@ -382,6 +407,7 @@ begin
   update public.teams set owner_id = p_new_owner_id where id = p_team_id;
 end;
 $$;
+revoke execute on function public.transfer_team_ownership(uuid, uuid, uuid) from public;
 grant execute on function public.transfer_team_ownership(uuid, uuid, uuid) to service_role;
 
 -- Durable per-user settings (timezone, break state, chores, appearance —
@@ -641,6 +667,28 @@ create policy "owner select" on public.focus_events for select using (user_id = 
 drop policy if exists "owner insert" on public.focus_events;
 create policy "owner insert" on public.focus_events for insert with check (user_id = auth.uid());
 
+-- ---------- break chore digests ----------
+-- RC1 task 6: this table exists in schema.sql (the fresh-install path) but
+-- was missing from this file entirely — an environment that only ever ran
+-- migrations.sql (this file's whole purpose, per the header at the top) had
+-- no break_logs table at all, so every write from BreakView.tsx would have
+-- hard-failed with "relation does not exist," not merely an RLS gap.
+create table if not exists public.break_logs (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  started_at timestamptz not null,
+  ended_at timestamptz not null,
+  seconds int not null default 0,
+  beverage text,
+  rows jsonb not null default '[]'::jsonb,
+  summary jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+alter table public.break_logs enable row level security;
+drop policy if exists "owner all" on public.break_logs;
+create policy "owner all" on public.break_logs
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+
 -- ---------- metric snapshots (daily-brief/anomaly-scan crons' day-over-day deltas) ----------
 create table if not exists public.metric_snapshots (
   id uuid primary key default gen_random_uuid(),
@@ -805,6 +853,19 @@ alter table public.schema_migrations enable row level security;
 -- version number.
 insert into public.schema_migrations (version, description) values
   (1, 'baseline — everything above this line, before migration tracking existed')
+on conflict (version) do nothing;
+
+-- ---------- RC1 task 6: RLS/schema hardening (see docs/architecture/rc1-release.md) ----------
+-- Four fixes found auditing every table's RLS against schema.sql:
+--  1. break_logs was entirely missing from this file's upgrade path (added above).
+--  2. integrations.user_id referenced auth.users instead of public.users.
+--  3. integrations' RLS policy was named "own integrations" here vs "owner
+--     all" in schema.sql (same rule, inconsistent naming — renamed to match).
+--  4. is_team_member()/create_team_with_owner()/transfer_team_ownership()
+--     relied only on RLS (or nothing) to block misuse via Postgres's default
+--     PUBLIC execute grant — explicit revokes added as defense-in-depth.
+insert into public.schema_migrations (version, description) values
+  (2, 'RC1 task 6 — RLS hardening: missing break_logs, integrations FK + policy name fix, function execute grants')
 on conflict (version) do nothing;
 
 -- ---------- HOW TO ADD THE NEXT MIGRATION (read before editing this file) ----------
