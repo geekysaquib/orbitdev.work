@@ -42,14 +42,13 @@ version info attached). To run it:
 2. Double-click it. **No console window stays open** — the visible launch process immediately respawns itself hidden (`CREATE_NO_WINDOW`) and exits, so only the background service remains. It then opens your default browser to its own status page (`http://localhost:47600`), which shows the ORBIT mark, a live "online" indicator, and a Docker health dot that refreshes every 15s.
 3. ORBIT's browser tab connects to the agent automatically. Add Postgres servers / Gmail from ORBIT's Settings page as normal — Postgres servers are saved to your ORBIT account (Supabase), Gmail credentials write `gmail-config.json` next to the exe, same as the `npm start` flow.
 
-No `agent-config.json` / `jwtSecret` setup needed — the Legacy JWT Secret is
-baked into the build (it's Supabase's fixed signing key, not a per-user
-value). This is a deliberate tradeoff, not an oversight: it's what makes the
-GitHub release download work with zero setup, but it also means anyone
-holding the `.exe` can extract that secret and forge a session token for any
-ORBIT user. If that secret is ever rotated in Supabase, every published
-release needs rebuilding and re-uploading. `agent-config.json` still works as
-an override for pointing a local build at a different Supabase project.
+No `agent-config.json` setup needed — the exe never holds any signing secret.
+Each request's session token is checked against ORBIT's own API
+(`netlify/functions/agent-verify.ts`), which does the real verification
+server-side and never returns the secret, so nothing extractable ships inside
+a public download. `agent-config.json`'s `apiBase` still works as an override
+for pointing a local build at a different ORBIT deployment (e.g. `netlify dev`)
+instead of production — see `agent-config.example.json`.
 
 To stop it, there's no console window to `Ctrl+C` anymore — use Task Manager
 (look for `orbit.exe`) or `taskkill /IM orbit.exe /F`. The icon is generated
@@ -96,22 +95,24 @@ Postgres servers ("machines") aren't scoped this way at all anymore — they're
 not stored on this machine, full stop. See "Postgres: stateless by design"
 below.
 
-The agent ships with the project's Legacy JWT Secret hardcoded as the
-default, so this works out of the box against the main Supabase project —
-nothing to configure. Pointing a local build at a **different** Supabase
-project needs the matching secret (`SUPABASE_JWT_SECRET` — Supabase Project
-Settings → API → JWT Settings → Legacy JWT Secret), as an environment
-variable or a local config file that overrides the default:
+The agent never holds the signing secret — it verifies each token by calling
+`POST <apiBase>/.netlify/functions/agent-verify` with `Authorization: Bearer
+<token>` and trusts the returned user id (verified tokens are cached ~60s to
+avoid round-tripping on every request). This works out of the box against
+production (`https://orbitdev.work`) with nothing to configure. Pointing a
+local build at a **different** deployment (e.g. `netlify dev`) needs an
+`apiBase` override:
 
 ```bash
 cp agent-config.example.json agent-config.json
-# then paste the secret into "jwtSecret"
+# then set "apiBase" to e.g. http://localhost:8888
 ```
 
-If that secret is ever wrong for the project you're pointed at, every
+If `apiBase` is ever wrong (or unreachable) for where you're pointed, every
 authenticated request 401s and ORBIT's topbar will still show "Agent
 connected" (that only checks `/ping`) even though nothing else works — check
-the agent's terminal output if Docker/Postgres/Gmail panels stay empty.
+the agent's terminal output (or `orbit-agent.log` next to the exe, for the
+packaged build) if Docker/Postgres/Gmail panels stay empty.
 
 ## Postgres: stateless by design
 

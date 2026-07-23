@@ -5,9 +5,9 @@
 // then set CERT/KEY paths below and use https.createServer.
 //
 // Every request (except / and /ping) must carry the same ORBIT session JWT the
-// web app uses — the agent verifies it with SUPABASE_JWT_SECRET (the exact
-// secret netlify/functions/auth.ts signs with) and trusts the `sub` claim as
-// the caller's user id. Postgres servers, Gmail credentials, and dev-server
+// web app uses — the agent checks it against netlify/functions/agent-verify.ts
+// (which does the real verification server-side, see the Auth section below)
+// and trusts the returned user id. Postgres servers, Gmail credentials, and dev-server
 // tracking are all stored per user id, so two people running ORBIT against
 // the same agent never see each other's data. Docker is the one exception —
 // it reflects whatever's actually running on this machine, which by nature
@@ -15,7 +15,6 @@
 
 import express from "express";
 import cors from "cors";
-import jwt from "jsonwebtoken";
 import { spawn, execFile, exec } from "node:child_process";
 import net from "node:net";
 import { platform } from "node:os";
@@ -59,41 +58,64 @@ function readJson(path, fallback) {
   try { return JSON.parse(readFileSync(path, "utf8")); } catch { return fallback; }
 }
 
-// ---- Auth: verify the same JWT netlify/functions/auth.ts issues ----
-// No hardcoded fallback on purpose — a real project's Supabase Legacy JWT
-// Secret must never ship in source or in the packaged .exe, since anyone who
-// obtains either could forge a valid session for any user. Set it via
-// SUPABASE_JWT_SECRET (env) or agent-config.json (see agent-config.example.json).
-function jwtSecret() {
-  if (process.env.SUPABASE_JWT_SECRET) return process.env.SUPABASE_JWT_SECRET;
-  const fromConfig = readJson(AGENT_CFG, {}).jwtSecret;
+// The hidden background copy runs with stdio "ignore" (see above), so a crash
+// here would otherwise vanish with zero trace — as happened when a startup
+// check once threw before the server ever came up. Give ourselves one last
+// resort: log fatal errors to a file next to the exe before exiting.
+if (isPackaged) {
+  const crashLog = join(__dir, "orbit-agent.log");
+  const logFatal = (label, err) => {
+    try { writeFileSync(crashLog, `[${new Date().toISOString()}] ${label}: ${err?.stack || err}\n`, { flag: "a" }); } catch { /**/ }
+  };
+  process.on("uncaughtException", (err) => { logFatal("uncaughtException", err); process.exit(1); });
+  process.on("unhandledRejection", (err) => { logFatal("unhandledRejection", err); process.exit(1); });
+}
+
+// ---- Auth: verify the same session netlify/functions/auth.ts issues ----
+// The agent never holds the signing secret itself — a real project's Supabase
+// Legacy JWT Secret must never ship in source or in the packaged .exe, since
+// anyone who obtains either could forge a valid session for any user. Instead
+// every token is checked against ORBIT's own API (netlify/functions/agent-verify.ts),
+// which does the real HS256 verification server-side and never returns the secret.
+// Point at a different deployment (e.g. `netlify dev`) via ORBIT_API_BASE (env)
+// or agent-config.json's "apiBase" — see agent-config.example.json.
+function apiBase() {
+  if (process.env.ORBIT_API_BASE) return process.env.ORBIT_API_BASE;
+  const fromConfig = readJson(AGENT_CFG, {}).apiBase;
   if (fromConfig) return fromConfig;
-  return null;
+  return "https://orbitdev.work";
 }
-const JWT_SECRET = jwtSecret();
-if (!JWT_SECRET) {
-  console.error(
-    "[agent] No JWT secret configured — refusing to start.\n" +
-    "  Set SUPABASE_JWT_SECRET in the environment, or copy agent-config.example.json\n" +
-    "  to agent-config.json and paste in the same Legacy JWT Secret your Netlify env uses.",
-  );
-  process.exit(1);
-}
-function verifyToken(token) {
-  const payload = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] });
-  const userId = typeof payload === "object" ? payload.sub : null;
-  if (!userId) throw new Error("token has no sub claim");
-  return userId;
+const VERIFY_URL = `${apiBase().replace(/\/$/, "")}/.netlify/functions/agent-verify`;
+
+// Verified tokens are cached briefly so routine traffic — every authenticated
+// request, plus the 45s-per-user websocket health push below — doesn't
+// round-trip to production on each call. A rejected/expired token is never
+// cached, so revocation (e.g. a password reset) still takes effect within
+// this window rather than being masked by a stale "ok" entry.
+const TOKEN_CACHE_MS = 60_000;
+const tokenCache = new Map(); // token -> { userId, expiresAt }
+
+async function verifyToken(token) {
+  const cached = tokenCache.get(token);
+  if (cached && cached.expiresAt > Date.now()) return cached.userId;
+
+  const res = await fetch(VERIFY_URL, { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error("token rejected");
+  const data = await res.json();
+  if (!data.ok || !data.userId) throw new Error("token rejected");
+
+  tokenCache.set(token, { userId: data.userId, expiresAt: Date.now() + TOKEN_CACHE_MS });
+  return data.userId;
 }
 
 const PUBLIC_PATHS = new Set(["/", "/ping", "/health/public"]);
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   if (PUBLIC_PATHS.has(req.path)) return next();
   const hdr = req.headers.authorization || "";
   const token = hdr.startsWith("Bearer ") ? hdr.slice(7) : "";
   if (!token) return res.status(401).json({ ok: false, error: "unauthorized — sign in to ORBIT first" });
   try {
-    req.userId = verifyToken(token);
+    req.userId = await verifyToken(token);
     next();
   } catch {
     return res.status(401).json({ ok: false, error: "unauthorized — sign in again" });
@@ -2063,12 +2085,12 @@ const server = app.listen(PORT, () => {
       // the session token never lands in a proxy/access log. Give the client a
       // few seconds to send it before dropping the connection.
       const authTimeout = setTimeout(() => c.close(4001, "auth timeout"), 5000);
-      c.once("message", (raw) => {
+      c.once("message", async (raw) => {
         clearTimeout(authTimeout);
         let token = "";
         try { token = JSON.parse(raw.toString()).token || ""; } catch { /* not JSON */ }
         try {
-          c.userId = verifyToken(token);
+          c.userId = await verifyToken(token);
         } catch {
           c.close(4001, "unauthorized");
           return;
