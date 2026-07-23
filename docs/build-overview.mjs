@@ -5,8 +5,10 @@
  * request — so screenshots and brand logos have to be inlined rather than linked.
  * This script does that inlining:
  *
- *   {{IMG:name}}   -> src="data:image/webp;base64,..." width="W" height="H"
- *   {{ICON:slug}}  -> <svg viewBox="0 0 24 24">...</svg>   (from docs/icons/<slug>.svg)
+ *   {{IMG:name}}      -> src="data:image/webp;base64,..." width="W" height="H"
+ *   {{ICON:slug}}     -> <svg viewBox="0 0 24 24">...</svg>   (from docs/icons/<slug>.svg)
+ *   {{VENDOR:name}}   -> <script>...</script>, library source inlined verbatim
+ *                        (from docs/vendor/<name>.min.js) so it needs no runtime fetch either
  *
  * Screenshots come from docs/images/*.png and are downscaled to WebP with ffmpeg.
  * Re-run after replacing or adding a screenshot:  node docs/build-overview.mjs
@@ -19,6 +21,7 @@ import { execFileSync } from "node:child_process";
 const DOCS = import.meta.dirname;
 const IMAGES = path.join(DOCS, "images");
 const ICONS = path.join(DOCS, "icons");
+const VENDOR = path.join(DOCS, "vendor");
 const SRC = path.join(DOCS, "orbit-overview.src.html");
 const OUT = path.join(DOCS, "orbit-overview.html");
 
@@ -99,6 +102,17 @@ function buildIcon(slug) {
   return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="${d[1]}"/></svg>`;
 }
 
+function buildVendor(name) {
+  const file = path.join(VENDOR, name + ".min.js");
+  if (!fs.existsSync(file)) throw new Error(`missing vendor bundle: ${file}`);
+  // Guard against a literal "</script" inside the library text closing the
+  // tag early — split it so the browser still sees identical executable JS.
+  const src = fs.readFileSync(file, "utf8").replace(/<\/script/gi, "<\\/script");
+  const kb = Math.round(src.length / 1024);
+  console.log(`  ${name}.min.js  ${kb}KB inlined`);
+  return `<script>${src}</script>`;
+}
+
 let html = fs.readFileSync(SRC, "utf8");
 
 console.log("screenshots:");
@@ -106,6 +120,9 @@ html = html.replace(/\{\{IMG:([a-z]+)\}\}/g, (_, k) => buildImage(k));
 const icons = new Set();
 html = html.replace(/\{\{ICON:([a-z0-9]+)\}\}/g, (_, s) => { icons.add(s); return buildIcon(s); });
 console.log(`icons: ${[...icons].sort().join(", ")}`);
+
+console.log("vendor:");
+html = html.replace(/\{\{VENDOR:([a-z0-9]+)\}\}/g, (_, n) => buildVendor(n));
 
 const leftover = html.match(/\{\{[A-Z]+:[^}]+\}\}/g);
 if (leftover) throw new Error("unreplaced tokens: " + leftover.join(", "));
@@ -138,6 +155,9 @@ const page = `<!doctype html>
 <meta property="og:description" content="${DESC}">
 <meta property="og:type" content="website">
 <link rel="icon" href="data:image/svg+xml,${encodeURIComponent(MARK)}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>html,body{margin:0;padding:0;background:#0A0B0D}</style>
 </head>
 <body>

@@ -1507,6 +1507,15 @@ const CLOUD_MODELS = {
   openai: "gpt-4o-mini",
   grok: "grok-3-mini",
 };
+// Gemini-specific: brand-new models (like 3.6 Flash, days old) can run into
+// capacity-driven 429/503s under high demand independent of the account's own
+// rate limit. Falls back through progressively older/more-established flash
+// tiers on an overload signal only — not on other errors (bad key, safety
+// block, etc.), which should surface immediately rather than retry blindly.
+const GEMINI_MODELS = [CLOUD_MODELS.gemini, "gemini-3.5-flash", "gemini-3.1-flash-lite"];
+function isGeminiOverloaded(status) {
+  return status === 429 || status === 503;
+}
 const CLOUD_MAX_TOKENS = 900; // Ask AI's threaded answers carry prose plus an actions block; other callers are far shorter and don't use the headroom.
 
 async function anthropicComplete({ apiKey, system, turns }) {
@@ -1554,37 +1563,48 @@ function geminiEmptyReason(j) {
   return j?.candidates?.[0]?.finishReason || j?.promptFeedback?.blockReason || null;
 }
 async function geminiComplete({ apiKey, system, turns }) {
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CLOUD_MODELS.gemini}:generateContent?key=${encodeURIComponent(apiKey)}`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(geminiBody(system, turns)),
-  });
-  const j = await r.json().catch(() => ({}));
-  // TEMP DEBUG — remove once the empty-answer cause is confirmed from real output.
-  console.error("[gemini debug] geminiComplete raw response:", JSON.stringify(j).slice(0, 1000));
-  if (!r.ok) return { ok: false, error: j.error?.message || `Gemini error ${r.status}` };
-  const text = j.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
-  if (!text) {
-    const reason = geminiEmptyReason(j);
-    return { ok: false, error: reason ? `Gemini returned no text (${reason})` : "Gemini returned no text" };
+  let lastError = "Gemini is currently unavailable";
+  for (const model of GEMINI_MODELS) {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(geminiBody(system, turns)),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      lastError = j.error?.message || `Gemini error ${r.status}`;
+      if (isGeminiOverloaded(r.status)) continue; // try the next model
+      return { ok: false, error: lastError };
+    }
+    const text = j.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
+    if (!text) {
+      const reason = geminiEmptyReason(j);
+      return { ok: false, error: reason ? `Gemini returned no text (${reason})` : "Gemini returned no text" };
+    }
+    return { ok: true, text };
   }
-  return { ok: true, text };
+  return { ok: false, error: lastError };
 }
 async function geminiStream({ apiKey, system, turns, onDelta }) {
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CLOUD_MODELS.gemini}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(geminiBody(system, turns)),
-  });
-  if (!r.ok || !r.body) { const j = await r.json().catch(() => ({})); return { ok: false, error: j.error?.message || `Gemini error ${r.status}` }; }
-  let emitted = false, lastReason = null, frameCount = 0;
-  // TEMP DEBUG — remove once the empty-answer cause is confirmed from real output.
-  await pumpSse(r.body, (obj) => {
-    frameCount++;
-    console.error(`[gemini debug] frame #${frameCount}:`, JSON.stringify(obj).slice(0, 500));
-    const text = obj?.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
-    if (text) { emitted = true; onDelta(text); }
-    lastReason = geminiEmptyReason(obj) || lastReason;
-  });
-  console.error(`[gemini debug] stream done — frames=${frameCount} emitted=${emitted} lastReason=${lastReason}`);
-  if (!emitted) return { ok: false, error: lastReason ? `Gemini returned no text (${lastReason})` : "Gemini returned no text" };
-  return { ok: true };
+  let lastError = "Gemini is currently unavailable";
+  for (const model of GEMINI_MODELS) {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(geminiBody(system, turns)),
+    });
+    if (!r.ok || !r.body) {
+      const j = await r.json().catch(() => ({}));
+      lastError = j.error?.message || `Gemini error ${r.status}`;
+      if (isGeminiOverloaded(r.status)) continue; // try the next model
+      return { ok: false, error: lastError };
+    }
+    let emitted = false, lastReason = null;
+    await pumpSse(r.body, (obj) => {
+      const text = obj?.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
+      if (text) { emitted = true; onDelta(text); }
+      lastReason = geminiEmptyReason(obj) || lastReason;
+    });
+    if (!emitted) return { ok: false, error: lastReason ? `Gemini returned no text (${lastReason})` : "Gemini returned no text" };
+    return { ok: true };
+  }
+  return { ok: false, error: lastError };
 }
 
 // OpenAI and Grok (xAI) both speak the OpenAI chat-completions wire format, so
@@ -1626,9 +1646,13 @@ async function openAiCompatStream({ baseUrl, model, apiKey, system, turns, onDel
 }
 
 // Shared SSE line-pump for the three REST-based providers (Anthropic's SDK does
-// its own framing via `client.messages.stream`). Frames are `data: <json>\n\n`
-// (OpenAI/Grok terminate with the literal `data: [DONE]`, passed through as
-// `raw` since it isn't JSON); a chunk can split one frame in half.
+// its own framing via `client.messages.stream`). Frames are `data: <json>` followed
+// by a blank line (Google's Gemini stream uses CRLF — "\r\n\r\n" — while OpenAI/Grok
+// use plain "\n\n"; normalizing CRLF->LF up front lets one splitter handle both).
+// OpenAI/Grok terminate with the literal `data: [DONE]`, passed through as `raw`
+// since it isn't JSON. A chunk can split one frame (or even one "\r\n") in half —
+// normalizing the whole accumulated buffer each time (not just the new chunk)
+// keeps that safe.
 async function pumpSse(body, onEvent) {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -1636,7 +1660,7 @@ async function pumpSse(body, onEvent) {
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
-    buf += decoder.decode(value, { stream: true });
+    buf = (buf + decoder.decode(value, { stream: true })).replace(/\r\n/g, "\n");
     let sep;
     while ((sep = buf.indexOf("\n\n")) >= 0) {
       const frame = buf.slice(0, sep).trim(); buf = buf.slice(sep + 2);
@@ -1652,8 +1676,6 @@ async function pumpSse(body, onEvent) {
   // "\n\n", so that final frame would otherwise sit in `buf` and get silently
   // dropped. Flush whatever's left once the reader is actually done.
   const tail = buf.trim();
-  // TEMP DEBUG — remove once the empty-answer cause is confirmed from real output.
-  console.error("[gemini debug] pumpSse leftover tail:", JSON.stringify(tail).slice(0, 500));
   if (tail.startsWith("data:")) {
     const raw = tail.slice(5).trim();
     if (raw === "[DONE]") { onEvent(null, raw); return; }

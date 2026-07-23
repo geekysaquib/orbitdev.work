@@ -23,11 +23,26 @@
     --ob-on-accent: #06110D;
 
     --ob-mono: ui-monospace, "Cascadia Code", "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
-    --ob-sans: system-ui, "Segoe UI Variable Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    /* "Google Sans" first: real on public/about.html (live-loaded from Google's
+       CDN — restricted license, cannot be self-hosted). The Artifact's CSP
+       blocks that request, so it silently falls through to the system stack
+       below with no visible breakage. */
+    --ob-sans: "Google Sans", system-ui, "Segoe UI Variable Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 
-    --ob-col: 1120px;
+    --ob-col: 1440px;
     --ob-pad: clamp(20px, 4vw, 40px);
     color-scheme: dark;
+    /* Belongs on :root (the real document element, however the host wraps
+       this fragment) rather than .ob-root — scroll-behavior only affects
+       whichever box actually scrolls, and overflow-x:hidden below would
+       silently break every position:sticky descendant if either of these
+       lived one level down on .ob-root instead (overflow-x set without
+       overflow-y computes overflow-y to 'auto', turning .ob-root into a
+       sticky-breaking scroll container even though it never scrolls itself). */
+    scroll-behavior: smooth;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :root { scroll-behavior: auto; }
   }
 
   .ob-root *,
@@ -41,11 +56,8 @@
     font-size: 16px;
     line-height: 1.6;
     -webkit-font-smoothing: antialiased;
-    overflow-x: hidden;
-    scroll-behavior: smooth;
   }
   @media (prefers-reduced-motion: reduce) {
-    .ob-root { scroll-behavior: auto; }
     .ob-root *, .ob-root *::before, .ob-root *::after {
       animation-duration: .01ms !important;
       animation-iteration-count: 1 !important;
@@ -109,8 +121,8 @@
   }
 
   .ob-grid { display: grid; gap: 14px; }
-  .ob-g3 { grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); }
-  .ob-g2 { grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); }
+  .ob-g3 { grid-template-columns: repeat(auto-fit, minmax(min(268px, 100%), 1fr)); }
+  .ob-g2 { grid-template-columns: repeat(auto-fit, minmax(min(430px, 100%), 1fr)); }
 
   .ob-card {
     position: relative;
@@ -216,7 +228,7 @@
   /* ---------- problem strip ---------- */
   .ob-problems {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr));
     margin-top: 34px;
     border: 1px solid var(--ob-border);
     border-radius: 12px;
@@ -322,7 +334,7 @@
   /* ---------- integrations ---------- */
   .ob-ints {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(168px, 100%), 1fr));
     gap: 10px;
     margin-top: 28px;
   }
@@ -354,6 +366,46 @@
     color: var(--ob-muted);
     flex: none;
   }
+  /* ---------- logo wall (Integrations / Models — larger than .ob-ints,
+     which stays as the compact treatment used only in the footer) ---------- */
+  .ob-logowall {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr));
+    gap: 12px;
+    margin-top: 30px;
+  }
+  .ob-logo {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 13px;
+    padding: 28px 14px 20px;
+    border: 1px solid var(--ob-border);
+    border-radius: 13px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, .022), transparent 62%), var(--ob-panel);
+    font-family: var(--ob-mono);
+    font-size: 12.5px;
+    color: var(--ob-text2);
+    text-align: center;
+    transition: border-color .18s ease, transform .18s ease;
+  }
+  .ob-logo:hover { border-color: #2C323C; transform: translateY(-3px); }
+  .ob-logo svg { width: 36px; height: 36px; flex: none; color: var(--ob-muted); transition: color .18s ease; }
+  .ob-logo:hover svg { color: var(--brand, var(--ob-mint)); }
+  .ob-logo .mono {
+    width: 36px; height: 36px;
+    border-radius: 8px;
+    background: var(--ob-raised);
+    border: 1px solid var(--ob-hair);
+    display: grid;
+    place-items: center;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ob-muted);
+    flex: none;
+  }
+
   .ob-intnote {
     margin-top: 16px;
     font-size: 12.5px;
@@ -396,69 +448,44 @@
   }
   .ob-ver-chip { color: var(--ob-text2); }
 
-  /* ---------- schema table cards ---------- */
-  .ob-erd {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(252px, 1fr));
-    gap: 12px;
+  /* ---------- schema ER diagram (real Mermaid render, library inlined near the closing script tag) ---------- */
+  .ob-erd-wrap {
     margin-top: 28px;
-  }
-  .ob-tbl {
-    background: var(--ob-panel);
     border: 1px solid var(--ob-border);
-    border-radius: 11px;
-    overflow: hidden;
+    border-radius: 14px;
+    background: var(--ob-panel);
+    padding: 24px;
+    overflow-x: auto;
   }
-  .ob-tbl h4 {
-    margin: 0;
-    font-family: var(--ob-mono);
-    font-size: 12.5px;
-    font-weight: 600;
-    padding: 9px 12px;
-    border-bottom: 1px solid var(--ob-hair);
-    background: var(--ob-bg2);
-    color: var(--ob-text);
-  }
-  .ob-tbl h4 em { font-style: normal; color: var(--ob-dim); font-weight: 400; }
-  .ob-tbl ul { list-style: none; margin: 0; padding: 5px 0 7px; }
-  .ob-tbl li {
+  .ob-erd-wrap svg { display: block; margin: 0 auto; }
+  /* mermaid.run() replaces this element's content in place with the
+     rendered SVG — style it plainly for the brief moment before that
+     happens (the library is inlined, so there is no network wait) */
+  .ob-erd-src { margin: 0; font-family: var(--ob-mono); font-size: 11px; color: var(--ob-dim); white-space: pre; }
+  .ob-erd-legend {
+    margin: 14px 0 0;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
-    padding: 3px 12px;
-    font-family: var(--ob-mono);
-    font-size: 11.5px;
-    color: var(--ob-text2);
+    gap: 8px 18px;
+    font-size: 12px;
+    color: var(--ob-dim);
   }
-  .ob-tbl li .ty { margin-left: auto; color: var(--ob-dim); font-size: 10.5px; }
-  .ob-tbl li .k {
+  .ob-erd-legend > span:last-child { flex-basis: 100%; font-size: 12.5px; }
+  .ob-erd-legend .k { margin-right: 6px; }
+  .k {
+    display: inline-block;
+    font-family: var(--ob-mono);
     font-size: 8.5px;
     font-style: normal;
     font-weight: 700;
     letter-spacing: .06em;
     padding: 1px 4px;
     border-radius: 3px;
-    flex: none;
   }
-  .ob-tbl li .k.pk { background: rgba(55, 223, 160, .13); color: var(--ob-mint); }
-  .ob-tbl li .k.fk { background: rgba(91, 141, 239, .13); color: var(--ob-blue); }
-  .ob-tbl li .k.uq { background: rgba(169, 139, 245, .13); color: var(--ob-violet); }
-
-  .ob-rels {
-    margin: 22px 0 0;
-    padding: 16px 18px;
-    border: 1px solid var(--ob-border);
-    border-radius: 11px;
-    background: var(--ob-bg2);
-    display: grid;
-    gap: 7px;
-  }
-  .ob-rels code {
-    font-family: var(--ob-mono);
-    font-size: 11.5px;
-    color: var(--ob-text2);
-  }
-  .ob-rels code em { font-style: normal; color: var(--ob-dim); }
+  .k.pk { background: rgba(55, 223, 160, .13); color: var(--ob-mint); }
+  .k.fk { background: rgba(91, 141, 239, .13); color: var(--ob-blue); }
+  .k.uq { background: rgba(169, 139, 245, .13); color: var(--ob-violet); }
 
   /* table catalog */
   .ob-cat { margin-top: 34px; display: grid; gap: 12px; }
@@ -546,6 +573,22 @@
     transition: color .16s ease, background .16s ease;
   }
   .ob-navlinks a:hover { color: var(--ob-text); background: var(--ob-raised); }
+  .ob-navlinks a {
+    position: relative;
+  }
+  .ob-navlinks a::after {
+    content: "";
+    position: absolute;
+    left: 10px; right: 10px; bottom: 2px;
+    height: 1.5px;
+    background: var(--ob-mint);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform .25s ease;
+  }
+  .ob-navlinks a.on { color: var(--ob-mint); }
+  .ob-navlinks a.on::after { transform: scaleX(1); }
+  @media (prefers-reduced-motion: reduce) { .ob-navlinks a::after { transition: none; } }
   @media (max-width: 860px) { .ob-navlinks { display: none; } }
 
   /* ---------- hero ---------- */
@@ -556,6 +599,17 @@
     display: block; pointer-events: none; opacity: .8;
   }
   .ob-hero .ob-wrap { position: relative; z-index: 1; }
+
+  .ob-hero-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 44px;
+    align-items: center;
+  }
+  @media (min-width: 980px) {
+    .ob-hero-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr); gap: 56px; }
+  }
+  .ob-hero-visual { min-width: 0; }
 
   .ob-pill {
     display: inline-flex;
@@ -597,16 +651,37 @@
     font-size: clamp(16px, 1.6vw, 18.5px);
     color: var(--ob-text2);
   }
-  .ob-metarow {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px 26px;
-    margin-top: 28px;
+  .ob-stattiles {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 32px;
+    max-width: 420px;
+  }
+  .ob-stattile {
+    background: linear-gradient(180deg, rgba(255, 255, 255, .025), transparent 70%), var(--ob-panel);
+    border: 1px solid var(--ob-border);
+    border-radius: 11px;
+    padding: 14px 16px;
+  }
+  .ob-stattile b {
+    display: block;
     font-family: var(--ob-mono);
-    font-size: 12px;
+    font-size: 27px;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    color: var(--ob-mint);
+    font-variant-numeric: tabular-nums;
+  }
+  .ob-stattile span {
+    display: block;
+    margin-top: 3px;
+    font-family: var(--ob-mono);
+    font-size: 10.5px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
     color: var(--ob-dim);
   }
-  .ob-metarow b { color: var(--ob-text2); font-weight: 600; font-variant-numeric: tabular-nums; }
 
   /* ---------- footer ---------- */
   .ob-footer {
@@ -629,6 +704,85 @@
   .ob-rev { opacity: 0; transform: translateY(14px); transition: opacity .55s ease, transform .55s ease; }
   .ob-rev.in { opacity: 1; transform: none; }
   @media (prefers-reduced-motion: reduce) { .ob-rev { opacity: 1; transform: none; } }
+
+  /* staggered card reveal: each .ob-card inside a revealed section fades in
+     on its own short delay (index set as --i by JS), instead of the whole
+     grid appearing as one block */
+  .ob-rev .ob-card, .ob-rev .ob-problem, .ob-rev .ob-int, .ob-rev .ob-stackrow, .ob-rev .ob-catgroup, .ob-rev .ob-logo, .ob-rev .ob-stattile {
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity .45s ease, transform .45s ease;
+    transition-delay: calc(var(--i, 0) * 45ms);
+  }
+  .ob-rev.in .ob-card, .ob-rev.in .ob-problem, .ob-rev.in .ob-int, .ob-rev.in .ob-stackrow, .ob-rev.in .ob-catgroup, .ob-rev.in .ob-logo, .ob-rev.in .ob-stattile {
+    opacity: 1;
+    transform: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ob-rev .ob-card, .ob-rev .ob-problem, .ob-rev .ob-int, .ob-rev .ob-stackrow, .ob-rev .ob-catgroup, .ob-rev .ob-logo, .ob-rev .ob-stattile {
+      opacity: 1; transform: none; transition: none;
+    }
+  }
+
+
+  /* connector flow-pulse: a moving highlight travelling along the vertical
+     bar between Web / Engines / Agent, echoing "data moves between layers" */
+  .ob-connector { position: relative; overflow: hidden; }
+  .ob-connector::before, .ob-connector::after { z-index: 0; }
+  .ob-connector .pulse {
+    position: absolute;
+    left: 50%; top: -6px;
+    width: 5px; height: 5px;
+    margin-left: -2.5px;
+    border-radius: 50%;
+    background: var(--ob-mint);
+    box-shadow: 0 0 8px 1px rgba(55, 223, 160, .7);
+    animation: ob-flow 2.6s cubic-bezier(.4,0,.2,1) infinite;
+  }
+  .ob-connector.d2 .pulse { animation-delay: 1.3s; }
+  @keyframes ob-flow {
+    0% { top: -6px; opacity: 0; }
+    12% { opacity: 1; }
+    88% { opacity: 1; }
+    100% { top: 100%; opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) { .ob-connector .pulse { display: none; } }
+
+  /* screenshot lightbox */
+  .ob-shot { cursor: zoom-in; }
+  .ob-lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: rgba(4, 5, 6, .88);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 5vh 4vw;
+    backdrop-filter: blur(3px);
+  }
+  .ob-lightbox.open { display: flex; }
+  .ob-lightbox img {
+    max-width: 100%;
+    max-height: 90vh;
+    border-radius: 10px;
+    border: 1px solid var(--ob-border);
+    box-shadow: 0 40px 90px -30px rgba(0, 0, 0, .9);
+  }
+  .ob-lightbox-close {
+    position: absolute;
+    top: 18px; right: 22px;
+    width: 38px; height: 38px;
+    border-radius: 9px;
+    background: var(--ob-panel);
+    border: 1px solid var(--ob-border);
+    color: var(--ob-text2);
+    font-family: var(--ob-mono);
+    font-size: 16px;
+    cursor: pointer;
+  }
+  .ob-lightbox-close:hover { color: var(--ob-text); border-color: #2C323C; }
+  @media (prefers-reduced-motion: reduce) { .ob-lightbox { backdrop-filter: none; } }
 </style>
 
 <div class="ob-root">
@@ -661,34 +815,38 @@
   <!-- ============ hero ============ -->
   <section class="ob-hero" id="top">
     <canvas id="ob-orbit-canvas" aria-hidden="true"></canvas>
-    <div class="ob-wrap">
-      <span class="ob-pill"><span class="ob-livedot"></span>Agent connected</span>
+    <div class="ob-wrap ob-hero-grid">
+      <div class="ob-hero-copy">
+        <span class="ob-pill"><span class="ob-livedot"></span>Agent connected</span>
 
-      <h1 class="ob-h1">Your personal developer <em>command center</em>.</h1>
+        <h1 class="ob-h1">Your personal developer <em>command center</em>.</h1>
 
-      <p class="ob-herolede">
-        One place to launch every project, track tickets, tasks and time, run your
-        Start&#8209;Work macro, and see it all in a control-room UI — with a local agent
-        that reaches the things a browser cannot.
-      </p>
+        <p class="ob-herolede">
+          One place to launch every project, track tickets, tasks and time, run your
+          Start&#8209;Work macro, and see it all in a control-room UI — with a local agent
+          that reaches the things a browser cannot.
+        </p>
 
-      <div class="ob-metarow">
-        <span><b>23</b> live modules</span>
-        <span><b>4</b> engines</span>
-        <span><b>14</b> integrations</span>
-        <span><b>77</b> agent endpoints</span>
+        <div class="ob-stattiles" id="ob-stats">
+          <div class="ob-stattile"><b data-count="23">23</b><span>live modules</span></div>
+          <div class="ob-stattile"><b data-count="4">4</b><span>engines</span></div>
+          <div class="ob-stattile"><b data-count="14">14</b><span>integrations</span></div>
+          <div class="ob-stattile"><b data-count="77">77</b><span>agent endpoints</span></div>
+        </div>
       </div>
 
-      <figure class="ob-fig">
-        <div class="ob-shot">
-          <div class="ob-shot-bar"><i></i><i></i><i></i><span>orbit — home</span></div>
-          <img {{IMG:dashboard}} alt="The ORBIT dashboard: a greeting with the date and weather, stat tiles for active projects, Orbit hours, Zoho hours and containers up, and a row of project bays each with launch buttons." loading="lazy">
-        </div>
-        <figcaption>
-          The dashboard on opening: a time-of-day greeting with today's weather, four live stat tiles, and
-          <b>project bays</b> — each project one click from opening its UI, backend or everything at once.
-        </figcaption>
-      </figure>
+      <div class="ob-hero-visual">
+        <figure class="ob-fig" style="margin-top:0">
+          <div class="ob-shot">
+            <div class="ob-shot-bar"><i></i><i></i><i></i><span>orbit — home</span></div>
+            <img {{IMG:dashboard}} alt="The ORBIT dashboard: a greeting with the date and weather, stat tiles for active projects, Orbit hours, Zoho hours and containers up, and a row of project bays each with launch buttons." loading="lazy">
+          </div>
+          <figcaption>
+            The dashboard on opening: a time-of-day greeting with today's weather, four live stat tiles, and
+            <b>project bays</b> — each project one click from opening its UI, backend or everything at once.
+          </figcaption>
+        </figure>
+      </div>
     </div>
   </section>
 
@@ -1072,7 +1230,7 @@
           </div>
         </div>
 
-        <div class="ob-connector">authenticated session · realtime</div>
+        <div class="ob-connector"><span class="pulse" aria-hidden="true"></span>authenticated session · realtime</div>
 
         <div class="ob-layer">
           <div class="ob-layer-id">
@@ -1098,7 +1256,7 @@
           </div>
         </div>
 
-        <div class="ob-connector">local http · 127.0.0.1</div>
+        <div class="ob-connector d2"><span class="pulse" aria-hidden="true"></span>local http · 127.0.0.1</div>
 
         <div class="ob-layer">
           <div class="ob-layer-id">
@@ -1195,33 +1353,33 @@
         Settings with your own credentials, then verified continuously on the Health screen.
       </p>
 
-      <div class="ob-ints">
-        <div class="ob-int" style="--brand:#ffffff">{{ICON:github}}GitHub</div>
-        <div class="ob-int" style="--brand:#FC6D26">{{ICON:gitlab}}GitLab</div>
-        <div class="ob-int"><span class="mono">AZ</span>Azure DevOps</div>
-        <div class="ob-int" style="--brand:#C8202F">{{ICON:zoho}}Zoho Sprints</div>
-        <div class="ob-int" style="--brand:#8C5393">{{ICON:sentry}}Sentry</div>
-        <div class="ob-int"><span class="mono">MT</span>Microsoft Teams</div>
-        <div class="ob-int" style="--brand:#EA4335">{{ICON:gmail}}Gmail</div>
-        <div class="ob-int" style="--brand:#2496ED">{{ICON:docker}}Docker</div>
-        <div class="ob-int" style="--brand:#4169E1">{{ICON:postgresql}}PostgreSQL</div>
-        <div class="ob-int" style="--brand:#00C7B7">{{ICON:netlify}}Netlify</div>
-        <div class="ob-int" style="--brand:#ffffff">{{ICON:vercel}}Vercel</div>
-        <div class="ob-int"><span class="mono">AW</span>AWS cost</div>
-        <div class="ob-int"><span class="mono">VS</span>VS Code</div>
-        <div class="ob-int"><span class="mono">VI</span>Visual Studio</div>
+      <div class="ob-logowall">
+        <div class="ob-logo" style="--brand:#ffffff">{{ICON:github}}GitHub</div>
+        <div class="ob-logo" style="--brand:#FC6D26">{{ICON:gitlab}}GitLab</div>
+        <div class="ob-logo"><span class="mono">AZ</span>Azure DevOps</div>
+        <div class="ob-logo" style="--brand:#C8202F">{{ICON:zoho}}Zoho Sprints</div>
+        <div class="ob-logo" style="--brand:#8C5393">{{ICON:sentry}}Sentry</div>
+        <div class="ob-logo"><span class="mono">MT</span>Microsoft Teams</div>
+        <div class="ob-logo" style="--brand:#EA4335">{{ICON:gmail}}Gmail</div>
+        <div class="ob-logo" style="--brand:#2496ED">{{ICON:docker}}Docker</div>
+        <div class="ob-logo" style="--brand:#4169E1">{{ICON:postgresql}}PostgreSQL</div>
+        <div class="ob-logo" style="--brand:#00C7B7">{{ICON:netlify}}Netlify</div>
+        <div class="ob-logo" style="--brand:#ffffff">{{ICON:vercel}}Vercel</div>
+        <div class="ob-logo"><span class="mono">AW</span>AWS cost</div>
+        <div class="ob-logo"><span class="mono">VS</span>VS Code</div>
+        <div class="ob-logo"><span class="mono">VI</span>Visual Studio</div>
       </div>
 
-      <div class="ob-grouphead" style="margin-top:34px;margin-bottom:0">
+      <div class="ob-grouphead" style="margin-top:38px;margin-bottom:0">
         <h3>Models</h3>
         <span>Bring your own key, or run the local model for free.</span>
       </div>
-      <div class="ob-ints" style="margin-top:14px">
-        <div class="ob-int" style="--brand:#D97757">{{ICON:anthropic}}Claude</div>
-        <div class="ob-int" style="--brand:#8E75F8">{{ICON:googlegemini}}Gemini</div>
-        <div class="ob-int"><span class="mono">AI</span>OpenAI</div>
-        <div class="ob-int"><span class="mono">GR</span>Grok</div>
-        <div class="ob-int" style="--brand:#37DFA0"><span class="mono">LO</span>Local model</div>
+      <div class="ob-logowall" style="margin-top:16px">
+        <div class="ob-logo" style="--brand:#D97757">{{ICON:anthropic}}Claude</div>
+        <div class="ob-logo" style="--brand:#8E75F8">{{ICON:googlegemini}}Gemini</div>
+        <div class="ob-logo"><span class="mono">AI</span>OpenAI</div>
+        <div class="ob-logo"><span class="mono">GR</span>Grok</div>
+        <div class="ob-logo" style="--brand:#37DFA0"><span class="mono">LO</span>Local model</div>
       </div>
 
       <p class="ob-intnote">
@@ -1370,98 +1528,87 @@
         overlay that ownership without replacing it.
       </p>
 
-      <div class="ob-erd">
-        <div class="ob-tbl">
-          <h4><em>public.</em>users</h4>
-          <ul>
-            <li><i class="k pk">PK</i>id<span class="ty">uuid</span></li>
-            <li><i class="k uq">UQ</i>email<span class="ty">text</span></li>
-            <li>password_hash<span class="ty">text</span></li>
-            <li>full_name<span class="ty">text</span></li>
-            <li>email_verified<span class="ty">bool</span></li>
-            <li>lockout_until<span class="ty">timestamptz</span></li>
-          </ul>
-        </div>
+      <div class="ob-erd-wrap">
+        <pre class="ob-erd-src">%%{init: {'theme':'base', 'themeVariables': {
+  'background':'#0C0E11',
+  'primaryColor':'#16191F',
+  'primaryTextColor':'#ECEEF2',
+  'primaryBorderColor':'#2C323C',
+  'lineColor':'#37DFA0',
+  'secondaryColor':'#0C0E11',
+  'tertiaryColor':'#0C0E11'
+}, 'er': {
+  'entityPadding': 20,
+  'minEntityWidth': 130
+}}}%%
+erDiagram
+  users {
+    uuid id PK
+    text email UK
+    text password_hash
+    text full_name
+    bool email_verified
+  }
+  teams {
+    uuid id PK
+    text name
+    uuid owner_id FK
+  }
+  team_members {
+    uuid team_id "PK,FK"
+    uuid user_id "PK,FK"
+    text role
+  }
+  projects {
+    uuid id PK
+    uuid user_id FK
+    uuid team_id FK
+    text name
+    text status
+  }
+  tasks {
+    uuid id PK
+    uuid user_id FK
+    uuid project_id FK
+    uuid team_id FK
+    text status
+    text priority
+  }
+  tickets {
+    uuid id PK
+    uuid user_id FK
+    uuid project_id FK
+    text zoho_id UK
+    text status
+  }
+  time_entries {
+    uuid id PK
+    uuid user_id FK
+    uuid project_id FK
+    uuid task_id FK
+    int seconds
+  }
 
-        <div class="ob-tbl">
-          <h4><em>public.</em>teams</h4>
-          <ul>
-            <li><i class="k pk">PK</i>id<span class="ty">uuid</span></li>
-            <li>name<span class="ty">text</span></li>
-            <li><i class="k fk">FK</i>owner_id<span class="ty">users</span></li>
-            <li>created_at<span class="ty">timestamptz</span></li>
-          </ul>
-        </div>
-
-        <div class="ob-tbl">
-          <h4><em>public.</em>team_members</h4>
-          <ul>
-            <li><i class="k pk">PK</i>team_id<span class="ty">teams</span></li>
-            <li><i class="k pk">PK</i>user_id<span class="ty">users</span></li>
-            <li>role<span class="ty">owner · admin · member · viewer</span></li>
-          </ul>
-        </div>
-
-        <div class="ob-tbl">
-          <h4><em>public.</em>projects</h4>
-          <ul>
-            <li><i class="k pk">PK</i>id<span class="ty">uuid</span></li>
-            <li><i class="k fk">FK</i>user_id<span class="ty">users</span></li>
-            <li><i class="k fk">FK</i>team_id<span class="ty">teams · null</span></li>
-            <li>name · client<span class="ty">text</span></li>
-            <li>stacks<span class="ty">text[]</span></li>
-            <li>status<span class="ty">active · hold · archived</span></li>
-            <li>fe_path · sln_path<span class="ty">text</span></li>
-            <li>repo_provider<span class="ty">github · gitlab · ado</span></li>
-            <li>sprint_project_id<span class="ty">text</span></li>
-          </ul>
-        </div>
-
-        <div class="ob-tbl">
-          <h4><em>public.</em>tasks</h4>
-          <ul>
-            <li><i class="k pk">PK</i>id<span class="ty">uuid</span></li>
-            <li><i class="k fk">FK</i>user_id<span class="ty">users</span></li>
-            <li><i class="k fk">FK</i>project_id<span class="ty">projects</span></li>
-            <li><i class="k fk">FK</i>team_id<span class="ty">teams · null</span></li>
-            <li>status<span class="ty">todo · doing · review · done</span></li>
-            <li>priority<span class="ty">low · med · high</span></li>
-            <li>estimate_minutes<span class="ty">int</span></li>
-            <li>completed_at<span class="ty">timestamptz</span></li>
-          </ul>
-        </div>
-
-        <div class="ob-tbl">
-          <h4><em>public.</em>tickets</h4>
-          <ul>
-            <li><i class="k pk">PK</i>id<span class="ty">uuid</span></li>
-            <li><i class="k fk">FK</i>user_id<span class="ty">users</span></li>
-            <li><i class="k fk">FK</i>project_id<span class="ty">projects</span></li>
-            <li><i class="k uq">UQ</i>zoho_id<span class="ty">per user</span></li>
-            <li>priority · status<span class="ty">text</span></li>
-            <li>ai_note<span class="ty">text</span></li>
-          </ul>
-        </div>
-
-        <div class="ob-tbl">
-          <h4><em>public.</em>time_entries</h4>
-          <ul>
-            <li><i class="k pk">PK</i>id<span class="ty">uuid</span></li>
-            <li><i class="k fk">FK</i>user_id<span class="ty">users</span></li>
-            <li><i class="k fk">FK</i>project_id<span class="ty">projects</span></li>
-            <li><i class="k fk">FK</i>task_id<span class="ty">tasks</span></li>
-            <li>started_at · ended_at<span class="ty">timestamptz</span></li>
-            <li>seconds<span class="ty">int</span></li>
-          </ul>
-        </div>
+  users ||--o{ teams : owns
+  users ||--o{ team_members : joins
+  teams ||--o{ team_members : has
+  users ||--o{ projects : owns
+  teams |o--o{ projects : shares
+  users ||--o{ tasks : owns
+  projects |o--o{ tasks : contains
+  teams |o--o{ tasks : shares
+  users ||--o{ tickets : files
+  projects |o--o{ tickets : contains
+  users ||--o{ time_entries : logs
+  projects |o--o{ time_entries : tracks
+  tasks |o--o{ time_entries : "logged against"</pre>
       </div>
-
-      <div class="ob-rels">
-        <code>users.id <em>←</em> projects.user_id <em>· on delete cascade</em></code>
-        <code>projects.id <em>←</em> tasks.project_id, tickets.project_id, time_entries.project_id <em>· on delete set null</em></code>
-        <code>tasks.id <em>←</em> time_entries.task_id <em>· so an estimate can be compared with logged time</em></code>
-        <code>teams.id <em>←</em> projects.team_id, tasks.team_id <em>· null until you deliberately share</em></code>
-      </div>
+      <p class="ob-erd-legend">
+        <span><i class="k pk">PK</i>primary key</span>
+        <span><i class="k fk">FK</i>foreign key</span>
+        <span><i class="k uq">UK</i>unique</span>
+        <span>Lines read as "exactly one" (double bar) or "zero or one" (circle) on the parent side, "zero or many" (crow's foot) on the child side — matching each column's actual nullability in the schema.</span>
+      </p>
 
       <p class="ob-note">
         <b>Deleting a user removes their world.</b> Ownership cascades, but the links between records
@@ -1627,11 +1774,37 @@
     </div>
   </footer>
 
+  <div class="ob-lightbox" id="ob-lightbox" role="dialog" aria-modal="true" aria-label="Screenshot, enlarged">
+    <button class="ob-lightbox-close" id="ob-lightbox-close" type="button" aria-label="Close">&#10005;</button>
+    <img id="ob-lightbox-img" src="" alt="">
+  </div>
+
 </div>
 
+{{VENDOR:mermaid}}
 <script>
   (function () {
     var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    /* ---- schema ER diagram: explicit render, not the library's own
+       class="mermaid" auto-start (left off on purpose so there is exactly
+       one, deliberate render path — see docs/build-overview.mjs) ---- */
+    if (window.mermaid && document.querySelector(".ob-erd-src")) {
+      try {
+        window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
+        window.mermaid.run({ querySelector: ".ob-erd-src" }).then(function () {
+          // Mermaid ships width="100%" + a max-width cap, so it shrinks the
+          // whole diagram (text included) to fit a narrow viewport instead
+          // of staying legible. Pin it to its natural size instead and let
+          // .ob-erd-wrap's own overflow-x:auto scroll it on small screens.
+          var svg = document.querySelector(".ob-erd-wrap svg");
+          if (svg && svg.style.maxWidth) {
+            svg.style.width = svg.style.maxWidth;
+            svg.style.maxWidth = "none";
+          }
+        }).catch(function () {});
+      } catch (e) { /* leave the raw diagram source visible as a fallback */ }
+    }
 
     /* ---- hero orbit field ---- */
     var cv = document.getElementById("ob-orbit-canvas");
@@ -1705,8 +1878,13 @@
       window.addEventListener("resize", function () { size(); if (reduce) draw(0); });
     }
 
-    /* ---- scroll reveal ---- */
+    /* ---- scroll reveal (+ per-card stagger index) ---- */
     var revs = document.querySelectorAll(".ob-rev");
+    var STAGGER_SEL = ".ob-card, .ob-problem, .ob-int, .ob-stackrow, .ob-catgroup, .ob-logo, .ob-stattile";
+    revs.forEach(function (section) {
+      var items = section.querySelectorAll(STAGGER_SEL);
+      for (var n = 0; n < items.length; n++) items[n].style.setProperty("--i", n % 12);
+    });
     if (!("IntersectionObserver" in window) || reduce) {
       for (var i = 0; i < revs.length; i++) revs[i].classList.add("in");
     } else {
@@ -1717,5 +1895,90 @@
       }, { rootMargin: "0px 0px -6% 0px", threshold: 0.03 });
       for (var j = 0; j < revs.length; j++) io.observe(revs[j]);
     }
+
+    /* ---- scrollspy: highlight the nav link for the section in view ----
+       Deliberately not IntersectionObserver here: with sections of very
+       different heights (Workspace is huge, Engines is short), a rootMargin
+       band can end up straddling two sections at once, and a "some section
+       became visible" observer has no natural place to clear a stale active
+       link when nothing newly intersects. Simpler and correct: on scroll,
+       pick the last section whose top has crossed above a fixed reference
+       line just under the sticky topbar. */
+    var pairs = [].slice.call(document.querySelectorAll(".ob-navlinks a"))
+      .map(function (a) { return { link: a, section: document.querySelector(a.getAttribute("href")) }; })
+      .filter(function (p) { return p.section; });
+    if (pairs.length) {
+      var spyTicking = false;
+      var updateSpy = function () {
+        spyTicking = false;
+        var line = 64; // just under the 52px sticky topbar
+        var active = null;
+        for (var k = 0; k < pairs.length; k++) {
+          if (pairs[k].section.getBoundingClientRect().top <= line) active = pairs[k];
+        }
+        pairs.forEach(function (p) { p.link.classList.toggle("on", p === active); });
+      };
+      window.addEventListener("scroll", function () {
+        if (!spyTicking) { spyTicking = true; requestAnimationFrame(updateSpy); }
+      }, { passive: true });
+      window.addEventListener("resize", updateSpy);
+      updateSpy();
+    }
+
+    /* ---- count-up hero stats ---- */
+    var stats = document.querySelectorAll("#ob-stats [data-count]");
+    if (stats.length && !reduce && "IntersectionObserver" in window) {
+      var countUp = function (el) {
+        var target = parseInt(el.getAttribute("data-count"), 10) || 0;
+        var start = performance.now(), dur = 900;
+        function tick(now) {
+          var p = Math.min(1, (now - start) / dur);
+          var eased = 1 - Math.pow(1 - p, 3);
+          el.textContent = Math.round(eased * target);
+          if (p < 1) requestAnimationFrame(tick);
+          else el.textContent = target;
+        }
+        requestAnimationFrame(tick);
+      };
+      var statObs = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) { countUp(e.target); statObs.unobserve(e.target); }
+        });
+      }, { threshold: 0.6 });
+      stats.forEach(function (el) { statObs.observe(el); });
+    }
+
+    /* ---- click-to-zoom screenshots ---- */
+    var lightbox = document.getElementById("ob-lightbox");
+    var lbImg = document.getElementById("ob-lightbox-img");
+    var lastFocus = null;
+    function openLightbox(shot) {
+      var img = shot.querySelector("img");
+      if (!img) return;
+      lbImg.src = img.src;
+      lbImg.alt = img.alt || "";
+      lastFocus = shot;
+      lightbox.classList.add("open");
+      document.getElementById("ob-lightbox-close").focus();
+    }
+    function closeLightbox() {
+      lightbox.classList.remove("open");
+      lbImg.src = "";
+      if (lastFocus) lastFocus.focus();
+    }
+    document.querySelectorAll(".ob-shot").forEach(function (shot) {
+      shot.setAttribute("tabindex", "0");
+      shot.setAttribute("role", "button");
+      shot.setAttribute("aria-label", "Enlarge screenshot");
+      shot.addEventListener("click", function () { openLightbox(shot); });
+      shot.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openLightbox(shot); }
+      });
+    });
+    document.getElementById("ob-lightbox-close").addEventListener("click", closeLightbox);
+    lightbox.addEventListener("click", function (e) { if (e.target === lightbox) closeLightbox(); });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && lightbox.classList.contains("open")) closeLightbox();
+    });
   })();
 </script>

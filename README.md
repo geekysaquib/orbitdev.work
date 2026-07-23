@@ -78,17 +78,18 @@ from the Projects tab.
 
 ```bash
 cd agent && npm install
-cp agent-config.example.json agent-config.json   # paste the SAME SUPABASE_JWT_SECRET from §3
 npm start                                         # http://localhost:47600
 ```
 
-The agent verifies your ORBIT session token on every call, so Postgres servers,
-Gmail credentials, and dev-server tracking are scoped per signed-in user —
-two people running ORBIT against the same agent don't see each other's data
-(Docker is the exception; it's whatever's running on that machine). The
+Nothing to configure — the agent verifies your ORBIT session token on every
+call by asking ORBIT's own API (it never holds a secret itself), so Postgres
+servers, Gmail credentials, and dev-server tracking are scoped per signed-in
+user — two people running ORBIT against the same agent don't see each other's
+data (Docker is the exception; it's whatever's running on that machine). The
 topbar pill shows "Agent connected" once it's up (that's just `/ping`, which
-doesn't need auth) — see `agent/README.md` for the auth setup, HTTPS/mkcert,
-and how to swap in a .NET agent.
+doesn't need auth). Pointing a local build at a different deployment (e.g.
+`netlify dev` on `:8888`) instead of production needs an `apiBase` override —
+see `agent/README.md` for that, HTTPS/mkcert, and how to swap in a .NET agent.
 
 ## 6. Zoho Sprints (work items)
 
