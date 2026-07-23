@@ -3,6 +3,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ErrorBoundary } from "./ErrorBoundary";
 
+const captureException = vi.fn();
+vi.mock("@sentry/react", () => ({ captureException: (...a: unknown[]) => captureException(...a) }));
+
 function Bomb(): never {
   throw new Error("boom");
 }
@@ -14,6 +17,7 @@ beforeEach(() => {
   // boundary catches something — expected noise for these tests, silenced
   // so it doesn't look like an unexpected failure in test output.
   consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  captureException.mockReset();
 });
 afterEach(() => { consoleErrorSpy.mockRestore(); }); // DOM cleanup between renders is global — see src/testSetup.ts
 
@@ -35,6 +39,14 @@ describe("ErrorBoundary", () => {
       "[ORBIT] Unhandled render error",
       expect.any(Error),
       expect.anything(),
+    );
+  });
+
+  it("reports the caught error to Sentry", () => {
+    render(<ErrorBoundary><Bomb /></ErrorBoundary>);
+    expect(captureException).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "boom" }),
+      expect.objectContaining({ contexts: expect.objectContaining({ react: expect.anything() }) }),
     );
   });
 

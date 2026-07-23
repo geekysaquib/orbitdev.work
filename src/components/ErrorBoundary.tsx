@@ -1,4 +1,5 @@
 import { Component, useState, type ErrorInfo, type ReactNode } from "react";
+import * as Sentry from "@sentry/react";
 import { Icon } from "../lib/icons";
 
 interface Props { children: ReactNode }
@@ -16,10 +17,11 @@ interface State { error: Error | null }
  * Recovery is a hard reload, not an in-place retry — safer than risking a
  * re-render into the same broken state.
  *
- * Error reporting is NOT wired to Sentry here — `componentDidCatch` only
- * console.errors for now, matching this codebase's existing best-effort
- * logging convention elsewhere. Wiring Sentry (and reporting from here) is
- * the next RC1 task, not this one.
+ * `Sentry.captureException` is safe to call even if `initErrorReporting()`
+ * (src/lib/errorReporting.ts, RC1 task 2) never ran — e.g. local dev with no
+ * VITE_SENTRY_DSN set — the SDK just no-ops. console.error stays alongside
+ * it, not replaced by it: dev-tools visibility shouldn't depend on Sentry
+ * being configured.
  */
 export class ErrorBoundary extends Component<Props, State> {
   state: State = { error: null };
@@ -30,6 +32,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("[ORBIT] Unhandled render error", error, info.componentStack);
+    Sentry.captureException(error, { contexts: { react: { componentStack: info.componentStack ?? undefined } } });
   }
 
   render() {
