@@ -104,9 +104,10 @@ export async function computeProjectHealth(project: Project): Promise<ProjectHea
 
   if (project.sprint_project_id) {
     try {
-      const board = await fetchSprintBoard(project.sprint_project_id);
-      signals.push(bugsSignal(board.sprints));
-      const velocity = velocitySignal(board.sprints);
+      const r = await fetchSprintBoard(project.sprint_project_id);
+      if (!r.ok) throw new Error(r.error);
+      signals.push(bugsSignal(r.data.sprints));
+      const velocity = velocitySignal(r.data.sprints);
       if (velocity) signals.push(velocity);
     } catch { /* Zoho not connected / reachable — skip sprint-based signals */ }
   }

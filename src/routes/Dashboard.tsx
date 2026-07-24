@@ -165,8 +165,12 @@ export default function Dashboard() {
   }, [agentStatus]);
   useEffect(() => {
     if (zoho.status !== "connected") { setBugs(null); setHoursToday(null); return; }
-    fetchZohoTickets().then((items) => setBugs(items.filter((i) => (i.type || "").toLowerCase() === "bug" && !/done|closed|resolved/i.test(i.status)).length)).catch(() => setBugs(null));
-    fetchTimesheet().then((t) => { const k = new Date().toISOString().slice(0, 10); setHoursToday(t.byDate[k] ?? 0); }).catch(() => setHoursToday(null));
+    fetchZohoTickets().then((r) => setBugs(r.ok ? r.data.filter((i) => (i.type || "").toLowerCase() === "bug" && !/done|closed|resolved/i.test(i.status)).length : null));
+    fetchTimesheet().then((r) => {
+      if (!r.ok) { setHoursToday(null); return; }
+      const k = new Date().toISOString().slice(0, 10);
+      setHoursToday(r.data.byDate[k] ?? 0);
+    });
   }, [zoho.status]);
 
   // The Sprints board for a chosen Zoho-linked project. `linkedProjects` is
@@ -189,8 +193,7 @@ export default function Dashboard() {
     let cancelled = false;
     setBoardLoading(true);
     fetchSprintBoard(p.sprint_project_id)
-      .then((b) => { if (!cancelled) setBoard(b); })
-      .catch(() => { if (!cancelled) setBoard(null); })
+      .then((r) => { if (!cancelled) setBoard(r.ok ? r.data : null); })
       .finally(() => { if (!cancelled) setBoardLoading(false); });
     return () => { cancelled = true; };
   }, [boardProjectId, projects]);

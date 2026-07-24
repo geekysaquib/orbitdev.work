@@ -16,7 +16,7 @@
  * context to spend.
  */
 import { supabase } from "./supabase";
-import { fetchZohoStatus, fetchSprintBoard, fetchTimesheet, isOpenBug } from "./zoho";
+import { fetchZohoStatus, fetchSprintBoard, fetchTimesheet, isOpenBug, type Board } from "./zoho";
 import { fetchOrbitHours } from "./orbitHours";
 import { ttlCache } from "./cache";
 import type { Project, Ticket, Task } from "./types";
@@ -35,7 +35,7 @@ const SUPA_TTL = 30_000;      // cheap — keep it fresh
 const ZOHO_TTL = 5 * 60_000;  // the slow leg — cache hard
 
 interface SupaSlice { projects: Project[]; tickets: Ticket[]; tasks: Task[]; orbit: { todayH: number; totalH: number } | null }
-interface ZohoSlice { connected: boolean; todayHours: number | null; boards: { project: Project; board: Awaited<ReturnType<typeof fetchSprintBoard>> }[] }
+interface ZohoSlice { connected: boolean; todayHours: number | null; boards: { project: Project; board: Board }[] }
 
 async function loadSupa(): Promise<SupaSlice> {
   const [{ data: projects }, { data: tickets }, { data: tasks }, orbit] = await Promise.all([
@@ -54,15 +54,16 @@ async function loadZoho(active: Project[]): Promise<ZohoSlice> {
   const status = await fetchZohoStatus().catch(() => ({ connected: false }));
   if (!status.connected) return { connected: false, todayHours: null, boards: [] };
 
-  const timesheet = await fetchTimesheet().catch(() => null);
+  const timesheetRes = await fetchTimesheet();
+  const timesheet = timesheetRes.ok ? timesheetRes.data : null;
   const today = new Date().toISOString().slice(0, 10);
   const todayHours = timesheet ? (timesheet.byDate[today] ?? 0) : null;
 
   const linked = active.filter((p) => p.sprint_project_id);
   const boards = await Promise.all(
     linked.slice(0, 4).map(async (p) => {
-      try { return { project: p, board: await fetchSprintBoard(p.sprint_project_id!) }; }
-      catch { return null; }
+      const r = await fetchSprintBoard(p.sprint_project_id!);
+      return r.ok ? { project: p, board: r.data } : null;
     }),
   );
   return { connected: true, todayHours, boards: boards.filter((b): b is NonNullable<typeof b> => b !== null) };

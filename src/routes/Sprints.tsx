@@ -54,7 +54,9 @@ export default function Sprints() {
 
   useEffect(() => {
     fetchSprintProjects()
-      .then((p) => {
+      .then((r) => {
+        if (!r.ok) { setErr(r.error); return; }
+        const p = r.data;
         setProjects(p);
         // Defer to ?project= when it names a real one, rather than selecting the
         // first and letting the effect below correct it — that would fetch a board
@@ -62,7 +64,6 @@ export default function Sprints() {
         const pre = wantProject && p.some((x) => x.id === wantProject) ? wantProject : p[0]?.id;
         if (pre) setSel(pre);
       })
-      .catch((e) => setErr((e as Error).message))
       .finally(() => setLoadingP(false));
   }, []); // eslint-disable-line — first load only; ?project= changes are handled below
 
@@ -88,8 +89,7 @@ export default function Sprints() {
     if (!sel) return;
     setLoadingB(true); setBoard(null); setSprintIdx(0); setThumbs({});
     fetchSprintBoard(sel)
-      .then(setBoard)
-      .catch((e) => toast((e as Error).message))
+      .then((r) => { if (r.ok) setBoard(r.data); else toast(r.error); })
       .finally(() => setLoadingB(false));
   }, [sel]);
 
@@ -103,7 +103,7 @@ export default function Sprints() {
     if (!sel || !sprint) return;
     const hasDocs = sprint.items.some((i) => i.hasDocs);
     if (!hasDocs) return;
-    fetchThumbs(sel, sprint.id).then(setThumbs).catch(() => {});
+    fetchThumbs(sel, sprint.id).then((r) => { if (r.ok) setThumbs(r.data); });
   }, [sel, sprint]);
 
   const types = useMemo(() => Array.from(new Set((sprint?.items ?? []).map((i) => i.type).filter(Boolean))) as string[], [sprint]);
@@ -274,7 +274,7 @@ function ItemModal({ projectId, sprintId, itemId, onClose }: { projectId: string
   const [lbError, setLbError] = useState(false);
   useEffect(() => { if (lightbox) { setLbLoaded(false); setLbError(false); } }, [lightbox]);
   useEffect(() => {
-    fetchItemDetail(projectId, sprintId, itemId).then(setData).catch(() => setData(null)).finally(() => setLoading(false));
+    fetchItemDetail(projectId, sprintId, itemId).then((r) => setData(r.ok ? r.data : null)).finally(() => setLoading(false));
   }, [projectId, sprintId, itemId]);
   const it = data?.item;
   const ty = typeStyle(it?.type || "");

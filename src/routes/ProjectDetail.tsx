@@ -60,7 +60,7 @@ export default function ProjectDetail() {
   const myId = getUser()?.id;
   const myRoleByTeam = useMyTeamRoles();
 
-  useEffect(() => { fetchSprintProjects().then(setSprintProjects).catch(() => {}); }, []);
+  useEffect(() => { fetchSprintProjects().then((r) => { if (r.ok) setSprintProjects(r.data); }); }, []);
   useEffect(() => { listMyTeams().then(setTeams); }, []);
 
   const setPresenceDetail = usePresenceDetail();

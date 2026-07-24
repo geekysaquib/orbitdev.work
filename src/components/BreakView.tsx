@@ -237,8 +237,9 @@ export function BreakView({ onEnd, timerPaused, startedAt, projects, tasks, zoho
           let fromZoho = false;
           if (!linked.length) {
             try {
-              const sp = await fetchSprintProjects();
-              linked = sp
+              const r = await fetchSprintProjects();
+              if (!r.ok) throw new Error(r.error);
+              linked = r.data
                 .filter((x) => !/complet|closed|archiv/i.test(x.status || ""))
                 .slice(0, 8)
                 .map((x) => ({ id: x.id, name: x.name }));
@@ -254,8 +255,9 @@ export function BreakView({ onEnd, timerPaused, startedAt, projects, tasks, zoho
           let soonest: { name: string; days: number; open: number } | null = null;
           for (const p of linked) {
             try {
-              const board = await fetchSprintBoard(p.id);
-              for (const sp of board.sprints) {
+              const r = await fetchSprintBoard(p.id);
+              if (!r.ok) throw new Error(r.error);
+              for (const sp of r.data.sprints) {
                 const active = /active|current|progress/i.test(sp.status || "");
                 let spOpen = 0;
                 for (const it of sp.items) {
@@ -293,7 +295,9 @@ export function BreakView({ onEnd, timerPaused, startedAt, projects, tasks, zoho
           // 4) timesheet drift — Orbit hours vs Zoho logged hours
           if (on("timesheet.drift")) {
             try {
-              const [oh, ts] = await Promise.all([fetchOrbitHours(), fetchTimesheet()]);
+              const [oh, tsRes] = await Promise.all([fetchOrbitHours(), fetchTimesheet()]);
+              if (!tsRes.ok) throw new Error(tsRes.error);
+              const ts = tsRes.data;
               const todayKey = new Date().toISOString().slice(0, 10);
               const zohoToday = ts.byDate?.[todayKey] ?? 0;
               const drift = +(oh.todayH - zohoToday).toFixed(2);

@@ -45,26 +45,41 @@ async function authHeader(): Promise<Record<string, string>> {
   return authHdr();
 }
 
-async function get<T>(qs = ""): Promise<T> {
-  const r = await fetch(fn + qs, { headers: await authHeader() });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error((j as { error?: string }).error || `Zoho fetch failed (${r.status})`);
-  return j as T;
+/**
+ * RC1 task 10: every fetch* function below returns a `ZohoResult` instead of
+ * throwing — `fetchZohoStatus`/`exchangeZohoCode` already used this pattern
+ * (their own result shapes, kept as-is), while everything else threw,
+ * relying on every call site remembering to catch. Every current call site
+ * already did (verified before this refactor), so runtime behavior is
+ * unchanged — this just makes "can fail" part of the type signature instead
+ * of a convention a future call site could forget.
+ */
+export type ZohoResult<T> = { ok: true; data: T } | { ok: false; error: string };
+
+async function get<T>(qs = ""): Promise<ZohoResult<T>> {
+  try {
+    const r = await fetch(fn + qs, { headers: await authHeader() });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: (j as { error?: string }).error || `Zoho fetch failed (${r.status})` };
+    return { ok: true, data: j as T };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
 }
 
 // Flat items for the pinned/first project — used by Tickets + Dashboard.
-export async function fetchZohoTickets(): Promise<ZohoItem[]> {
-  const j = await get<{ data: ZohoItem[] }>();
-  return j.data ?? [];
+export async function fetchZohoTickets(): Promise<ZohoResult<ZohoItem[]>> {
+  const r = await get<{ data: ZohoItem[] }>();
+  return r.ok ? { ok: true, data: r.data.data ?? [] } : r;
 }
-export async function fetchSprintProjects(): Promise<SprintProject[]> {
-  const j = await get<{ projects: SprintProject[] }>("?mode=projects");
-  return j.projects ?? [];
+export async function fetchSprintProjects(): Promise<ZohoResult<SprintProject[]>> {
+  const r = await get<{ projects: SprintProject[] }>("?mode=projects");
+  return r.ok ? { ok: true, data: r.data.projects ?? [] } : r;
 }
-export async function fetchSprintBoard(projectId: string): Promise<Board> {
+export async function fetchSprintBoard(projectId: string): Promise<ZohoResult<Board>> {
   return get<Board>(`?mode=board&project=${encodeURIComponent(projectId)}`);
 }
-export async function fetchItemDetail(projectId: string, sprintId: string, itemId: string): Promise<ItemDetail> {
+export async function fetchItemDetail(projectId: string, sprintId: string, itemId: string): Promise<ZohoResult<ItemDetail>> {
   return get<ItemDetail>(`?mode=item&project=${encodeURIComponent(projectId)}&sprint=${encodeURIComponent(sprintId)}&item=${encodeURIComponent(itemId)}`);
 }
 
@@ -80,9 +95,9 @@ export async function fetchZohoStatus(): Promise<{ connected: boolean; error?: s
 }
 
 export interface Thumb { thumb: string; preview: string; count: number; }
-export async function fetchThumbs(projectId: string, sprintId: string): Promise<Record<string, Thumb>> {
-  const j = await get<{ thumbs: Record<string, Thumb> }>(`?mode=thumbs&project=${encodeURIComponent(projectId)}&sprint=${encodeURIComponent(sprintId)}`);
-  return j.thumbs ?? {};
+export async function fetchThumbs(projectId: string, sprintId: string): Promise<ZohoResult<Record<string, Thumb>>> {
+  const r = await get<{ thumbs: Record<string, Thumb> }>(`?mode=thumbs&project=${encodeURIComponent(projectId)}&sprint=${encodeURIComponent(sprintId)}`);
+  return r.ok ? { ok: true, data: r.data.thumbs ?? {} } : r;
 }
 
 export interface HoursByKey { name: string; hours: number; }
@@ -90,7 +105,7 @@ export interface Timesheet {
   totalHours: number; billableHours: number; nonBillableHours: number; count: number;
   byProject: HoursByKey[]; byUser: HoursByKey[]; byDate: Record<string, number>;
 }
-export async function fetchTimesheet(): Promise<Timesheet> {
+export async function fetchTimesheet(): Promise<ZohoResult<Timesheet>> {
   return get<Timesheet>("?mode=timesheet");
 }
 

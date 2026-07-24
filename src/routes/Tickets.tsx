@@ -108,7 +108,9 @@ export default function Tickets() {
   async function syncZoho() {
     setSyncing(true);
     try {
-      const z = await fetchZohoTickets();
+      const zRes = await fetchZohoTickets();
+      if (!zRes.ok) throw new Error(zRes.error);
+      const z = zRes.data;
       let added = 0, updated = 0;
       for (const t of z) {
         const existing = rows.find((r) => r.zoho_id === t.id);

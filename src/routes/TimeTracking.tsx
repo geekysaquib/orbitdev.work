@@ -54,7 +54,7 @@ export default function TimeTracking() {
   useEffect(() => {
     if (zoho.status !== "connected") { setLoading(false); return; }
     setLoading(true);
-    fetchTimesheet().then(setTs).catch(() => setTs(null)).finally(() => setLoading(false));
+    fetchTimesheet().then((r) => setTs(r.ok ? r.data : null)).finally(() => setLoading(false));
   }, [zoho.status]);
 
   const agentDown = agentStatus !== "online";

@@ -60,10 +60,18 @@ describe("computeProjectHealth", () => {
     expect(h.score).toBeNull();
   });
 
+  it("skips sprint-based signals (not a thrown error) when the Zoho fetch fails", async () => {
+    fetchSprintBoard.mockResolvedValue({ ok: false, error: "not configured" });
+    const h = await computeProjectHealth(project({ sprint_project_id: "sp1" }));
+    expect(h.signals).toEqual([]);
+    expect(h.score).toBeNull();
+  });
+
   it("scores bugs from the linked sprint board", async () => {
     const openBug = (n: number) => ({ id: `i${n}`, ticketNumber: String(n), subject: "bug", status: "Open", priority: "high", type: "Bug" });
     fetchSprintBoard.mockResolvedValue({
-      sprints: [{ id: "s1", name: "S1", status: "active", startDate: "", endDate: "", items: [openBug(1), openBug(2), openBug(3)] }],
+      ok: true,
+      data: { sprints: [{ id: "s1", name: "S1", status: "active", startDate: "", endDate: "", items: [openBug(1), openBug(2), openBug(3)] }] },
     });
     const h = await computeProjectHealth(project({ sprint_project_id: "sp1" }));
     const bugs = h.signals.find((s) => s.key === "bugs");
