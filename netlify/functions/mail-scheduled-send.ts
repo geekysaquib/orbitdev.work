@@ -1,6 +1,7 @@
 import { schedule } from "@netlify/functions";
 import nodemailer, { type Transporter } from "nodemailer";
 import { dbSelect, dbUpdate } from "./_lib/db";
+import { withMailLog } from "./_lib/mailLog";
 
 /**
  * Sends due rows from `scheduled_emails` (see supabase/schema.sql) — a real
@@ -47,12 +48,14 @@ async function run() {
         await dbUpdate("scheduled_emails", `id=eq.${row.id}`, { status: "failed", error: "Gmail isn't connected for this account anymore." });
         continue;
       }
-      await transporterFor(c.gmail_user, c.gmail_app_password).sendMail({
-        from: c.gmail_user, to: row.to_addr, cc: row.cc || undefined, bcc: row.bcc || undefined,
+      const gmailUser = c.gmail_user;
+      const gmailPass = c.gmail_app_password;
+      await withMailLog("scheduled", row.to_addr, () => transporterFor(gmailUser, gmailPass).sendMail({
+        from: gmailUser, to: row.to_addr, cc: row.cc || undefined, bcc: row.bcc || undefined,
         subject: row.subject || "(no subject)", text: row.body, html: row.html || undefined,
         inReplyTo: row.in_reply_to || undefined,
         references: row.references || undefined,
-      });
+      }));
       await dbUpdate("scheduled_emails", `id=eq.${row.id}`, { status: "sent", sent_at: new Date().toISOString() });
     } catch (e) {
       console.error(`[mail-scheduled-send] failed to send ${row.id}`, e);

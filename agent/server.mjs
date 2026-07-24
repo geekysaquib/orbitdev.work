@@ -122,6 +122,15 @@ async function requireAuth(req, res, next) {
   }
 }
 
+// Same masking convention as netlify/functions/_lib/mailLog.ts's maskEmail —
+// duplicated rather than shared since this process doesn't import from
+// netlify/functions (separate deployable, no shared build step).
+function maskEmail(email) {
+  const [user, domain] = String(email).split("@");
+  if (!domain) return email;
+  return `${user.slice(0, 1)}${"*".repeat(Math.max(user.length - 1, 1))}@${domain}`;
+}
+
 // ---- Gmail (read-only IMAP, app password) — strictly one credential set per
 // user, keyed by their ORBIT user id. No environment-variable fallback and no
 // inheriting an old shared config: every account links its own Gmail here.
@@ -387,10 +396,20 @@ app.get("/gmail/message", async (req, res) => {
 // `html` is optional (Compose's rich-text editor) — text is always sent too,
 // as the plain-text alternative part. `attachments` are base64-encoded in the
 // browser (FileReader) and decoded back to Buffers here.
+//
+// [mail] structured logging here mirrors netlify/functions/_lib/mailLog.ts's
+// convention (same event/kind/correlationId/durationMs shape) — this is a
+// separate process (the local desktop agent, not a Netlify function), so its
+// logs aren't centrally aggregated with the server-side ones, but keeping
+// the same shape means a log-processing tool could handle both uniformly if
+// they're ever shipped somewhere together. RC1 task 8.
 app.post("/gmail/send", async (req, res) => {
   const { to, subject, text, html, cc, bcc, inReplyTo, references, attachments } = req.body || {};
   if (!to || !String(to).trim()) return res.status(400).json({ ok: false, error: "recipient required" });
   if (!text || !String(text).trim()) return res.status(400).json({ ok: false, error: "message body required" });
+  const correlationId = randomUUID().slice(0, 12);
+  const startedAt = Date.now();
+  console.log("[mail]", JSON.stringify({ event: "attempt", kind: "compose_send", correlationId, to: maskEmail(to) }));
   try {
     const c = gmailCreds(req.userId);
     if (!c) return res.status(400).json({ ok: false, error: "Gmail not configured" });
@@ -404,8 +423,13 @@ app.post("/gmail/send", async (req, res) => {
         : undefined,
     };
     await getTransporter(req.userId).sendMail(mail);
+    console.log("[mail]", JSON.stringify({ event: "sent", kind: "compose_send", correlationId, to: maskEmail(to), durationMs: Date.now() - startedAt }));
     res.json({ ok: true });
-  } catch (e) { resetTransporter(req.userId); res.status(500).json({ ok: false, error: e.message }); }
+  } catch (e) {
+    resetTransporter(req.userId);
+    console.error("[mail]", JSON.stringify({ event: "failed", kind: "compose_send", correlationId, to: maskEmail(to), durationMs: Date.now() - startedAt, error: e.message }));
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // List running Docker containers (for the dashboard "Containers up" stat).

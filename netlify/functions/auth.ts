@@ -74,7 +74,7 @@ async function sendLoginAlert(user: DbUser, event: HandlerEvent): Promise<void> 
     const location = [geo.city, geo.region, geo.country].filter(Boolean).join(", ") || "Unknown location";
     const time = `${new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })} UTC`;
     const { subject, html, text } = loginAlertEmail(user.full_name, { time, ip: geo.ip || "unknown", location, device: `${browser} on ${os}` });
-    await sendMail(user.email, subject, html, text);
+    await sendMail(user.email, subject, html, text, "login_alert");
   } catch (e) {
     console.error("[auth] login alert email failed:", (e as Error).message);
   }
@@ -119,7 +119,7 @@ export const handler: Handler = async (event) => {
         const res = await issueOtp(email, "verify");
         if ("error" in res) return json(429, { error: otpErrorMessage(res) });
         const tpl = verifyEmail(fullName, res.code);
-        await sendMail(email, tpl.subject, tpl.html, tpl.text);
+        await sendMail(email, tpl.subject, tpl.html, tpl.text, "verify");
         return json(200, { ok: true, email });
       }
 
@@ -133,7 +133,7 @@ export const handler: Handler = async (event) => {
         const res = await issueOtp(email, purpose);
         if ("error" in res) return json(429, { error: otpErrorMessage(res) });
         const tpl = purpose === "verify" ? verifyEmail(user.full_name, res.code) : resetEmail(user.full_name, res.code);
-        await sendMail(email, tpl.subject, tpl.html, tpl.text);
+        await sendMail(email, tpl.subject, tpl.html, tpl.text, `resend_${purpose}`);
         return json(200, { ok: true });
       }
 
@@ -194,7 +194,7 @@ export const handler: Handler = async (event) => {
             const res = await issueOtp(email, "reset");
             if (!("error" in res)) {
               const tpl = resetEmail(user.full_name, res.code);
-              await sendMail(email, tpl.subject, tpl.html, tpl.text);
+              await sendMail(email, tpl.subject, tpl.html, tpl.text, "forgot_reset");
             }
           }
         }

@@ -14,6 +14,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import nodemailer, { type Transporter } from "nodemailer";
+import { withMailLog } from "./mailLog";
 
 // Resolved from the project root rather than import.meta.url/__dirname: this
 // file gets bundled (esbuild, sometimes to CJS) by both `netlify dev` and
@@ -48,9 +49,19 @@ function getTransporter(c: MailCreds): Transporter {
   return transporter;
 }
 
-export async function sendMail(to: string, subject: string, html: string, text: string): Promise<void> {
-  const c = creds();
-  if (!c) throw new Error("Mail not configured — set MAIL_USER/MAIL_APP_PASSWORD or add netlify/functions/mail-config.json");
-  const from = c.from || `ORBIT <${c.user}>`;
-  await getTransporter(c).sendMail({ from, to, subject, html, text });
+/**
+ * `kind` labels this send for observability (RC1 task 8) — e.g. "verify",
+ * "team_invite" — passed through to _lib/mailLog.ts's structured log lines
+ * and per-kind sent/failed counters. Optional and defaults to "unknown"
+ * rather than required, so this stays backward compatible, but every call
+ * site in this codebase passes a real one — an "unknown" bucket in the
+ * metrics means a call site was missed, not a deliberate choice.
+ */
+export async function sendMail(to: string, subject: string, html: string, text: string, kind = "unknown"): Promise<void> {
+  await withMailLog(kind, to, async () => {
+    const c = creds();
+    if (!c) throw new Error("Mail not configured — set MAIL_USER/MAIL_APP_PASSWORD or add netlify/functions/mail-config.json");
+    const from = c.from || `ORBIT <${c.user}>`;
+    await getTransporter(c).sendMail({ from, to, subject, html, text });
+  });
 }

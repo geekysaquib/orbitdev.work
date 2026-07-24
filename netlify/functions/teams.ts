@@ -6,6 +6,7 @@ import { teamInviteEmail } from "./_lib/email-templates";
 import { verifySession } from "./_lib/verifyToken";
 import { serverEventEngine } from "./_lib/serverEvents";
 import { rateLimit } from "./_lib/rateLimit";
+import { maskEmail } from "./_lib/mailLog";
 
 /**
  * Fire-and-forget, same principle as every other event-publish call in this
@@ -68,11 +69,6 @@ function genToken(): string {
 }
 function hashToken(raw: string): string {
   return createHash("sha256").update(raw).digest("hex");
-}
-function maskEmail(email: string): string {
-  const [user, domain] = email.split("@");
-  if (!domain) return email;
-  return `${user.slice(0, 1)}${"*".repeat(Math.max(user.length - 1, 1))}@${domain}`;
 }
 
 // Defense in depth: every call site below validates its id fields as UUIDs
@@ -195,7 +191,7 @@ export const handler: Handler = async (event) => {
         }
 
         const tpl = teamInviteEmail(inviter?.full_name || inviter?.email || "Someone", team[0].name, `${PUBLIC_SITE_URL}/invite/${token}`);
-        await sendMail(email, tpl.subject, tpl.html, tpl.text);
+        await sendMail(email, tpl.subject, tpl.html, tpl.text, "team_invite");
         return json(200, { ok: true });
       }
 
@@ -224,7 +220,7 @@ export const handler: Handler = async (event) => {
         await dbUpdate("team_invites", `id=eq.${invite.id}`, { token_hash, expires_at, created_at: new Date().toISOString() });
 
         const tpl = teamInviteEmail(inviter?.full_name || inviter?.email || "Someone", team[0]?.name ?? "the team", `${PUBLIC_SITE_URL}/invite/${token}`);
-        await sendMail(invite.email, tpl.subject, tpl.html, tpl.text);
+        await sendMail(invite.email, tpl.subject, tpl.html, tpl.text, "team_invite_resend");
         return json(200, { ok: true });
       }
 
