@@ -37,42 +37,49 @@ export class AIRouter {
 
   async complete(req: Omit<AICompleteRequest, "apiKey">, keys: ProviderKeys, preferred?: AIProviderId | null): Promise<AIRouterResult> {
     const failed: AIProviderId[] = [];
+    const failedDetail: string[] = [];
     for (const id of orderedProviders(keys, preferred)) {
       const adapter = this.adapter(id);
       if (!adapter) continue;
       try {
         const r = await adapter.complete({ ...req, apiKey: keys[id]! });
         if (r.ok) return { ...r, source: id, fellBackFrom: failed.length ? failed.join(", ") : undefined };
-      } catch {
-        // fall through to the next configured provider
+        failedDetail.push(`${id} — ${r.error || "unknown error"}`);
+      } catch (e) {
+        // A thrown fetch (network failure, DNS, etc.) instead of a clean {ok:false} —
+        // same "never let one provider take the whole chain down" contract, but this
+        // failure's own reason must still make it into the final error, not just its name.
+        failedDetail.push(`${id} — ${(e as Error)?.message || "request failed"}`);
       }
       failed.push(id);
     }
     return {
       ok: false,
       source: null,
-      error: failed.length ? `All configured providers failed (tried: ${failed.join(", ")})` : "No AI provider configured",
+      error: failedDetail.length ? `All configured providers failed: ${failedDetail.join("; ")}` : "No AI provider configured",
     };
   }
 
   /** Same fallback contract as `complete`, but only considers adapters that implement `stream`. */
   async stream(req: StreamCallArgs, keys: ProviderKeys, preferred?: AIProviderId | null): Promise<AIStreamRouterResult> {
     const failed: AIProviderId[] = [];
+    const failedDetail: string[] = [];
     for (const id of orderedProviders(keys, preferred)) {
       const adapter = this.adapter(id);
       if (!adapter?.stream) continue;
       try {
         const r = await adapter.stream({ ...req, apiKey: keys[id]! });
         if (r.ok || r.emitted) return { ...r, source: id, fellBackFrom: failed.length ? failed.join(", ") : undefined };
-      } catch {
-        // fall through to the next configured provider
+        failedDetail.push(`${id} — ${r.error || "unknown error"}`);
+      } catch (e) {
+        failedDetail.push(`${id} — ${(e as Error)?.message || "request failed"}`);
       }
       failed.push(id);
     }
     return {
       ok: false,
       source: null,
-      error: failed.length ? `All configured providers failed (tried: ${failed.join(", ")})` : "No streaming-capable AI provider configured",
+      error: failedDetail.length ? `All configured providers failed: ${failedDetail.join("; ")}` : "No streaming-capable AI provider configured",
     };
   }
 }

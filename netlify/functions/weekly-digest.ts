@@ -50,13 +50,16 @@ async function run() {
       for (const a of audit) actionCounts.set(a.action, (actionCounts.get(a.action) || 0) + 1);
       const actionLines = [...actionCounts.entries()].map(([action, count]) => `${action}: ${count}`).join("\n") || "no tracked actions";
 
-      const { text } = await askAI(
+      const { text, error } = await askAI(
         { anthropic: intg.anthropic_api_key, gemini: intg.gemini_api_key, openai: intg.openai_api_key, grok: intg.grok_api_key },
         intg.ai_provider,
         "You write brief, encouraging weekly work-review summaries for a developer productivity app. Be specific using the numbers given rather than generic — 3 to 5 sentences, no greeting or sign-off, just the summary itself.",
         `This person's activity over the last 7 days:\n\nTime tracked: ${hours} hours\n\nActions:\n${actionLines}`,
       );
-      if (!text) continue;
+      if (!text) {
+        if (error) console.warn(`[weekly-digest] no AI answer for user ${intg.user_id}: ${error}`);
+        continue;
+      }
 
       await dbInsert("notifications", { user_id: intg.user_id, kind: "weekly_digest", title: "Your weekly review", body: text.slice(0, 2000) });
     } catch (e) {

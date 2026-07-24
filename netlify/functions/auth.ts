@@ -6,6 +6,8 @@ import { issueOtp, verifyOtp } from "./_lib/otp";
 import { sendMail } from "./_lib/mailer";
 import { verifyEmail, resetEmail, loginAlertEmail } from "./_lib/email-templates";
 import { clientIp, lookupGeo, parseUserAgent } from "./_lib/geo";
+import { verifySession } from "./_lib/verifyToken";
+import { validateImageDataUrl } from "./_lib/imageValidation";
 import { rateLimit } from "./_lib/rateLimit";
 
 /**
@@ -28,6 +30,7 @@ import { rateLimit } from "./_lib/rateLimit";
 interface DbUser {
   id: string; email: string; password_hash: string; full_name: string; email_verified: boolean;
   failed_login_attempts: number; lockout_until: string | null;
+  avatar_data_url: string | null; phone: string | null; job_title: string | null;
 }
 
 const JWT_SECRET = process.env.SUPABASE_JWT_SECRET || "";
@@ -51,7 +54,14 @@ function sign(user: DbUser): string {
   });
 }
 
-const publicUser = (u: DbUser) => ({ id: u.id, email: u.email, full_name: u.full_name, email_verified: u.email_verified });
+const publicUser = (u: DbUser) => ({
+  id: u.id, email: u.email, full_name: u.full_name, email_verified: u.email_verified,
+  avatar_data_url: u.avatar_data_url, phone: u.phone, job_title: u.job_title,
+});
+
+const FULL_NAME_MAX = 80;
+const JOB_TITLE_MAX = 80;
+const PHONE_MAX = 30;
 
 function otpErrorMessage(res: { error: "too_soon"; retryInSec: number } | { error: "too_many" }): string {
   return res.error === "too_many"
@@ -92,9 +102,12 @@ export const handler: Handler = async (event) => {
   // daily cap in _lib/otp.ts, login lockout via failed_login_attempts) — that
   // protects any one account, but nothing stops a single source sweeping
   // across many different emails, since each has its own independent
-  // counter.
-  const rl = rateLimit(`auth:${clientIp(event.headers as Record<string, string | undefined>)}`, 30, 300_000);
-  if (!rl.allowed) return json(429, { error: `Too many requests — try again in ${rl.retryAfterSec}s.` });
+  // counter. `update-profile` is excluded — it's already session-gated and
+  // has no email-enumeration/spam surface of its own.
+  if (action !== "update-profile") {
+    const rl = rateLimit(`auth:${clientIp(event.headers as Record<string, string | undefined>)}`, 30, 300_000);
+    if (!rl.allowed) return json(429, { error: `Too many requests — try again in ${rl.retryAfterSec}s.` });
+  }
 
   const email = String(body.email || "").trim().toLowerCase();
 
@@ -220,6 +233,38 @@ export const handler: Handler = async (event) => {
           failed_login_attempts: 0, lockout_until: null,
         });
         return json(200, { ok: true });
+      }
+
+      case "update-profile": {
+        const session = await verifySession(event.headers.authorization);
+        if (!session) return json(401, { error: "Sign in required." });
+
+        const patch: Record<string, unknown> = {};
+        if (body.full_name !== undefined) {
+          const fullName = String(body.full_name).trim();
+          if (!fullName || fullName.length > FULL_NAME_MAX) return json(400, { error: `Name must be 1–${FULL_NAME_MAX} characters.` });
+          patch.full_name = fullName;
+        }
+        if (body.job_title !== undefined) {
+          const jobTitle = String(body.job_title).trim();
+          if (jobTitle.length > JOB_TITLE_MAX) return json(400, { error: `Job title must be under ${JOB_TITLE_MAX} characters.` });
+          patch.job_title = jobTitle || null;
+        }
+        if (body.phone !== undefined) {
+          const phone = String(body.phone).trim();
+          if (phone.length > PHONE_MAX) return json(400, { error: `Phone number must be under ${PHONE_MAX} characters.` });
+          patch.phone = phone || null;
+        }
+        if (body.avatar_data_url !== undefined) {
+          const avatar = validateImageDataUrl(body.avatar_data_url, "Photo");
+          if (avatar && typeof avatar === "object") return json(400, { error: avatar.error });
+          patch.avatar_data_url = avatar;
+        }
+
+        if (Object.keys(patch).length > 0) await dbUpdate("users", `id=eq.${session.userId}`, patch);
+        const rows = await dbSelect<DbUser>("users", `id=eq.${session.userId}&limit=1`);
+        if (!rows[0]) return json(404, { error: "Account not found." });
+        return json(200, { user: publicUser(rows[0]) });
       }
 
       default:

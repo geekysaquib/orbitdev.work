@@ -19,6 +19,7 @@ interface AuthShape {
   resendOtp: (email: string, purpose: "verify" | "reset") => Promise<{ error?: string }>;
   forgotPassword: (email: string) => Promise<{ error?: string }>;
   resetPassword: (email: string, code: string, password: string) => Promise<{ error?: string }>;
+  updateProfile: (patch: { full_name?: string; job_title?: string; phone?: string; avatar_data_url?: string | null }) => Promise<{ error?: string }>;
   signOut: () => void;
 }
 
@@ -92,10 +93,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return res.ok ? {} : { error: res.error };
   };
 
+  const updateProfile: AuthShape["updateProfile"] = async (patch) => {
+    const res = await call<{ user: OrbitUser }>("update-profile", patch);
+    if (!res.ok) return { error: res.error };
+    const token = getToken();
+    if (token) setSession(token, res.user);
+    setUser(res.user);
+    return {};
+  };
+
   const signOut = () => { recordAudit({ action: "sign_out", entityType: "session" }); clearSession(); setUser(null); };
 
   return (
-    <Ctx.Provider value={{ session: !!user, user, loading, signIn, signUp, verifyOtp, resendOtp, forgotPassword, resetPassword, signOut }}>
+    <Ctx.Provider value={{ session: !!user, user, loading, signIn, signUp, verifyOtp, resendOtp, forgotPassword, resetPassword, updateProfile, signOut }}>
       {children}
     </Ctx.Provider>
   );

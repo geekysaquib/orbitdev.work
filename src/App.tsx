@@ -48,6 +48,7 @@ const Automation = lazy(() => import("./routes/Automation"));
 const Health = lazy(() => import("./routes/Health"));
 const Insights = lazy(() => import("./routes/Insights"));
 const Intelligence = lazy(() => import("./routes/Intelligence"));
+const Profile = lazy(() => import("./routes/Profile"));
 
 function RouteLoader() {
   return <div className="page-loader"><OrbitLoader label="Loading…" /></div>;
@@ -104,6 +105,7 @@ export default function App() {
               <Route path="/insights" element={<Insights />} />
               <Route path="/intelligence" element={<Intelligence />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/profile" element={<Profile />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

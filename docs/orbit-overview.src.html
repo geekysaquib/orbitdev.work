@@ -181,15 +181,42 @@
     padding: 1px 6px;
   }
 
-  /* ---------- screenshot figure ---------- */
-  .ob-fig { margin: 30px 0 0; }
+  /* ---------- screenshot figure ----------
+     Shown contained rather than at full column width, so a screenshot reads
+     as supporting evidence next to the prose rather than dominating the
+     screen. Full size is one click away — see .ob-zoom-badge + the lightbox
+     script below. The hero's own figure sits in a two-column grid already
+     sized to its column, so it opts back out of the cap. */
+  .ob-fig { margin: 30px 0 0; max-width: 640px; }
+  .ob-hero-visual .ob-fig { max-width: none; }
   .ob-shot {
+    position: relative;
     border: 1px solid var(--ob-border);
     border-radius: 13px;
     overflow: hidden;
     background: var(--ob-bg2);
     box-shadow: 0 34px 70px -40px rgba(0, 0, 0, .95);
   }
+  .ob-zoom-badge {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(8, 9, 10, .78);
+    border: 1px solid var(--ob-hair);
+    backdrop-filter: blur(3px);
+    color: var(--ob-text2);
+    opacity: .82;
+    transition: opacity .18s ease, border-color .18s ease, color .18s ease;
+    pointer-events: none;
+  }
+  .ob-zoom-badge svg { width: 15px; height: 15px; }
+  .ob-shot:hover .ob-zoom-badge { opacity: 1; border-color: rgba(55, 223, 160, .4); color: var(--ob-mint); }
   .ob-shot-bar {
     height: 34px;
     display: flex;
@@ -1974,6 +2001,11 @@ erDiagram
       shot.addEventListener("keydown", function (e) {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openLightbox(shot); }
       });
+      var badge = document.createElement("span");
+      badge.className = "ob-zoom-badge";
+      badge.setAttribute("aria-hidden", "true");
+      badge.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><line x1="15.3" y1="15.3" x2="20.5" y2="20.5"/><line x1="10.5" y1="7.5" x2="10.5" y2="13.5"/><line x1="7.5" y1="10.5" x2="13.5" y2="10.5"/></svg>';
+      shot.appendChild(badge);
     });
     document.getElementById("ob-lightbox-close").addEventListener("click", closeLightbox);
     lightbox.addEventListener("click", function (e) { if (e.target === lightbox) closeLightbox(); });

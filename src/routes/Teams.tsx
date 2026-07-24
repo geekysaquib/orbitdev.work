@@ -1,14 +1,18 @@
-import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
 import { Icon } from "../lib/icons";
 import { Select } from "../components/Select";
-import { ACCENT, Empty, OrbitLoader } from "../components/ui";
+import { ACCENT, Empty, Eyebrow, OrbitLoader } from "../components/ui";
+import { InsightPreviewRow } from "../components/InsightPreviewRow";
+import type { OrbitInsightsContext } from "../hooks/useOrbitInsights";
 import { useToast } from "../context/Toast";
 import { useAuth } from "../context/AuthContext";
 import { useTeamPresence } from "../context/Presence";
+import { readImageAsDataUrl } from "../lib/imageUpload";
+import { ConfirmModal } from "../components/ConfirmModal";
 import {
   listMyTeams, listMembers, listInvites, createTeam, inviteMember,
-  resendInvite, revokeInvite, removeMember, changeRole, leaveTeam,
+  resendInvite, revokeInvite, removeMember, changeRole, leaveTeam, updateTeam, deleteTeam,
 } from "../lib/teams";
 import { recordAudit } from "../lib/audit";
 import { fetchTeamActivity, subscribeTeamActivity, activityMeta, activityDetail } from "../lib/activity";
@@ -17,6 +21,11 @@ import type { Team, TeamMember, TeamInvite, TeamRole, TeamActivity } from "../li
 
 const ROLE_COLOR: Record<TeamRole, string> = { owner: ACCENT.violet, admin: ACCENT.blue, member: "var(--dim)", viewer: ACCENT.amber };
 const TEAM_DOT_COLORS = [ACCENT.mint, ACCENT.blue, ACCENT.violet, ACCENT.amber];
+
+function TeamLogo({ src, size, fallbackColor }: { src: string | null | undefined; size: number; fallbackColor?: string }) {
+  if (src) return <img className="team-logo" src={src} alt="" style={{ width: size, height: size }} />;
+  return <span className="dot" style={{ background: fallbackColor ?? "var(--dim)" }} />;
+}
 
 function agoSince(iso: string): string {
   const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
@@ -120,10 +129,19 @@ export default function Teams() {
   const [invites, setInvites] = useState<TeamInvite[]>([]);
   const [newModal, setNewModal] = useState(false);
   const [newTeamName, setNewTeamName] = useState("");
+  const [newTeamLogo, setNewTeamLogo] = useState<string | null>(null);
   const [creatingTeam, setCreatingTeam] = useState(false);
+  const logoInputRef = useRef<HTMLInputElement>(null);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<Exclude<TeamRole, "owner">>("member");
   const [inviting, setInviting] = useState(false);
+  const [editModal, setEditModal] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editLogo, setEditLogo] = useState<string | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const editLogoInputRef = useRef<HTMLInputElement>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const loadTeams = async (selectId?: string) => {
     const t = await listMyTeams();
@@ -152,17 +170,39 @@ export default function Teams() {
   const canManageTeam = myRole === "owner" || myRole === "admin";
   const team = teams.find((t) => t.id === teamId) ?? null;
 
+  const nav = useNavigate();
+  const { insights } = useOutletContext<OrbitInsightsContext>();
+  // Only the two detectors that are actually about teams/team workload — see
+  // docs/architecture/ambient-intelligence.md. `team-no-updates`'s subject is
+  // the team itself; `overloaded-developer`'s subject is a user, so it's
+  // scoped to this team by checking membership against data this page
+  // already loaded (`members`), not by adding team-awareness to the detector.
+  const teamInsights = insights.filter((i) =>
+    (i.detectorId === "team-no-updates" && i.subject.id === teamId)
+    || (i.detectorId === "overloaded-developer" && members.some((m) => m.user_id === i.subject.id)),
+  );
+
   async function handleCreateTeam() {
     const name = newTeamName.trim();
     if (!name) return;
     setCreatingTeam(true);
-    const res = await createTeam(name);
+    const res = await createTeam(name, newTeamLogo);
     setCreatingTeam(false);
     if (!res.ok) { toast(`Couldn't create team: ${res.error}`); return; }
     setNewTeamName("");
+    setNewTeamLogo(null);
     setNewModal(false);
     toast(`Created ${res.team.name}`);
     await loadTeams(res.team.id);
+  }
+
+  async function handlePickLogo(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const res = await readImageAsDataUrl(file);
+    if (!res.ok) { toast(res.error); return; }
+    setNewTeamLogo(res.dataUrl);
   }
 
   async function handleInvite() {
@@ -215,6 +255,48 @@ export default function Teams() {
     await loadTeams();
   }
 
+  function openEditModal() {
+    if (!team) return;
+    setEditName(team.name);
+    setEditLogo(team.logo_data_url);
+    setEditModal(true);
+  }
+
+  async function handlePickEditLogo(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const res = await readImageAsDataUrl(file);
+    if (!res.ok) { toast(res.error); return; }
+    setEditLogo(res.dataUrl);
+  }
+
+  async function handleUpdateTeam() {
+    if (!teamId) return;
+    const name = editName.trim();
+    if (!name) return;
+    setSavingEdit(true);
+    const res = await updateTeam(teamId, name, editLogo);
+    setSavingEdit(false);
+    if (!res.ok) { toast(`Couldn't save changes: ${res.error}`); return; }
+    setEditModal(false);
+    recordAudit({ action: "team.update", entityType: "team", entityId: teamId, teamId, meta: { name } });
+    toast("Team updated");
+    await loadTeams(teamId);
+  }
+
+  async function handleDeleteTeam() {
+    if (!teamId) return;
+    setDeleting(true);
+    const res = await deleteTeam(teamId);
+    setDeleting(false);
+    setDeleteConfirmOpen(false);
+    if (!res.ok) { toast(`Couldn't delete team: ${res.error}`); return; }
+    toast(team ? `Deleted ${team.name}` : "Team deleted");
+    setParams((p) => { p.delete("team"); return p; }, { replace: true });
+    await loadTeams();
+  }
+
   return (
     <main className="page">
       <div className="rowhead">
@@ -237,7 +319,7 @@ export default function Teams() {
               return (
                 <button key={t.id} className={"team-rail-item" + (mine ? " on" : "")} onClick={() => selectTeam(t.id)}>
                   <span className="trn" style={{ color: mine ? "var(--text)" : "var(--muted)" }}>
-                    <span className="dot" style={{ background: color }} />{t.name}
+                    <TeamLogo src={t.logo_data_url} size={16} fallbackColor={color} />{t.name}
                   </span>
                   <span className="trm">{t.owner_id === user?.id ? "You own this" : "Member"}</span>
                 </button>
@@ -250,10 +332,33 @@ export default function Teams() {
             {team && (
               <>
                 <div className="tm-dhead">
-                  <div className="tm-dname">{team.name}</div>
-                  {myRole && <span className="tm-drole" style={{ color: ROLE_COLOR[myRole] }}>{myRole.toUpperCase()}</span>}
+                  <div className="tm-dname">
+                    {team.logo_data_url && <img className="team-logo-md" src={team.logo_data_url} alt="" />}
+                    {team.name}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    {myRole && <span className="tm-drole" style={{ color: ROLE_COLOR[myRole] }}>{myRole.toUpperCase()}</span>}
+                    {canManageTeam && <button className="iconbtn" title="Edit team" onClick={openEditModal}><Icon name="edit" size={15} /></button>}
+                    {myRole === "owner" && <button className="iconbtn" title="Delete team" onClick={() => setDeleteConfirmOpen(true)}><Icon name="trash" size={15} /></button>}
+                  </div>
                 </div>
                 <div className="tm-dsub">{members.length} member{members.length === 1 ? "" : "s"}{invites.length > 0 ? ` · ${invites.length} pending invite${invites.length === 1 ? "" : "s"}` : ""}</div>
+
+                {teamInsights.length > 0 && (
+                  <div className="card" style={{ padding: 14, margin: "14px 0" }}>
+                    <div className="rowhead" style={{ marginBottom: 6 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                        <span style={{ color: ACCENT.mint }}><Icon name="sparkles" size={13} /></span>
+                        <Eyebrow>Orbit Intelligence</Eyebrow>
+                      </div>
+                      <button className="dash-more" onClick={() => nav("/intelligence")}>View all<Icon name="chevR" size={12} /></button>
+                    </div>
+                    <div className="insight-list">
+                      {teamInsights.map((i) => <InsightPreviewRow key={i.id} insight={i} />)}
+                    </div>
+                  </div>
+                )}
+
                 <div className="tm-divider" />
 
                 {members.map((m) => {
@@ -325,23 +430,79 @@ export default function Teams() {
       )}
 
       {newModal && (
-        <div className="modal-bg" onClick={() => setNewModal(false)}>
+        <div className="modal-bg" onClick={() => { setNewModal(false); setNewTeamLogo(null); }}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
               <h3>New team</h3>
-              <button className="iconbtn" onClick={() => setNewModal(false)}><Icon name="x" size={16} /></button>
+              <button className="iconbtn" onClick={() => { setNewModal(false); setNewTeamLogo(null); }}><Icon name="x" size={16} /></button>
             </div>
             <div className="fld">
               <label>Team name</label>
               <input value={newTeamName} onChange={(e) => setNewTeamName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleCreateTeam()} placeholder="e.g. Meritech Core" autoFocus />
             </div>
+            <div className="fld">
+              <label>Team logo (optional)</label>
+              <input ref={logoInputRef} type="file" accept="image/*" hidden onChange={handlePickLogo} />
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                {newTeamLogo ? (
+                  <img src={newTeamLogo} alt="" className="team-logo-md" />
+                ) : (
+                  <span className="team-logo-placeholder"><Icon name="upload" size={14} /></span>
+                )}
+                <button type="button" className="btn ghost sm" onClick={() => logoInputRef.current?.click()}>{newTeamLogo ? "Change" : "Upload logo"}</button>
+                {newTeamLogo && <button type="button" className="btn ghost sm" onClick={() => setNewTeamLogo(null)}>Remove</button>}
+              </div>
+            </div>
             <div style={{ fontSize: 12, color: "var(--dim)", marginTop: 10 }}>You'll be the owner and can invite others by email afterward.</div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 22 }}>
-              <button className="btn" onClick={() => setNewModal(false)}>Cancel</button>
+              <button className="btn" onClick={() => { setNewModal(false); setNewTeamLogo(null); }}>Cancel</button>
               <button className="btn-primary" onClick={handleCreateTeam} disabled={creatingTeam || !newTeamName.trim()}>{creatingTeam ? "Creating…" : "Create team"}</button>
             </div>
           </div>
         </div>
+      )}
+
+      {editModal && (
+        <div className="modal-bg" onClick={() => setEditModal(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <h3>Edit team</h3>
+              <button className="iconbtn" onClick={() => setEditModal(false)}><Icon name="x" size={16} /></button>
+            </div>
+            <div className="fld">
+              <label>Team name</label>
+              <input value={editName} onChange={(e) => setEditName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleUpdateTeam()} placeholder="e.g. Meritech Core" autoFocus />
+            </div>
+            <div className="fld">
+              <label>Team logo (optional)</label>
+              <input ref={editLogoInputRef} type="file" accept="image/*" hidden onChange={handlePickEditLogo} />
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                {editLogo ? (
+                  <img src={editLogo} alt="" className="team-logo-md" />
+                ) : (
+                  <span className="team-logo-placeholder"><Icon name="upload" size={14} /></span>
+                )}
+                <button type="button" className="btn ghost sm" onClick={() => editLogoInputRef.current?.click()}>{editLogo ? "Change" : "Upload logo"}</button>
+                {editLogo && <button type="button" className="btn ghost sm" onClick={() => setEditLogo(null)}>Remove</button>}
+              </div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 22 }}>
+              <button className="btn" onClick={() => setEditModal(false)}>Cancel</button>
+              <button className="btn-primary" onClick={handleUpdateTeam} disabled={savingEdit || !editName.trim()}>{savingEdit ? "Saving…" : "Save changes"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteConfirmOpen && team && (
+        <ConfirmModal
+          title="Delete this team?"
+          message={`This permanently deletes "${team.name}" — every member loses access, pending invites are revoked, and any projects or tasks shared with it become personal again. Every other member gets notified. This can't be undone.`}
+          confirmLabel={deleting ? "Deleting…" : "Delete team"}
+          danger
+          onConfirm={handleDeleteTeam}
+          onCancel={() => setDeleteConfirmOpen(false)}
+        />
       )}
     </main>
   );

@@ -51,6 +51,7 @@ export default function Tasks() {
 
   const projName = useMemo(() => Object.fromEntries(projects.map((p) => [p.id, p.name])), [projects]);
   const teamName = useMemo(() => Object.fromEntries(teams.map((t) => [t.id, t.name])), [teams]);
+  const teamById = useMemo(() => Object.fromEntries(teams.map((t) => [t.id, t])), [teams]);
 
   async function share(t: Task, teamId: string) {
     const { error } = await update(t.id, { team_id: teamId || null } as Partial<Task>);
@@ -204,7 +205,11 @@ export default function Tasks() {
                           </>
                         )
                       ) : (
-                        t.team_id && teamName[t.team_id] && <span title="Shared by a teammate">· Shared with {teamName[t.team_id]}</span>
+                        t.team_id && teamName[t.team_id] && (
+                          <span title="Shared by a teammate" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                            · Shared with {teamById[t.team_id]?.logo_data_url && <img className="team-logo" src={teamById[t.team_id].logo_data_url!} alt="" />}{teamName[t.team_id]}
+                          </span>
+                        )
                       )}
                     </div>
                   </div>

@@ -396,7 +396,6 @@ app.get("/gmail/message", async (req, res) => {
 // `html` is optional (Compose's rich-text editor) — text is always sent too,
 // as the plain-text alternative part. `attachments` are base64-encoded in the
 // browser (FileReader) and decoded back to Buffers here.
-//
 // [mail] structured logging here mirrors netlify/functions/_lib/mailLog.ts's
 // convention (same event/kind/correlationId/durationMs shape) — this is a
 // separate process (the local desktop agent, not a Netlify function), so its
@@ -1595,6 +1594,7 @@ async function geminiComplete({ apiKey, system, turns }) {
     const j = await r.json().catch(() => ({}));
     if (!r.ok) {
       lastError = j.error?.message || `Gemini error ${r.status}`;
+      console.error(`[ai] ${model} ${r.status}:`, JSON.stringify(j).slice(0, 500));
       if (isGeminiOverloaded(r.status)) continue; // try the next model
       return { ok: false, error: lastError };
     }
@@ -1616,6 +1616,7 @@ async function geminiStream({ apiKey, system, turns, onDelta }) {
     if (!r.ok || !r.body) {
       const j = await r.json().catch(() => ({}));
       lastError = j.error?.message || `Gemini error ${r.status}`;
+      console.error(`[ai] ${model} ${r.status}:`, JSON.stringify(j).slice(0, 500));
       if (isGeminiOverloaded(r.status)) continue; // try the next model
       return { ok: false, error: lastError };
     }
@@ -1638,11 +1639,18 @@ function openAiCompatMessages(system, turns) {
   if (system) msgs.unshift({ role: "system", content: sliceText(system, 6000) });
   return msgs;
 }
-// OpenAI nests error text as `{error:{message}}`; Grok (xAI) sometimes sends
-// the plain-string form `{error:"..."}` instead — handle both.
+// OpenAI nests error text as `{error:{message,type,code}}`; Grok (xAI)
+// sometimes sends the plain-string form `{error:"..."}` instead — handle
+// both. `type`/`code` (e.g. "insufficient_quota" vs "rate_limit_exceeded")
+// are the single most useful bit for telling "your account has no billing
+// set up" apart from "you're actually being throttled" — both read as some
+// flavor of "limit" in the bare `.message` text alone, so surface them
+// instead of discarding them.
 function openAiCompatError(j, status, model) {
   const e = j?.error;
-  return (typeof e === "string" ? e : e?.message) || `${model} error ${status}`;
+  const message = (typeof e === "string" ? e : e?.message) || `${model} error ${status}`;
+  const tag = typeof e === "object" && e ? [e.type, e.code].filter(Boolean).join("/") : "";
+  return `${message} [HTTP ${status}${tag ? ` · ${tag}` : ""}]`;
 }
 async function openAiCompatComplete({ baseUrl, model, apiKey, system, turns }) {
   const r = await fetch(`${baseUrl}/chat/completions`, {
@@ -1651,7 +1659,10 @@ async function openAiCompatComplete({ baseUrl, model, apiKey, system, turns }) {
     body: JSON.stringify({ model, max_tokens: CLOUD_MAX_TOKENS, messages: openAiCompatMessages(system, turns) }),
   });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) return { ok: false, error: openAiCompatError(j, r.status, model) };
+  if (!r.ok) {
+    console.error(`[ai] ${model} ${r.status}:`, JSON.stringify(j).slice(0, 500));
+    return { ok: false, error: openAiCompatError(j, r.status, model) };
+  }
   return { ok: true, text: j.choices?.[0]?.message?.content || "" };
 }
 async function openAiCompatStream({ baseUrl, model, apiKey, system, turns, onDelta }) {
@@ -1660,7 +1671,11 @@ async function openAiCompatStream({ baseUrl, model, apiKey, system, turns, onDel
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({ model, max_tokens: CLOUD_MAX_TOKENS, messages: openAiCompatMessages(system, turns), stream: true }),
   });
-  if (!r.ok || !r.body) { const j = await r.json().catch(() => ({})); return { ok: false, error: openAiCompatError(j, r.status, model) }; }
+  if (!r.ok || !r.body) {
+    const j = await r.json().catch(() => ({}));
+    console.error(`[ai] ${model} ${r.status}:`, JSON.stringify(j).slice(0, 500));
+    return { ok: false, error: openAiCompatError(j, r.status, model) };
+  }
   await pumpSse(r.body, (obj, raw) => {
     if (raw === "[DONE]") return;
     const text = obj?.choices?.[0]?.delta?.content;
@@ -1729,8 +1744,12 @@ app.post("/ai/ask", async (req, res) => {
   if (!turns.length) return res.status(400).json({ ok: false, error: "prompt or messages required" });
   try {
     const r = await cloudProvider(provider).complete({ apiKey, system, turns });
+    if (!r.ok) console.error(`[ai] ${provider || "anthropic"} request failed:`, r.error);
     res.json(r);
-  } catch (e) { res.status(500).json({ ok: false, error: (e.message || String(e)).slice(0, 300) }); }
+  } catch (e) {
+    console.error(`[ai] ${provider || "anthropic"} request threw:`, e);
+    res.status(500).json({ ok: false, error: (e.message || String(e)).slice(0, 300) });
+  }
 });
 
 // ---- Local AI (llama-cpp-python via a persistent Python worker) — genuinely
@@ -1860,8 +1879,10 @@ app.post("/ai/ask/stream", async (req, res) => {
   res.on("close", () => { aborted = true; }); // see the note in /ai/local/ask/stream
   try {
     const r = await cloudProvider(provider).stream({ apiKey, system, turns, onDelta: (d) => { if (!aborted) send({ delta: d }); } });
+    if (!r.ok) console.error(`[ai] ${provider || "anthropic"} stream failed:`, r.error);
     if (!aborted) send(r.ok ? { done: true } : { error: r.error || "stream failed" });
   } catch (e) {
+    console.error(`[ai] ${provider || "anthropic"} stream threw:`, e);
     if (!aborted) send({ error: (e.message || String(e)).slice(0, 300) });
   }
   res.end();

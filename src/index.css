@@ -200,16 +200,31 @@ kbd{font-family:var(--mono);font-size:11px}
 .sub{color:var(--muted);font-size:14px;margin-top:6px}
 .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--dim);font-weight:500}
 .mono{font-family:var(--mono)}
+/* small dim descriptive text — used throughout as a secondary line under a
+   label (settings rows, panel captions, insight previews) */
+.ds{font-size:12px;color:var(--dim);line-height:1.45}
 .rowhead{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
 
 /* cards */
 .card{background:var(--bg2);border:1px solid var(--border);border-radius:14px}
-.grid-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:22px 0 26px;align-items:start}
+.grid-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:0 0 22px;align-items:start}
 .stat{padding:16px 18px}
 .stat .lab{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12.5px}
 .stat .val{font-family:var(--display);font-size:27px;font-weight:700;margin-top:8px;letter-spacing:-.5px}
 .stat .subv{font-size:11.5px;color:var(--dim);margin-top:2px}
 .widget-panel{padding:18px}
+
+/* Insight cards (InsightRow) — a severity-tinted left edge is set inline per
+   row (the color is dynamic), this just adds the hover lift + the icon badge
+   shell shared by every severity. */
+.insight-card{transition:transform .15s ease, border-color .15s ease}
+.insight-card:hover{transform:translateY(-1px)}
+.insight-badge{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;flex-shrink:0}
+
+/* Quick Answers panel (AskOrbitPanel) — a faint mint wash to mark it as the
+   page's primary action, same radial-glow idea as the marketing hero
+   sections but toned down to app-interior intensity. */
+.qa-panel{background:radial-gradient(140% 100% at 0% 0%, color-mix(in srgb, var(--mint) 5%, var(--bg2)), var(--bg2) 55%)}
 
 /* System health widget — a single-ratio meter (fill = worst severity present,
    track = a lighter step of that same hue) plus a small labeled grid of the
@@ -235,6 +250,18 @@ kbd{font-family:var(--mono);font-size:11px}
    its existing amber-for-warn convention untouched. */
 .hchip .sn-dot.warn{background:var(--red);box-shadow:0 0 6px color-mix(in srgb, var(--red) 55%, transparent)}
 @media(max-width:520px){.hgrid{grid-template-columns:1fr}}
+
+/* Orbit Intelligence preview rows — the condensed, ambient form of an Insight
+   shown on Dashboard/Teams/Time Tracking (see InsightPreviewRow.tsx). Row
+   style mirrors .hchip's icon-chip layout so this reads as the same family
+   of "status list" as the System health widget. */
+.insight-list{display:flex;flex-direction:column;gap:1px}
+.insight-row{display:flex;align-items:center;gap:10px;width:100%;padding:7px 8px;border-radius:9px;cursor:pointer;transition:.14s;text-align:left;background:none;border:none;color:inherit;font:inherit}
+.insight-row:hover{background:var(--raised)}
+.insight-row .ir-ic{width:22px;height:22px;border-radius:7px;display:grid;place-items:center;flex-shrink:0}
+.insight-row .ir-title{flex:1;min-width:0;font-size:12.5px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.insight-row .ir-chev{color:var(--dim);flex-shrink:0;opacity:0;transition:opacity .14s}
+.insight-row:hover .ir-chev{opacity:1}
 
 /* dashboard tiles — arrangeable and resizable via the Customise toggle.
    `.tile>*` (not `.tile>.card`) so absorbed panels whose root is a plain
@@ -839,64 +866,11 @@ kbd{font-family:var(--mono);font-size:11px}
 }
 
 /* ============ DASHBOARD — command center ============ */
-.dash-hero{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:26px}
-.dash-eyebrow{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11.5px;letter-spacing:1px;color:var(--muted);text-transform:uppercase}
-.dash-live{width:6px;height:6px;border-radius:50%;background:var(--mint);animation:authx-pulse 2s infinite}
-.dash-greet{font-family:var(--display);font-weight:600;font-size:clamp(26px,3vw,38px);letter-spacing:-.02em;margin-top:10px;line-height:1.05}
-.dash-clockcard{text-align:right;flex-shrink:0;padding:14px 20px;background:var(--bg2);border:1px solid var(--border);border-radius:14px}
-.dash-clock{font-family:var(--mono);font-size:30px;font-weight:600;letter-spacing:1px;color:var(--text);line-height:1}
-.dash-weather{font-size:12.5px;color:var(--muted);margin-top:7px;display:flex;align-items:center;gap:6px;justify-content:flex-end}
-.dash-wemoji{font-size:15px}
-
-.dash-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:14px;margin-bottom:34px}
-.metric{position:relative;overflow:hidden;text-align:left;padding:18px;background:var(--bg2);border:1px solid var(--border);border-radius:15px;transition:.18s;cursor:pointer}
-.metric:disabled{cursor:default}
-.metric:not(:disabled):hover{transform:translateY(-3px);border-color:color-mix(in srgb,var(--tone) 40%,var(--border))}
-.metric-glow{position:absolute;inset:0;opacity:.6;pointer-events:none}
-.metric-ic{position:relative;width:34px;height:34px;border-radius:10px;display:grid;place-items:center;border:1px solid;margin-bottom:16px}
-.metric-val{position:relative;font-family:var(--display);font-weight:600;font-size:28px;letter-spacing:-.01em;line-height:1}
-.metric-label{position:relative;font-size:12.5px;color:var(--muted);margin-top:7px}
-.metric-sub{position:relative;font-size:11px;color:var(--dim);margin-top:3px;font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-
-.dash-sectionhead{display:flex;align-items:center;justify-content:space-between;margin:0 0 14px;font-family:var(--mono);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--dim)}
-.dash-sectionhead.sm{margin-top:24px}
 .dash-more{display:inline-flex;align-items:center;gap:4px;color:var(--muted);font-family:var(--body);font-size:12px;text-transform:none;letter-spacing:0}
 .dash-more:hover{color:var(--mint)}
 
 /* project bays */
 .bays{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
-.dbay{position:relative;overflow:hidden;padding:18px;background:var(--bg2);border:1px solid var(--border);border-radius:16px;cursor:pointer;transition:.18s}
-.dbay:hover{transform:translateY(-3px);border-color:color-mix(in srgb,var(--accent) 45%,var(--border));box-shadow:0 20px 44px -26px var(--accent)}
-.dbay-bar{position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--accent),transparent 80%)}
-.dbay-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-top:6px}
-.dbay-name{display:flex;align-items:center;gap:9px;font-family:var(--display);font-weight:600;font-size:16px}
-.dbay-live{width:7px;height:7px;border-radius:50%;background:var(--mint);box-shadow:0 0 8px var(--mint)}
-.dbay-hold{font-family:var(--mono);font-size:9px;letter-spacing:1px;color:var(--amber);background:rgba(228,169,81,.12);border:1px solid rgba(228,169,81,.3);padding:1px 6px;border-radius:5px}
-.dbay-client{font-size:12px;color:var(--dim);margin-top:3px}
-.dbay-linked{color:var(--mint);opacity:.8}
-.dbay-chips{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0}
-.dbay-meta{display:flex;gap:14px;font-family:var(--mono);font-size:11px;padding-top:12px;border-top:1px solid var(--border-soft)}
-.dbay-meta span{display:inline-flex;align-items:center;gap:5px}
-.dbay-launch{display:flex;gap:7px;margin-top:14px}
-.dbay-all{margin-left:auto;border-color:color-mix(in srgb,var(--accent) 45%,transparent)!important;background:color-mix(in srgb,var(--accent) 12%,transparent)!important;color:var(--accent)!important}
-
-/* aside */
-.dash-sys{display:flex;flex-direction:column;gap:1px;background:var(--bg2);border:1px solid var(--border);border-radius:13px;overflow:hidden;margin-bottom:6px}
-.dash-sysrow{display:flex;align-items:center;gap:10px;padding:11px 14px}
-.dash-sysrow + .dash-sysrow{border-top:1px solid var(--border-soft)}
-.dash-sysdot{width:8px;height:8px;border-radius:50%}
-.dash-syslabel{font-size:13px;color:var(--text2)}
-.dash-sysval{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--dim);text-transform:capitalize}
-.dash-today,.dash-tickets{display:flex;flex-direction:column;gap:4px}
-.dash-task,.dash-ticket{display:flex;align-items:center;gap:10px;text-align:left;padding:9px 11px;border-radius:9px;transition:.12s}
-.dash-task:hover,.dash-ticket:hover{background:var(--raised)}
-.dash-taskdot{width:14px;height:14px;border-radius:50%;border:2px solid;flex-shrink:0}
-.dash-tasktitle{font-size:13px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dash-ticket-title{font-size:12.5px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
-.dash-ticket-status{font-family:var(--mono);font-size:10px;color:var(--dim);flex-shrink:0}
-.dash-taskempty{font-size:12.5px;color:var(--dim);padding:10px 11px}
-
-@media (max-width:640px){ .dash-clockcard{display:none} }
 
 /* live orbit timer on dashboard */
 .orbit-stat .val{font-variant-numeric:tabular-nums}
@@ -1267,7 +1241,7 @@ button.ttask-prio{background:none;border:none;padding:0;font:inherit;cursor:poin
 .ttask-est::-webkit-inner-spin-button,.ttask-est::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
 
 /* ---- Dashboard greeting + break mode ---- */
-.dash-greet{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.dash-greet{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:20px}
 .break-btn{display:inline-flex;align-items:center;gap:8px;height:38px;padding:0 15px;border-radius:10px;border:1px solid var(--border);background:var(--raised);color:var(--muted);font-size:13px;flex-shrink:0;transition:.15s}
 .break-btn:hover{color:var(--text);border-color:var(--amber);background:rgba(240,180,90,.08)}
 .break-btn .bb-cup{font-size:15px;filter:grayscale(.1)}
@@ -1298,6 +1272,7 @@ button.ttask-prio{background:none;border:none;padding:0;font:inherit;cursor:poin
 
 /* ---- Verified badge ---- */
 .avatar{position:relative}
+.avatar-img{width:100%;height:100%;border-radius:inherit;object-fit:cover}
 .avatar-verified{position:absolute;bottom:-2px;right:-2px;width:15px;height:15px;border-radius:50%;background:var(--mint);color:var(--on-accent);display:grid;place-items:center;border:2px solid var(--bg2);box-shadow:0 0 6px color-mix(in srgb, var(--mint) 60%, transparent)}
 .pn-verified{display:inline-flex;vertical-align:middle;margin-left:6px;color:var(--mint)}
 .profile-head .pn{display:flex;align-items:center}
@@ -1490,9 +1465,13 @@ button.ttask-prio{background:none;border:none;padding:0;font:inherit;cursor:poin
 .team-rail-newbtn{display:flex;align-items:center;gap:7px;width:100%;padding:0;border:none;color:var(--dim);background:none;font-size:13px;cursor:pointer;transition:.12s;margin-top:22px;text-align:left}
 .team-rail-newbtn:hover{color:var(--mint)}
 
+.team-logo{width:16px;height:16px;border-radius:50%;object-fit:cover;flex-shrink:0;border:1px solid var(--border-soft)}
+.team-logo-md{width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0;border:1px solid var(--border-soft)}
+.team-logo-placeholder{width:28px;height:28px;border-radius:50%;background:var(--raised2);border:1px dashed var(--border);display:grid;place-items:center;color:var(--dim);flex-shrink:0}
+
 .tm-detail{flex:1;min-width:0}
 .tm-dhead{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px;gap:12px}
-.tm-dname{font-family:var(--display);font-size:25px;font-weight:700}
+.tm-dname{font-family:var(--display);font-size:25px;font-weight:700;display:flex;align-items:center;gap:10px}
 .tm-drole{font-family:var(--mono);font-size:10.5px;letter-spacing:2px;font-weight:700;flex-shrink:0}
 .tm-dsub{font-size:13px;color:var(--dim);margin-bottom:24px}
 .tm-divider{height:1px;background:var(--border-soft);margin-bottom:6px}

@@ -31,7 +31,7 @@ describe("askAI", () => {
 
   it("returns null text and null source when no provider is configured", async () => {
     const r = await askAI({}, undefined, "system", "prompt");
-    expect(r).toEqual({ text: null, source: null });
+    expect(r).toEqual({ text: null, source: null, error: "No AI provider configured" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -51,15 +51,15 @@ describe("askAI", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("returns null when every configured provider fails", async () => {
+  it("returns null when every configured provider fails, with the real reason in `error`", async () => {
     fetchMock.mockResolvedValue(anthropicFail());
     const r = await askAI({ anthropic: "a" }, undefined, "system", "prompt");
-    expect(r).toEqual({ text: null, source: null });
+    expect(r).toEqual({ text: null, source: null, error: "All configured providers failed: anthropic — no credit" });
   });
 
-  it("does not throw when a provider call itself throws (network error)", async () => {
+  it("does not throw when a provider call itself throws (network error), and surfaces that reason too", async () => {
     fetchMock.mockRejectedValueOnce(new Error("network down"));
     const r = await askAI({ anthropic: "a" }, undefined, "system", "prompt");
-    expect(r).toEqual({ text: null, source: null });
+    expect(r).toEqual({ text: null, source: null, error: "All configured providers failed: anthropic — network down" });
   });
 });

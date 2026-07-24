@@ -15,7 +15,7 @@ function project(over: Partial<Project> = {}): Project {
   return {
     id: "p1", user_id: "u1", team_id: null, name: "Proj", client: null,
     stacks: [], status: "active", accent: null,
-    fe_path: null, sln_path: null, dev_port: null, branch: null, description: null,
+    fe_path: null, sln_path: null, dev_port: null, branch: null, description: null, notes: null,
     sprint_project_id: null, sprint_project_name: null,
     repo_provider: null, repo_full_name: null, repo_id: null, repo_default_branch: null,
     created_at: new Date().toISOString(),

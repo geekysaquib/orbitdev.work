@@ -133,13 +133,16 @@ async function run() {
         sentryCount !== null ? `Unresolved Sentry issues: ${sentryCount}` : null,
       ].filter(Boolean).join("\n");
 
-      const { text } = await askAI(
+      const { text, error } = await askAI(
         { anthropic: intg.anthropic_api_key, gemini: intg.gemini_api_key, openai: intg.openai_api_key, grok: intg.grok_api_key },
         intg.ai_provider,
         "You write short, proactive \"here's your day\" briefs for a solo developer, based on raw facts about their tasks, sprint board, pull requests, CI, and error tracker. 3-5 sentences, specific numbers, no greeting or sign-off — just the brief itself. If everything looks calm, say so briefly rather than padding.",
         facts,
       );
-      if (!text) continue;
+      if (!text) {
+        if (error) console.warn(`[daily-brief] no AI answer for user ${intg.user_id}: ${error}`);
+        continue;
+      }
 
       await dbInsert("notifications", { user_id: userId, kind: "daily_brief", title: "Your day", body: text.slice(0, 2000) });
     } catch (e) {

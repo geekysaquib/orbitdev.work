@@ -12,6 +12,9 @@ import { useBreak } from "../context/Break";
 import { PresenceProvider } from "../context/Presence";
 import { useSignOutGuard } from "../hooks/useSignOutGuard";
 import { useVscodeBridge } from "../hooks/useVscodeBridge";
+import { useOrbitInsights, type OrbitInsightsContext } from "../hooks/useOrbitInsights";
+import { useOrbitRuntime } from "../runtime";
+import { SEVERITY_COLOR } from "./InsightRow";
 import { nonProductionEnvLabel } from "../lib/appEnv";
 import { CommandPalette } from "./CommandPalette";
 import { StartWorkModal } from "./StartWorkModal";
@@ -82,6 +85,11 @@ export function Layout() {
   useVscodeBridge();  // publishes the work list to the agent and runs VS Code's relayed commands
   const nav = useNavigate();
   const location = useLocation();
+  // Computed once here (not per-page) and handed down via <Outlet context>,
+  // so Dashboard/TimeTracking/Teams share one Knowledge Graph bootstrap
+  // instead of each triggering their own. See src/hooks/useOrbitInsights.ts.
+  const { knowledge } = useOrbitRuntime();
+  const { insights, insightsLoading } = useOrbitInsights(knowledge);
   const [clock, setClock] = useState("");
   const [unread, setUnread] = useState(0);
   const [notifs, setNotifs] = useState<Notification[]>([]);
@@ -376,6 +384,18 @@ export function Layout() {
             )}
           </div>
 
+          {!insightsLoading && insights.length > 0 && (
+            <button
+              className="notif-btn" title={`${insights.length} insight${insights.length === 1 ? "" : "s"} need attention — view in Orbit Intelligence`}
+              onClick={() => nav("/intelligence")}
+            >
+              <Icon name="sparkles" size={18} />
+              <span className="notif-count" style={{ background: SEVERITY_COLOR[insights[0].severity] }}>
+                {insights.length > 9 ? "9+" : insights.length}
+              </span>
+            </button>
+          )}
+
           <div className="notif-wrap" ref={notifRef}>
             <button className="notif-btn" title="Notifications" onClick={() => { setNotifOpen((v) => { if (!v) loadNotifs(); return !v; }); }}>
               <Icon name="bell" size={18} />
@@ -416,7 +436,7 @@ export function Layout() {
 
           <div className="profile-wrap" ref={menuRef}>
             <button className="avatar" onClick={() => setMenu((m) => !m)} title={verified ? "Account · verified" : "Account"}>
-              {initials}
+              {user?.avatar_data_url ? <img className="avatar-img" src={user.avatar_data_url} alt="" /> : initials}
               {verified && <span className="avatar-verified" title="Email verified"><Icon name="check" size={9} /></span>}
             </button>
             {menu && (
@@ -425,8 +445,11 @@ export function Layout() {
                   <div className="pn">{name}{verified && <span className="pn-verified" title="Verified"><Icon name="checkc" size={14} /></span>}</div>
                   <div className="pe">{user?.email}</div>
                 </div>
+                <button className="menu-item" onClick={() => { setMenu(false); nav("/profile"); }}>
+                  <Icon name="user" size={16} />My profile
+                </button>
                 <button className="menu-item" onClick={() => { setMenu(false); nav("/settings"); }}>
-                  <Icon name="user" size={16} />Profile &amp; settings
+                  <Icon name="settings" size={16} />Settings
                 </button>
                 <button className="menu-item" onClick={() => { setMenu(false); setLog(true); }}>
                   <Icon name="bolt" size={16} />What's new
@@ -476,7 +499,9 @@ export function Layout() {
                 <span>Timer paused — no activity on this tab. It'll resume the moment you're back.</span>
               </div>
             )}
-            <div key={location.pathname} className="page-transition"><Outlet /></div>
+            <div key={location.pathname} className="page-transition">
+              <Outlet context={{ insights, insightsLoading } satisfies OrbitInsightsContext} />
+            </div>
           </div>
         </div>
       </div>

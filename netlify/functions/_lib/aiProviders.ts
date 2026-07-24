@@ -22,11 +22,13 @@ const router = new AIRouter(createCloudAdapters());
  * first one that actually answers — so one provider being out of credit or
  * rate-limited doesn't silently stop daily-brief/weekly-digest from ever
  * producing a notification again. Returns { text: null } only when every
- * configured provider failed (or none are configured).
+ * configured provider failed (or none are configured) — `error` carries the
+ * real per-provider reason (AIRouter.complete's `failedDetail`) so a caller
+ * can log *why*, instead of a cron run just quietly doing nothing forever.
  */
 export async function askAI(
   keys: ProviderKeys, preferred: CloudProvider | null | undefined, system: string, prompt: string,
-): Promise<{ text: string | null; source: CloudProvider | null }> {
+): Promise<{ text: string | null; source: CloudProvider | null; error?: string }> {
   const r = await router.complete({ system, turns: [{ role: "user", content: prompt }] }, keys, preferred);
-  return { text: r.ok ? r.text ?? null : null, source: r.source };
+  return { text: r.ok ? r.text ?? null : null, source: r.source, error: r.ok ? undefined : r.error };
 }

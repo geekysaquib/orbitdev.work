@@ -7,7 +7,7 @@ export interface Project {
   id: string; user_id: string; team_id: string | null; name: string; client: string | null;
   stacks: string[]; status: ProjectStatus; accent: string | null;
   fe_path: string | null; sln_path: string | null; dev_port: number | null;
-  branch: string | null; description: string | null;
+  branch: string | null; description: string | null; notes: string | null;
   sprint_project_id: string | null; sprint_project_name: string | null;
   repo_provider: "github" | "gitlab" | "azuredevops" | null; repo_full_name: string | null;
   repo_id: string | null; repo_default_branch: string | null;
@@ -23,7 +23,7 @@ export interface TimeEntry {
   started_at: string; ended_at: string | null; seconds: number; created_at: string;
 }
 export interface Team {
-  id: string; name: string; owner_id: string; created_at: string;
+  id: string; name: string; owner_id: string; logo_data_url: string | null; created_at: string;
 }
 export interface TeamMember {
   team_id: string; user_id: string; role: TeamRole; joined_at: string;
@@ -43,7 +43,7 @@ export interface TeamActivity {
 export interface Ticket {
   id: string; user_id: string; project_id: string | null; zoho_id: string | null;
   title: string; body: string | null; priority: Priority; status: string;
-  synced_at: string | null; ai_note: string | null; created_at: string;
+  synced_at: string | null; ai_note: string | null; converted_task_id: string | null; created_at: string;
 }
 export interface CalEvent {
   id: string; user_id: string; project_id: string | null; title: string;

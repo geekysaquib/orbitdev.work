@@ -4,7 +4,10 @@
  * the token here IS the session, and it's what src/lib/supabase.ts hands to
  * PostgREST on every request via the `accessToken` client option.
  */
-export interface OrbitUser { id: string; email: string; full_name: string; email_verified: boolean; }
+export interface OrbitUser {
+  id: string; email: string; full_name: string; email_verified: boolean;
+  avatar_data_url: string | null; phone: string | null; job_title: string | null;
+}
 
 const TOKEN_KEY = "orbit.auth.token";
 const USER_KEY = "orbit.auth.user";

@@ -1,25 +1,39 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useOutletContext } from "react-router-dom";
 import { Icon } from "../lib/icons";
 import { Select } from "../components/Select";
-import { ACCENT, OrbitLoader, Empty, SetupRequired } from "../components/ui";
+import { ACCENT, OrbitLoader, Empty, Eyebrow, SetupRequired } from "../components/ui";
+import { InsightPreviewRow } from "../components/InsightPreviewRow";
 import { useToast } from "../context/Toast";
 import { useZoho } from "../context/Zoho";
 import { useAgent } from "../context/Agent";
 import { useBreak } from "../context/Break";
 import { useTable } from "../hooks/useTable";
+import type { OrbitInsightsContext } from "../hooks/useOrbitInsights";
+import { useOrbitRuntime } from "../runtime";
+import { summarizeToday, type IntelligenceAnswer } from "../lib/intelligence";
 import { fetchTimesheet, type Timesheet } from "../lib/zoho";
 import { fetchOrbitHours, type OrbitHours } from "../lib/orbitHours";
 import { TIMER_EVENT, readTimer, startTimer, stopTimer } from "../lib/timer";
 import { fireAsync } from "../lib/automation";
 import type { Project, Task } from "../lib/types";
 
+// The genuinely time-based detectors — see docs/architecture/ambient-intelligence.md.
+const TIME_DETECTOR_IDS = new Set(["missing-daily-work", "long-running-time-entry", "declining-project-activity"]);
+
 export default function TimeTracking() {
+  const nav = useNavigate();
   const toast = useToast();
   const zoho = useZoho();
   const { status: agentStatus } = useAgent();
   const { onBreak } = useBreak();
   const { rows: projects } = useTable<Project>("projects");
   const { rows: tasks } = useTable<Task>("tasks");
+  const { knowledge } = useOrbitRuntime();
+  const { insights } = useOutletContext<OrbitInsightsContext>();
+  const timeInsights = insights.filter((i) => TIME_DETECTOR_IDS.has(i.detectorId));
+  const [today, setToday] = useState<IntelligenceAnswer | null>(null);
+  useEffect(() => { summarizeToday(knowledge).then(setToday).catch(() => {}); }, [knowledge]);
   const [running, setRunning] = useState(false);
   const [sec, setSec] = useState(0);
   const [ts, setTs] = useState<Timesheet | null>(null);
@@ -109,6 +123,19 @@ export default function TimeTracking() {
           </div>
         </div>
       </div>
+
+      {(today?.summary || timeInsights.length > 0) && (
+        <div className="card" style={{ padding: 16, marginBottom: 22, maxWidth: 460 }}>
+          <div className="rowhead" style={{ marginBottom: 4 }}>
+            <Eyebrow>Today</Eyebrow>
+            <button className="dash-more" onClick={() => nav("/intelligence")}>View all<Icon name="chevR" size={12} /></button>
+          </div>
+          {today?.summary && <p style={{ fontSize: 12.5, color: "var(--muted)", margin: "4px 0 8px" }}>{today.summary}</p>}
+          <div className="insight-list">
+            {timeInsights.map((i) => <InsightPreviewRow key={i.id} insight={i} />)}
+          </div>
+        </div>
+      )}
 
       {/* focus timer */}
       <div className="card" style={{ padding: 24, display: "flex", flexDirection: "column", alignItems: "center", gap: 14, maxWidth: 460 }}>

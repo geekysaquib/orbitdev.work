@@ -1,0 +1,28 @@
+name: CI
+
+# Typecheck + unit tests + production build on every push/PR. No secrets
+# required — src/lib/supabase.ts only warns on missing VITE_SUPABASE_* env
+# vars, it doesn't throw, so both `vitest run` and `vite build` succeed
+# without a live Supabase project configured. Scoped intentionally to these
+# three checks — not Playwright e2e (needs browser installs, a running
+# server, and real integration credentials) and not ESLint (no config exists
+# yet in this repo; introducing one is separate follow-up work).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx tsc -b
+      - run: npx vitest run
+      - run: npm run build

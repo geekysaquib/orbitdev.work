@@ -376,11 +376,6 @@ alter table public.users alter column password_changed_at set default now();
 -- Atomic team create/transfer-ownership, used by netlify/functions/teams.ts
 -- instead of separate insert/update calls that could leave membership/
 -- ownership inconsistent if a step failed mid-sequence.
--- RC1 task 6: SECURITY INVOKER (the default — not specified as DEFINER), so
--- a direct call from authenticated/anon is already blocked by teams/
--- team_members' own RLS (no insert policy grants that). The revoke below is
--- defense-in-depth against that RLS layer alone changing in the future —
--- this function does no authorization of its own, it trusts its caller.
 create or replace function public.create_team_with_owner(p_name text, p_owner_id uuid)
 returns public.teams
 language plpgsql
@@ -393,6 +388,11 @@ begin
   return t;
 end;
 $$;
+-- RC1 task 6: SECURITY INVOKER (the default — not specified as DEFINER), so
+-- a direct call from authenticated/anon is already blocked by teams/
+-- team_members' own RLS (no insert policy grants that). The revoke below is
+-- defense-in-depth against that RLS layer alone changing in the future —
+-- this function does no authorization of its own, it trusts its caller.
 revoke execute on function public.create_team_with_owner(text, uuid) from public;
 grant execute on function public.create_team_with_owner(text, uuid) to service_role;
 
@@ -826,6 +826,41 @@ create policy "select: team member" on public.domain_events for select using (
   team_id is not null and public.is_team_member(team_id, auth.uid())
 );
 alter publication supabase_realtime add table public.domain_events;
+
+-- ---------- trust fixes: real project notes + a real ticket->task link ----------
+-- Both were previously fake UI (an unwired textarea, and a "To task" button
+-- that only toasted success). See docs/architecture/trust-fixes.md.
+alter table public.projects add column if not exists notes text;
+alter table public.tickets add column if not exists converted_task_id uuid references public.tasks(id) on delete set null;
+
+-- ---------- team logos + user profile details ----------
+-- Both stored as base64 data URIs (like Mail.tsx attachments) rather than in
+-- Supabase Storage — no bucket is provisioned for this project, and writes to
+-- both tables already go through service-role Netlify functions, so a text
+-- column needs no new infrastructure. Client-side upload caps the raw file
+-- size (~250KB) before it ever reaches these columns.
+alter table public.teams add column if not exists logo_data_url text;
+alter table public.users add column if not exists avatar_data_url text;
+alter table public.users add column if not exists phone text;
+alter table public.users add column if not exists job_title text;
+
+create or replace function public.create_team_with_owner(p_name text, p_owner_id uuid, p_logo_data_url text default null)
+returns public.teams
+language plpgsql
+set search_path = public
+as $$
+declare t public.teams;
+begin
+  insert into public.teams (name, owner_id, logo_data_url) values (p_name, p_owner_id, p_logo_data_url) returning * into t;
+  insert into public.team_members (team_id, user_id, role) values (t.id, p_owner_id, 'owner');
+  return t;
+end;
+$$;
+-- Distinct overload from the (text, uuid) version above (Postgres treats a
+-- different parameter list as a different function) — needs its own grant,
+-- not inherited from the two-arg version's. Same RC1 task 6 reasoning.
+revoke execute on function public.create_team_with_owner(text, uuid, text) from public;
+grant execute on function public.create_team_with_owner(text, uuid, text) to service_role;
 
 -- ---------- migration tracking (RC1 task 4 — see docs/architecture/rc1-release.md) ----------
 -- Until now, this file was applied by hand with no record of what any given

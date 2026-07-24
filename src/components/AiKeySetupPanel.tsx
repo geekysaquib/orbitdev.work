@@ -5,7 +5,7 @@ import { Select } from "./Select";
 import { useToast } from "../context/Toast";
 import { fetchIntegrations, saveIntegrations, providerKeys, type Integrations } from "../lib/integrations";
 import { recordAudit } from "../lib/audit";
-import { askLocalAI, orderedProviders, PROVIDER_LABEL, CLOUD_PROVIDERS, type CloudProvider } from "../lib/ai";
+import { askLocalAI, askCloudProvider, orderedProviders, PROVIDER_LABEL, CLOUD_PROVIDERS, type CloudProvider } from "../lib/ai";
 
 const PROVIDER_PLACEHOLDER: Record<CloudProvider, string> = {
   anthropic: "sk-ant-…", gemini: "AIza…", openai: "sk-…", grok: "xai-…",
@@ -21,6 +21,10 @@ export function AiKeySetupPanel({ onConnected }: { onConnected?: () => void }) {
   const [preferred, setPreferred] = useState<CloudProvider>("anthropic");
   const [savingA, setSavingA] = useState(false);
   const [localAiTest, setLocalAiTest] = useState<{ busy: boolean; ok: boolean | null; message: string | null }>({ busy: false, ok: null, message: null });
+  const [cloudTest, setCloudTest] = useState<Record<CloudProvider, { busy: boolean; ok: boolean | null; message: string | null }>>({
+    anthropic: { busy: false, ok: null, message: null }, gemini: { busy: false, ok: null, message: null },
+    openai: { busy: false, ok: null, message: null }, grok: { busy: false, ok: null, message: null },
+  });
 
   useEffect(() => {
     fetchIntegrations().then((i) => {
@@ -52,6 +56,14 @@ export function AiKeySetupPanel({ onConnected }: { onConnected?: () => void }) {
     setLocalAiTest({ busy: false, ok: r.ok, message: r.ok ? (r.text || "").trim() : r.error || "Couldn't reach the local model" });
   }
 
+  async function testCloud(p: CloudProvider) {
+    const apiKey = keys[p].trim();
+    if (!apiKey) return;
+    setCloudTest((s) => ({ ...s, [p]: { busy: true, ok: null, message: null } }));
+    const r = await askCloudProvider(p, apiKey);
+    setCloudTest((s) => ({ ...s, [p]: { busy: false, ok: r.ok, message: r.ok ? (r.text || "").trim() : r.error || "Request failed" } }));
+  }
+
   const configured = orderedProviders({ anthropic: keys.anthropic, gemini: keys.gemini, openai: keys.openai, grok: keys.grok });
 
   return (
@@ -76,6 +88,22 @@ export function AiKeySetupPanel({ onConnected }: { onConnected?: () => void }) {
             />
           ))}
         </div>
+        {CLOUD_PROVIDERS.some((p) => keys[p].trim()) && (
+          <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+            {CLOUD_PROVIDERS.filter((p) => keys[p].trim()).map((p) => {
+              const t = cloudTest[p];
+              return (
+                <div key={p} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, flexWrap: "wrap" }}>
+                  <button type="button" className="btn ghost sm" disabled={t.busy} onClick={() => testCloud(p)}>
+                    {t.busy ? <><Icon name="loader" size={13} className="spin" />Testing…</> : <><Icon name="play" size={12} fill />Test {PROVIDER_LABEL[p]}</>}
+                  </button>
+                  {t.ok === true && <span style={{ color: "var(--mint)" }}>Working — replied: "{t.message}"</span>}
+                  {t.ok === false && <span style={{ color: "var(--red)" }}>{t.message}</span>}
+                </div>
+              );
+            })}
+          </div>
+        )}
         <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <label style={{ fontSize: 12.5, color: "var(--muted)" }}>Preferred provider</label>
           <Select value={preferred} onChange={(e) => setPreferred(e.target.value as CloudProvider)} style={{ minWidth: 140 }}>

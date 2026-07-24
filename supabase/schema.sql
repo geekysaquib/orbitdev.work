@@ -21,6 +21,9 @@ create table if not exists public.users (
   failed_login_attempts int not null default 0,
   lockout_until timestamptz,
   password_changed_at timestamptz not null default now(),
+  avatar_data_url text,
+  phone text,
+  job_title text,
   created_at timestamptz not null default now()
 );
 
@@ -47,6 +50,7 @@ create table if not exists public.teams (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   owner_id uuid not null references public.users(id) on delete restrict,
+  logo_data_url text,
   created_at timestamptz not null default now()
 );
 
@@ -91,6 +95,7 @@ create table if not exists public.projects (
   dev_port int,
   branch text,
   description text,
+  notes text,
   sprint_project_id text,
   sprint_project_name text,
   repo_provider text check (repo_provider in ('github','gitlab','azuredevops')),
@@ -151,6 +156,7 @@ create table if not exists public.tickets (
   status text not null default 'Open',
   synced_at timestamptz,
   ai_note text,
+  converted_task_id uuid references public.tasks(id) on delete set null,
   created_at timestamptz not null default now(),
   unique (user_id, zoho_id)
 );
@@ -467,20 +473,20 @@ grant execute on function public.is_team_member(uuid, uuid) to authenticated;
 -- teams/team_members (no insert/update policy grants that). The explicit
 -- revoke below is defense-in-depth against that RLS layer alone changing in
 -- the future — these functions do no authorization of their own. RC1 task 6.
-create or replace function public.create_team_with_owner(p_name text, p_owner_id uuid)
+create or replace function public.create_team_with_owner(p_name text, p_owner_id uuid, p_logo_data_url text default null)
 returns public.teams
 language plpgsql
 set search_path = public
 as $$
 declare t public.teams;
 begin
-  insert into public.teams (name, owner_id) values (p_name, p_owner_id) returning * into t;
+  insert into public.teams (name, owner_id, logo_data_url) values (p_name, p_owner_id, p_logo_data_url) returning * into t;
   insert into public.team_members (team_id, user_id, role) values (t.id, p_owner_id, 'owner');
   return t;
 end;
 $$;
-revoke execute on function public.create_team_with_owner(text, uuid) from public;
-grant execute on function public.create_team_with_owner(text, uuid) to service_role;
+revoke execute on function public.create_team_with_owner(text, uuid, text) from public;
+grant execute on function public.create_team_with_owner(text, uuid, text) to service_role;
 
 create or replace function public.transfer_team_ownership(p_team_id uuid, p_old_owner_id uuid, p_new_owner_id uuid)
 returns void

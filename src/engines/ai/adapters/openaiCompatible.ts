@@ -2,11 +2,19 @@ import type { AIAdapter, AICompleteRequest, AICompleteResult, AIProviderId } fro
 
 const MAX_TOKENS = 900;
 
-// OpenAI nests error text as `{error:{message}}`; Grok (xAI) sometimes sends
-// the plain-string form `{error:"..."}` instead — handle both.
-function errorText(j: { error?: string | { message?: string } }, status: number, model: string): string {
+// OpenAI nests error text as `{error:{message,type,code}}`; Grok (xAI)
+// sometimes sends the plain-string form `{error:"..."}` instead — handle
+// both. `type`/`code` (e.g. "insufficient_quota" vs "rate_limit_exceeded")
+// are the single most useful bit for telling "your account has no billing
+// set up" apart from "you're actually being throttled" — both read as some
+// flavor of "limit" in the bare `.message` text alone, so surface them
+// instead of discarding them. Kept in sync by hand with the duplicate
+// implementation in agent/server.mjs's openAiCompatError.
+function errorText(j: { error?: string | { message?: string; type?: string; code?: string } }, status: number, model: string): string {
   const e = j?.error;
-  return (typeof e === "string" ? e : e?.message) || `${model} error ${status}`;
+  const message = (typeof e === "string" ? e : e?.message) || `${model} error ${status}`;
+  const tag = typeof e === "object" && e ? [e.type, e.code].filter(Boolean).join("/") : "";
+  return `${message} [HTTP ${status}${tag ? ` · ${tag}` : ""}]`;
 }
 
 /**

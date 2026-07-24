@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Icon } from "../lib/icons";
 import { Badge, ACCENT, prColor, Empty, OrbitLoader } from "../components/ui";
 import { useTable } from "../hooks/useTable";
@@ -10,7 +10,7 @@ import { ask, type AiSource, type ProviderKeys, type CloudProvider } from "../li
 import { recordAudit } from "../lib/audit";
 import { fireAsync } from "../lib/automation";
 import { useOrbitRuntime } from "../runtime";
-import type { Ticket, Project } from "../lib/types";
+import type { Ticket, Project, Task } from "../lib/types";
 
 const TRIAGE_SYSTEM = `You triage support/dev tickets. Given a title, description, and a list of projects, respond with exactly four lines:
 Priority: <low|med|high>
@@ -27,7 +27,9 @@ function parseTriageLine(text: string, label: string): string | null {
 export default function Tickets() {
   const { rows, insert, update, reload, loading } = useTable<Ticket>("tickets");
   const { rows: projects } = useTable<Project>("projects");
+  const { insert: insertTask } = useTable<Task>("tasks");
   const { events } = useOrbitRuntime();
+  const nav = useNavigate();
   const toast = useToast();
   // Fire-and-forget, same principle as recordAudit() next to each call below —
   // a failed publish must never block a ticket mutation. See
@@ -35,8 +37,14 @@ export default function Tickets() {
   const publishTicketEvent = (type: string, payload: Record<string, unknown>) => {
     void events.publish({ source: "ticket-workflow", type, occurredAt: new Date().toISOString(), payload }).catch(() => {});
   };
+  // Same "task-workflow" source/shape Tasks.tsx publishes on task creation —
+  // see docs/architecture/event-engine-adoption.md.
+  const publishTaskEvent = (type: string, teamId: string | null, payload: Record<string, unknown>) => {
+    void events.publish({ source: "task-workflow", type, occurredAt: new Date().toISOString(), teamId, payload }).catch(() => {});
+  };
   const [sel, setSel] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [converting, setConverting] = useState(false);
   const [aiKeys, setAiKeys] = useState<ProviderKeys>({});
   const [aiProvider, setAiProvider] = useState<CloudProvider | undefined>(undefined);
   const [triage, setTriage] = useState<{ id: string; text: string; source: AiSource } | null>(null);
@@ -83,6 +91,24 @@ export default function Tickets() {
         hasAiNote: !!note,
       });
     }
+  }
+
+  /**
+   * Creates a real task from this ticket and persists the link on
+   * `tickets.converted_task_id` (not just local/session state), so "already
+   * converted" survives a reload — see docs/architecture/trust-fixes.md.
+   */
+  async function convertToTask(t: Ticket) {
+    if (converting || t.converted_task_id) return;
+    setConverting(true);
+    const { data, error } = await insertTask({ title: t.title, status: "todo", priority: t.priority, project_id: t.project_id } as Partial<Task>);
+    if (error || !data) { toast(`Couldn't create task: ${error || "unknown error"}`); setConverting(false); return; }
+    recordAudit({ action: "task.create", entityType: "task", entityId: data.id, meta: { title: t.title, fromTicket: t.id } });
+    publishTaskEvent("created", data.team_id ?? null, { taskId: data.id, projectId: data.project_id, teamId: data.team_id ?? null, title: data.title, status: "todo", priority: data.priority });
+    const { error: linkError } = await update(t.id, { converted_task_id: data.id } as Partial<Ticket>);
+    setConverting(false);
+    if (linkError) { toast(`Task created, but couldn't link it back to this ticket: ${linkError}`); return; }
+    toast(`Created task · ${t.title}`);
   }
 
   /** Shared by the status buttons so audit, toast and automation stay in one place. */
@@ -175,7 +201,13 @@ export default function Tickets() {
             <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
               <button className="btn" onClick={() => setTicketStatus(active, "In Progress", "Status updated")}><Icon name="check" size={14} />In progress</button>
               <button className="btn" onClick={() => setTicketStatus(active, "Closed", "Marked closed")}><Icon name="check2" size={14} />Close</button>
-              <button className="btn accent" onClick={() => toast("Task created from item")}><Icon name="plus" size={14} />To task</button>
+              {active.converted_task_id ? (
+                <button className="btn accent" onClick={() => nav("/tasks")}><Icon name="check" size={14} />View task</button>
+              ) : (
+                <button className="btn accent" disabled={converting} onClick={() => convertToTask(active)}>
+                  {converting ? <Icon name="loader" size={14} className="spin" /> : <Icon name="plus" size={14} />}To task
+                </button>
+              )}
               <button className="btn ghost" disabled={triaging} onClick={() => runTriage(active)}>
                 {triaging ? <><Icon name="loader" size={14} className="spin" />Triaging…</> : <><Icon name="sparkles" size={14} />AI triage</>}
               </button>

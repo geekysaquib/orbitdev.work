@@ -5,6 +5,7 @@ import { sendMail } from "./_lib/mailer";
 import { teamInviteEmail } from "./_lib/email-templates";
 import { verifySession } from "./_lib/verifyToken";
 import { serverEventEngine } from "./_lib/serverEvents";
+import { validateImageDataUrl } from "./_lib/imageValidation";
 import { rateLimit } from "./_lib/rateLimit";
 import { maskEmail } from "./_lib/mailLog";
 
@@ -41,9 +42,11 @@ function publishTeamEvent(type: string, teamId: string, userId: string, payload:
  *   change-role       { team_id, user_id, role }                -> owner only
  *   transfer-ownership{ team_id, new_owner_user_id }            -> owner only
  *   leave             { team_id }                               -> any member except a sole owner
+ *   update            { team_id, name, logo_data_url? }          -> owner/admin only
+ *   delete            { team_id }                                -> owner only; notifies every other member
  */
 
-interface TeamRow { id: string; name: string; owner_id: string; created_at: string; }
+interface TeamRow { id: string; name: string; owner_id: string; logo_data_url: string | null; created_at: string; }
 interface TeamMemberRow { team_id: string; user_id: string; role: "owner" | "admin" | "member" | "viewer"; joined_at: string; }
 interface TeamInviteRow {
   id: string; team_id: string; email: string; role: "admin" | "member" | "viewer"; token_hash: string;
@@ -135,10 +138,12 @@ export const handler: Handler = async (event) => {
       case "create": {
         const name = String(body.name || "").trim();
         if (!name || name.length > TEAM_NAME_MAX) return json(400, { error: `Team name must be 1–${TEAM_NAME_MAX} characters.` });
+        const logo = validateImageDataUrl(body.logo_data_url, "Logo");
+        if (logo && typeof logo === "object") return json(400, { error: logo.error });
 
         // One atomic DB-function call (see create_team_with_owner in supabase/schema.sql)
         // instead of insert-team-then-insert-member with a manual compensating delete.
-        const team = await dbRpc<TeamRow>("create_team_with_owner", { p_name: name, p_owner_id: session.userId });
+        const team = await dbRpc<TeamRow>("create_team_with_owner", { p_name: name, p_owner_id: session.userId, p_logo_data_url: logo });
         publishTeamEvent("member_joined", team.id, session.userId, { role: "owner" });
         return json(200, { team, role: "owner" });
       }
@@ -323,6 +328,67 @@ export const handler: Handler = async (event) => {
 
         await dbDelete("team_members", `team_id=eq.${teamId}&user_id=eq.${session.userId}`);
         publishTeamEvent("member_left", teamId, session.userId, {});
+        return json(200, { ok: true });
+      }
+
+      case "update": {
+        const teamId = String(body.team_id || "");
+        if (!UUID_RE.test(teamId)) return json(400, { error: "Invalid team id." });
+        const name = String(body.name || "").trim();
+        if (!name || name.length > TEAM_NAME_MAX) return json(400, { error: `Team name must be 1–${TEAM_NAME_MAX} characters.` });
+        const logo = validateImageDataUrl(body.logo_data_url, "Logo");
+        if (logo && typeof logo === "object") return json(400, { error: logo.error });
+
+        const callerRole = await membershipRole(teamId, session.userId);
+        if (callerRole !== "owner" && callerRole !== "admin") return json(403, { error: "Only team owners/admins can edit the team." });
+
+        await dbUpdate("teams", `id=eq.${teamId}`, { name, logo_data_url: logo });
+        const rows = await dbSelect<TeamRow>("teams", `id=eq.${teamId}&limit=1`);
+        if (!rows[0]) return json(404, { error: "Team not found." });
+        return json(200, { team: rows[0] });
+      }
+
+      // Members/invites cascade-delete with the team row itself (see the FKs
+      // on team_members/team_invites in supabase/schema.sql) — nothing to
+      // clean up by hand there. Shared projects/tasks keep existing (their
+      // team_id just goes null, "on delete set null"), same as any other
+      // un-share. The audit row has to be written *before* the delete: its
+      // team_id column FKs to teams.id, and that reference must resolve at
+      // INSERT time — "on delete set null" only rewrites rows that already
+      // existed when the delete happened, it doesn't let a brand new row
+      // point at an id that's already gone.
+      case "delete": {
+        const teamId = String(body.team_id || "");
+        if (!UUID_RE.test(teamId)) return json(400, { error: "Invalid team id." });
+
+        const callerRole = await membershipRole(teamId, session.userId);
+        if (callerRole !== "owner") return json(403, { error: "Only the team owner can delete the team." });
+
+        const [team, members, actor] = await Promise.all([
+          dbSelect<TeamRow>("teams", `id=eq.${teamId}&limit=1`),
+          dbSelect<TeamMemberRow>("team_members", `team_id=eq.${teamId}`),
+          findUserById(session.userId),
+        ]);
+        if (!team[0]) return json(200, { ok: true });
+
+        await dbInsert("audit_log", {
+          user_id: session.userId, team_id: teamId, action: "team.delete",
+          entity_type: "team", entity_id: teamId, meta: { name: team[0].name },
+        });
+
+        await dbDelete("teams", `id=eq.${teamId}`);
+
+        // Best-effort — a failed notification fan-out must never undo an
+        // already-successful delete. Only teammates other than the caller
+        // get one; the person who just clicked "delete" doesn't need to be
+        // told their own team is gone.
+        const actorName = actor?.full_name || actor?.email || "The team owner";
+        const others = members.filter((m) => m.user_id !== session.userId);
+        void Promise.all(others.map((m) => dbInsert("notifications", {
+          user_id: m.user_id, kind: "team_deleted", title: "Team deleted",
+          body: `${actorName} deleted the "${team[0].name}" team.`, link: "/teams",
+        }))).catch((e) => console.error("[teams] delete notify failed:", e));
+
         return json(200, { ok: true });
       }
 

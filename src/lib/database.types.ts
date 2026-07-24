@@ -18,11 +18,11 @@ export interface Database {
   public: {
     Tables: {
       users: Table<
-        { id: string; email: string; full_name: string },
+        { id: string; email: string; full_name: string; avatar_data_url: string | null; phone: string | null; job_title: string | null },
         never // never inserted/updated via this client — see netlify/functions/auth.ts
       >;
       teams: Table<
-        { id: string; name: string; owner_id: string; created_at: string },
+        { id: string; name: string; owner_id: string; logo_data_url: string | null; created_at: string },
         never // writes go through netlify/functions/teams.ts
       >;
       team_members: Table<
@@ -42,7 +42,7 @@ export interface Database {
           id: string; user_id: string; team_id: string | null; name: string; client: string | null;
           stacks: string[]; status: "active" | "hold" | "archived"; accent: string | null;
           fe_path: string | null; sln_path: string | null; dev_port: number | null;
-          branch: string | null; description: string | null;
+          branch: string | null; description: string | null; notes: string | null;
           sprint_project_id: string | null; sprint_project_name: string | null;
           repo_provider: "github" | "gitlab" | "azuredevops" | null; repo_full_name: string | null;
           repo_id: string | null; repo_default_branch: string | null; created_at: string;
@@ -51,7 +51,7 @@ export interface Database {
           id?: string; user_id: string; team_id?: string | null; name: string; client?: string | null;
           stacks?: string[]; status?: "active" | "hold" | "archived"; accent?: string | null;
           fe_path?: string | null; sln_path?: string | null; dev_port?: number | null;
-          branch?: string | null; description?: string | null;
+          branch?: string | null; description?: string | null; notes?: string | null;
           sprint_project_id?: string | null; sprint_project_name?: string | null;
           repo_provider?: "github" | "gitlab" | "azuredevops" | null; repo_full_name?: string | null;
           repo_id?: string | null; repo_default_branch?: string | null; created_at?: string;
@@ -73,12 +73,12 @@ export interface Database {
         {
           id: string; user_id: string; project_id: string | null; zoho_id: string | null;
           title: string; body: string | null; priority: "low" | "med" | "high"; status: string;
-          synced_at: string | null; ai_note: string | null; created_at: string;
+          synced_at: string | null; ai_note: string | null; converted_task_id: string | null; created_at: string;
         },
         {
           id?: string; user_id: string; project_id?: string | null; zoho_id?: string | null;
           title: string; body?: string | null; priority?: "low" | "med" | "high"; status?: string;
-          synced_at?: string | null; ai_note?: string | null; created_at?: string;
+          synced_at?: string | null; ai_note?: string | null; converted_task_id?: string | null; created_at?: string;
         }
       >;
       events: Table<

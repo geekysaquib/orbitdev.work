@@ -10,7 +10,7 @@
  *                       already-synced task entities
  *   - Orbit Insights → src/lib/insights.ts's runInsights(), same InsightRow
  *                       component /intelligence renders
- *   - Ask Orbit      → the same AskOrbitPanel /intelligence embeds — the
+ *   - Quick Answers → the same AskOrbitPanel /intelligence embeds — the
  *                       real experience, not a link out
  *   - Recent activity → src/lib/audit.ts's fetchAuditLog(), as-is
  */
@@ -23,6 +23,7 @@ import { useKnowledgeBootstrap } from "../hooks/useKnowledgeBootstrap";
 import { runInsights, dismissInsight, undismissInsight, type Insight } from "../lib/insights";
 import { myOpenTasks, myOverdueTasks, sortByUrgency } from "../lib/myWork";
 import { fetchAuditLog, type AuditEntry } from "../lib/audit";
+import { activityMeta } from "../lib/activity";
 import { TIMER_EVENT, readTimer, stopTimer, type TimerState } from "../lib/timer";
 import type { AskOrbitTurn } from "../lib/askOrbit";
 import type { Entity } from "../engines/knowledge";
@@ -33,6 +34,9 @@ import { AskOrbitPanel } from "../components/AskOrbitPanel";
 
 const INSIGHTS_PREVIEW_COUNT = 4;
 const ACTIVITY_PREVIEW_COUNT = 5;
+// Critical first, then warning, then info — same ordering rule as /intelligence.
+const SEVERITY_RANK: Record<Insight["severity"], number> = { critical: 0, warning: 1, info: 2 };
+const bySeverity = (a: Insight, b: Insight) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity];
 
 function greeting(now: Date): string {
   const h = now.getHours();
@@ -83,12 +87,14 @@ function ActiveTimerCard({ projects, tasks }: { projects: Entity[]; tasks: Entit
   const taskLabel = timer.taskId ? tasks.find((t) => t.ref.id === timer.taskId)?.label ?? null : null;
 
   return (
-    <div className="card" style={{ padding: 16 }}>
-      <div className="ds" style={{ marginBottom: 8 }}>Active timer</div>
+    <div className="card" style={{ padding: 18, borderLeft: running ? "3px solid var(--mint)" : undefined }}>
+      <div className="lab" style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--muted)", fontSize: 12.5 }}>
+        <span style={{ color: running ? "var(--mint)" : "var(--dim)" }}><Icon name="timer" size={15} /></span>Active timer
+      </div>
       {running ? (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginTop: 8 }}>
           <div>
-            <div className="mono" style={{ fontSize: 24, fontWeight: 700 }}>{clock}</div>
+            <div className="mono" style={{ fontSize: 26, fontWeight: 700, letterSpacing: "-.5px" }}>{clock}</div>
             <div style={{ fontSize: 12, color: "var(--dim)", marginTop: 2 }}>
               {projectLabel ?? "No project"}{taskLabel ? ` · ${taskLabel}` : ""}
             </div>
@@ -98,7 +104,7 @@ function ActiveTimerCard({ projects, tasks }: { projects: Entity[]; tasks: Entit
           </button>
         </div>
       ) : (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 8 }}>
           <div style={{ fontSize: 13, color: "var(--dim)" }}>No timer running right now.</div>
           <button className="btn ghost sm" onClick={() => nav("/time")}>Start a timer<Icon name="chevR" size={11} /></button>
         </div>
@@ -109,12 +115,13 @@ function ActiveTimerCard({ projects, tasks }: { projects: Entity[]; tasks: Entit
 
 function TaskRow({ task, overdue }: { task: Entity; overdue: boolean }) {
   const due = task.attributes.dueDate as string | null | undefined;
+  const pc = prColor(String(task.attributes.priority ?? "low"));
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 0", borderTop: "1px solid var(--border)" }}>
-      <span style={{ width: 6, height: 6, borderRadius: "50%", background: prColor(String(task.attributes.priority ?? "low")), flexShrink: 0 }} />
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 4px", borderTop: "1px solid var(--border-soft)" }}>
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: pc, flexShrink: 0, boxShadow: `0 0 0 3px color-mix(in srgb, ${pc} 16%, transparent)` }} />
       <span style={{ fontSize: 13, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task.label}</span>
       {due && (
-        <span style={{ fontSize: 11, color: overdue ? "var(--red)" : "var(--dim)", flexShrink: 0 }}>
+        <span className="pill" style={{ height: 21, padding: "0 8px", fontSize: 10.5, flexShrink: 0, color: overdue ? "var(--red)" : "var(--dim)", borderColor: overdue ? "color-mix(in srgb, var(--red) 34%, transparent)" : "transparent", background: overdue ? "color-mix(in srgb, var(--red) 10%, transparent)" : "var(--raised)" }}>
           {overdue ? "Overdue" : new Date(due).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
         </span>
       )}
@@ -161,11 +168,11 @@ export default function AiMode() {
 
   const openTasks = user ? sortByUrgency(myOpenTasks(tasks, user.id)) : [];
   const overdueIds = new Set(user ? myOverdueTasks(tasks, user.id).map((t) => t.ref.id) : []);
-  const activeInsights = detected.filter((i) => !i.dismissed);
+  const activeInsights = detected.filter((i) => !i.dismissed).sort(bySeverity);
 
   return (
-    <div className="page">
-      <div className="page-head">
+    <main className="page">
+      <div>
         <h2 className="h1">{greet}</h2>
         <div className="greet-row">
           <span className="greet-chip"><Icon name="cal" size={14} />{dateStr}</span>
@@ -179,39 +186,38 @@ export default function AiMode() {
       </div>
 
       {!ready ? (
-        <OrbitLoader label="Building the knowledge graph…" />
+        <div className="page-loader"><OrbitLoader label="Building the knowledge graph…" /></div>
       ) : (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 10, marginTop: 4 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginTop: 20 }}>
             <ActiveTimerCard projects={projects} tasks={tasks} />
+            <Stat icon="layers" label="Open tasks" value={String(openTasks.length)} tone={overdueIds.size > 0 ? ACCENT.red : ACCENT.blue} sub={overdueIds.size > 0 ? `${overdueIds.size} overdue` : undefined} />
             <Stat icon="sparkles" label="Insights needing attention" value={String(activeInsights.length)} tone={activeInsights.some((i) => i.severity === "critical") ? ACCENT.red : activeInsights.length > 0 ? ACCENT.amber : ACCENT.mint} />
           </div>
 
-          <div className="card" style={{ marginTop: 12, padding: 16 }}>
+          <div className="card" style={{ marginTop: 20, padding: 18 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-              <div className="ds">My tasks</div>
+              <div className="eyebrow">My tasks</div>
               <button className="btn ghost sm" onClick={() => nav("/tasks")}>View all<Icon name="chevR" size={11} /></button>
             </div>
             {openTasks.length === 0 ? (
-              <div style={{ fontSize: 13, color: "var(--dim)", padding: "8px 0" }}>Nothing open — you're caught up.</div>
+              <Empty icon="checkc" title="Nothing open" sub="You're caught up." mini />
             ) : (
               openTasks.slice(0, 8).map((t) => <TaskRow key={t.ref.id} task={t} overdue={overdueIds.has(t.ref.id)} />)
             )}
           </div>
 
-          <div style={{ marginTop: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-              <div className="ds">Orbit Insights</div>
+          <div style={{ marginTop: 24 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+              <div className="eyebrow">Orbit Insights</div>
               <button className="btn ghost sm" onClick={() => nav("/intelligence")}>See all in Orbit Intelligence<Icon name="chevR" size={11} /></button>
             </div>
             {insightsLoading ? (
-              <OrbitLoader label="Scanning the knowledge graph…" size={22} />
+              <div className="page-loader" style={{ minHeight: 100 }}><OrbitLoader label="Scanning the knowledge graph…" size={22} /></div>
             ) : activeInsights.length === 0 ? (
-              <div className="card" style={{ padding: 14 }}>
-                <div style={{ fontSize: 13, color: "var(--dim)" }}>Nothing needs your attention right now — Orbit is watching.</div>
-              </div>
+              <Empty icon="checkc" title="All clear" sub="Nothing needs your attention right now — Orbit is watching." mini />
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {activeInsights.slice(0, INSIGHTS_PREVIEW_COUNT).map((insight) => (
                   <InsightRow
                     key={insight.id} insight={insight}
@@ -226,23 +232,26 @@ export default function AiMode() {
 
           <AskOrbitPanel knowledge={knowledge} projects={projects} tasks={tasks} turns={turns} onTurnsChange={setTurns} />
 
-          <div style={{ marginTop: 16 }}>
-            <div className="ds" style={{ marginBottom: 8 }}>Recent activity</div>
+          <div style={{ marginTop: 24 }}>
+            <div className="eyebrow" style={{ marginBottom: 10 }}>Recent activity</div>
             {activityLoading ? (
-              <OrbitLoader label="Loading recent activity…" size={22} />
+              <div className="page-loader" style={{ minHeight: 100 }}><OrbitLoader label="Loading recent activity…" size={22} /></div>
             ) : activity.length === 0 ? (
-              <div className="card" style={{ padding: 14 }}>
-                <div style={{ fontSize: 13, color: "var(--dim)" }}>Nothing logged yet.</div>
-              </div>
+              <Empty icon="activity" title="Nothing logged yet" mini />
             ) : (
-              <div className="card" style={{ padding: 14 }}>
-                {activity.map((a, i) => (
-                  <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: i === 0 ? "none" : "1px solid var(--border)" }}>
-                    <Icon name="activity" size={13} className="dim" />
-                    <span style={{ fontSize: 12.5, textTransform: "capitalize", flex: 1 }}>{actionLabel(a.action)}</span>
-                    <span style={{ fontSize: 11, color: "var(--dim)", flexShrink: 0 }}>{timeAgo(a.created_at)}</span>
-                  </div>
-                ))}
+              <div className="card" style={{ padding: 6 }}>
+                {activity.map((a, i) => {
+                  const m = activityMeta(a.action);
+                  return (
+                    <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 10px", borderTop: i === 0 ? "none" : "1px solid var(--border-soft)" }}>
+                      <span className="insight-badge" style={{ width: 26, height: 26, background: "color-mix(in srgb, " + m.color + " 14%, transparent)", color: m.color }}>
+                        <Icon name={m.icon} size={13} />
+                      </span>
+                      <span style={{ fontSize: 12.5, textTransform: "capitalize", flex: 1 }}>{actionLabel(a.action)}</span>
+                      <span className="mono" style={{ fontSize: 11, color: "var(--dim)", flexShrink: 0 }}>{timeAgo(a.created_at)}</span>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -254,6 +263,6 @@ export default function AiMode() {
           )}
         </>
       )}
-    </div>
+    </main>
   );
 }

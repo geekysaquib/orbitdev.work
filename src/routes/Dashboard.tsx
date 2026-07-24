@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useOutletContext } from "react-router-dom";
+import type { OrbitInsightsContext } from "../hooks/useOrbitInsights";
+import { InsightPreviewRow } from "../components/InsightPreviewRow";
 import { Icon } from "../lib/icons";
 import { Chip, Stat, Eyebrow, ACCENT, alpha, prColor, Empty, OrbitLoader } from "../components/ui";
 import { Select } from "../components/Select";
@@ -47,6 +49,10 @@ export default function Dashboard() {
   const { tz } = useTimezone();
   const { onBreak, timerPaused, breakStartedAt, startBreak, endBreak } = useBreak();
   const weather = useWeather();
+  // Top 3, severity-sorted (runInsights() already sorts) — a preview, not the
+  // full Intelligence experience. See src/hooks/useOrbitInsights.ts.
+  const { insights: topInsights } = useOutletContext<OrbitInsightsContext>();
+  const dashboardInsights = topInsights.slice(0, 3);
   const { rows: projects, loading: projectsLoading } = useTable<Project>("projects");
   const { rows: tickets } = useTable<Ticket>("tickets");
   const { rows: tasks } = useTable<Task>("tasks");
@@ -546,6 +552,21 @@ export default function Dashboard() {
             <button className="break-btn" onClick={startBreak} title="Take a break"><span className="bb-cup">☕</span>Take a break</button>
           </div>
         </div>
+
+        {dashboardInsights.length > 0 && (
+          <div className="card" style={{ padding: 14, marginBottom: 20 }}>
+            <div className="rowhead" style={{ marginBottom: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <span style={{ color: ACCENT.mint }}><Icon name="sparkles" size={13} /></span>
+                <Eyebrow>Orbit Intelligence</Eyebrow>
+              </div>
+              <button className="dash-more" onClick={() => nav("/intelligence")}>View all<Icon name="chevR" size={12} /></button>
+            </div>
+            <div className="insight-list">
+              {dashboardInsights.map((i) => <InsightPreviewRow key={i.id} insight={i} />)}
+            </div>
+          </div>
+        )}
 
         <div className="grid-stats" ref={gridRef}>
           {visibleTiles.map((id) => {

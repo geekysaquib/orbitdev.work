@@ -101,6 +101,20 @@ export async function askLocalAI(prompt: string, system?: string): Promise<{ ok:
   return localOnce(prompt, system, undefined);
 }
 
+/**
+ * One-shot connectivity check for a single cloud provider — deliberately
+ * bypasses the fallback chain in `ask()`/`askThread()`. When every configured
+ * provider fails, the chain's own error message leads with whichever backend
+ * failed *last* (usually the local model, e.g. "Python not found on PATH"),
+ * with earlier providers' real reasons folded into a parenthetical — easy to
+ * miss. This calls exactly one provider and returns exactly its own error, so
+ * "is my OpenAI key/quota actually the problem" has a direct answer. Used by
+ * Settings' per-provider "Test" button.
+ */
+export async function askCloudProvider(provider: CloudProvider, apiKey: string): Promise<AskResult> {
+  return cloudOnce(provider, apiKey, "Reply with only the word: ready.", undefined, undefined);
+}
+
 export interface LocalAiStatus { state: "idle" | "ready" | "error"; model?: string; device?: "gpu" | "cpu"; error?: string; }
 export async function localAiStatus(): Promise<LocalAiStatus> {
   try {

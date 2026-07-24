@@ -46,8 +46,8 @@ export async function listInvites(teamId: string): Promise<TeamInvite[]> {
 
 // ---------- writes (via the Netlify function) ----------
 
-export async function createTeam(name: string) {
-  return call<{ team: Team; role: TeamRole }>("create", { name });
+export async function createTeam(name: string, logoDataUrl?: string | null) {
+  return call<{ team: Team; role: TeamRole }>("create", { name, logo_data_url: logoDataUrl ?? null });
 }
 export async function inviteMember(teamId: string, email: string, role: Exclude<TeamRole, "owner"> = "member") {
   return call("invite", { team_id: teamId, email, role });
@@ -69,6 +69,12 @@ export async function transferOwnership(teamId: string, newOwnerUserId: string) 
 }
 export async function leaveTeam(teamId: string) {
   return call("leave", { team_id: teamId });
+}
+export async function updateTeam(teamId: string, name: string, logoDataUrl?: string | null) {
+  return call<{ team: Team }>("update", { team_id: teamId, name, logo_data_url: logoDataUrl ?? null });
+}
+export async function deleteTeam(teamId: string) {
+  return call("delete", { team_id: teamId });
 }
 export async function acceptInvite(token: string) {
   return call<{ team_id: string; team_name: string }>("accept-invite", { token });

@@ -6,7 +6,7 @@ import { Chip, ACCENT, Empty, OrbitLoader } from "../components/ui";
 import { useTable } from "../hooks/useTable";
 import { useToast } from "../context/Toast";
 import { useAgent } from "../context/Agent";
-import { launch, gitPull, gitStatus, gitBranches, gitLog, gitDiff, type GitStatusResult, type GitBranch, type GitCommit } from "../lib/agent";
+import { launch, gitPull, gitStatus, gitBranches, gitLog, gitDiff, runInProject, type GitStatusResult, type GitBranch, type GitCommit } from "../lib/agent";
 import { openProjectWorkspace } from "../lib/vscode";
 import { fetchIntegrations, providerKeys } from "../lib/integrations";
 import { generateCommitMessage, generatePrDescription } from "../lib/gitWriter";
@@ -44,6 +44,7 @@ export default function ProjectDetail() {
   const { rows, loading, update, remove } = useTable<Project>("projects");
   const { rows: tasks } = useTable<Task>("tasks");
   const { events } = useOrbitRuntime();
+  const [testing, setTesting] = useState(false);
   // Fire-and-forget, same principle as recordAudit() next to each call below —
   // a failed publish must never block a project mutation. `teamId` rides on
   // the envelope (not just payload) so domain_events' existing team-member
@@ -59,6 +60,29 @@ export default function ProjectDetail() {
   const p = rows.find((x) => x.id === id);
   const myId = getUser()?.id;
   const myRoleByTeam = useMyTeamRoles();
+
+  // Buffered, explicit-save — same interaction pattern EditProjectModal's
+  // "About" field already uses, not silent autosave. Resynced on `p.id`
+  // change (not `p.notes`) so switching projects can't leave one project's
+  // unsaved draft sitting in the box, but typing here doesn't get clobbered
+  // by the row updating in place after save.
+  const [notesDraft, setNotesDraft] = useState("");
+  const [savingNotes, setSavingNotes] = useState(false);
+  useEffect(() => { setNotesDraft(p?.notes ?? ""); }, [p?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function saveNotes() {
+    if (!p) return;
+    setSavingNotes(true);
+    const { error } = await update(p.id, { notes: notesDraft || null } as Partial<Project>);
+    setSavingNotes(false);
+    if (error) { toast(`Couldn't save notes: ${error}`); return; }
+    recordAudit({ action: "project.update", entityType: "project", entityId: p.id, teamId: p.team_id, meta: { notes_change: true } });
+    publishProjectEvent("updated", p.team_id, {
+      projectId: p.id, name: p.name, status: p.status, client: p.client,
+      repoProvider: p.repo_provider, repoFullName: p.repo_full_name, repoDefaultBranch: p.repo_default_branch,
+    });
+    toast("Notes saved");
+  }
 
   useEffect(() => { fetchSprintProjects().then((r) => { if (r.ok) setSprintProjects(r.data); }); }, []);
   useEffect(() => { listMyTeams().then(setTeams); }, []);
@@ -194,7 +218,8 @@ export default function ProjectDetail() {
   const mine = tasks.filter((t) => t.project_id === p.id);
   const owned = p.user_id === myId;
   const canEdit = owned || (!!p.team_id && ["owner", "admin"].includes(myRoleByTeam[p.team_id]));
-  const teamName = p.team_id ? teams.find((t) => t.id === p.team_id)?.name : undefined;
+  const teamObj = p.team_id ? teams.find((t) => t.id === p.team_id) : undefined;
+  const teamName = teamObj?.name;
 
   async function share(teamId: string) {
     const { error } = await update(p!.id, { team_id: teamId || null } as Partial<Project>);
@@ -242,6 +267,21 @@ export default function ProjectDetail() {
     const r = await gitPull(path);
     toast(r.ok ? (r.reason === "up_to_date" ? "Already up to date" : `Pulled${r.files ? ` ${r.files} file${r.files === 1 ? "" : "s"}` : ""}`) : r.error || "Pull failed");
     loadLocalGit();
+  }
+
+  /**
+   * Same "assume npm at fe_path" convention `npmAudit`/`npmOutdated` already
+   * use (BreakView.tsx) — the same `runInProject` primitive ProjectTerminal's
+   * Terminal tab already runs commands through, just invoked here for the
+   * Quick Actions shortcut. Real stdout/exit code, not a canned toast.
+   */
+  async function doRunTests() {
+    if (!p!.fe_path) { toast("No frontend path set — add one to run tests"); return; }
+    setTesting(true);
+    const r = await runInProject(p!.fe_path, "npm test");
+    setTesting(false);
+    if (!r.ok) { toast(r.error || "Couldn't reach the local agent"); return; }
+    toast(r.code === 0 ? "Tests passed" : `Tests failed (exit ${r.code})${r.stderr ? ` — ${r.stderr.slice(0, 120)}` : ""}`);
   }
 
   async function doLinkRepo(patch: RepoLinkPatch) {
@@ -346,17 +386,25 @@ export default function ProjectDetail() {
                     </>
                   ) : (
                     <p style={{ fontSize: 12.5, color: "var(--dim)", marginTop: 10, display: "flex", alignItems: "center", gap: 7 }}>
-                      <Icon name="users" size={14} />Shared by its owner with {teamName} — you can view it, edits are theirs to make.
+                      <Icon name="users" size={14} />Shared by its owner with {teamObj?.logo_data_url && <img className="team-logo" src={teamObj.logo_data_url} alt="" />}{teamName} — you can view it, edits are theirs to make.
                     </p>
                   )}
                 </div>
               )}
               <div className="card" style={{ padding: 20, marginTop: 18 }}>
               <div className="eyebrow">Quick actions</div>
-              {["Pull latest", "Run tests", "Docker compose up", "Deploy to Netlify"].map((a) => (
-                <button key={a} className="btn ghost" style={{ width: "100%", justifyContent: "flex-start", marginTop: 8 }}
-                  onClick={() => toast(`${a} · ${p.name}`)}><Icon name="bolt" size={14} />{a}</button>
-              ))}
+              <button className="btn ghost" style={{ width: "100%", justifyContent: "flex-start", marginTop: 8 }}
+                disabled={agentDown || !(p.fe_path || p.sln_path)} onClick={doPull}><Icon name="bolt" size={14} />Pull latest</button>
+              <button className="btn ghost" style={{ width: "100%", justifyContent: "flex-start", marginTop: 8 }}
+                disabled={agentDown || testing || !p.fe_path} onClick={doRunTests}>
+                {testing ? <Icon name="loader" size={14} className="spin" /> : <Icon name="bolt" size={14} />}Run tests
+              </button>
+              <button className="btn ghost" style={{ width: "100%", justifyContent: "flex-start", marginTop: 8 }}
+                disabled title="Not wired up yet — set up Docker Compose for this project on the Docker page">
+                <Icon name="bolt" size={14} />Docker compose up</button>
+              <button className="btn ghost" style={{ width: "100%", justifyContent: "flex-start", marginTop: 8 }}
+                disabled title="Netlify deploys aren't wired up yet">
+                <Icon name="bolt" size={14} />Deploy to Netlify</button>
               </div>
             </div>
           </div>
@@ -545,7 +593,16 @@ export default function ProjectDetail() {
         {tab === "environment" && <div className="card" style={{ padding: 20 }}><div className="eyebrow">Environment</div>
           <p style={{ marginTop: 10, color: "var(--muted)", fontSize: 13 }}>Env vars & containers are managed by the local agent and stored encrypted per project.</p></div>}
         {tab === "notes" && <div className="card" style={{ padding: 20 }}><div className="eyebrow">Notes</div>
-          <textarea placeholder="Project notes…" style={{ width: "100%", marginTop: 12, minHeight: 160, padding: 12, borderRadius: 11, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 13.5, resize: "vertical" }} /></div>}
+          <textarea
+            value={notesDraft} onChange={(e) => setNotesDraft(e.target.value)}
+            placeholder="Project notes…"
+            style={{ width: "100%", marginTop: 12, minHeight: 160, padding: 12, borderRadius: 11, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 13.5, resize: "vertical" }} />
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
+            <button className="btn accent sm" disabled={savingNotes || notesDraft === (p.notes ?? "")} onClick={saveNotes}>
+              {savingNotes ? <Icon name="loader" size={13} className="spin" /> : <Icon name="check" size={13} />}Save
+            </button>
+          </div>
+        </div>}
       </div>
       {edit && <EditProjectModal p={p} onClose={() => setEdit(false)}
         onSave={async (patch) => {
