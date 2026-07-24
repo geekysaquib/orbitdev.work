@@ -225,3 +225,36 @@ Tracks RC1 of the closed-beta Release Plan (see the Beta Readiness Review and Re
 **Risk**: Low. Purely additive observability — every wrapped call's success/failure/error/return-value propagation is byte-for-byte the same as before, verified by `withMailLog`'s own tests (returns the value, rethrows the error) and the fact that the actual `sendMail`/`mail-scheduled-send`/`agent` business logic files themselves are otherwise untouched.
 
 **Deferred**: `getMailMetrics()`'s counters are currently read only by its own tests — no health-check endpoint surfaces them yet (out of scope; "capture metrics" was satisfied via the counters + structured logs, a dedicated read path is a new, separate feature). The agent's local `[mail]` logs are genuinely not centrally visible to operators (a distinct, harder problem — shipping logs off a user's own machine — not attempted here). Whether/how to actually consume the structured logs at scale (a Netlify log drain to a real log aggregator) is an RC2+ operational decision, not a code task.
+
+## 9. Backup & PITR verification
+
+**Scope**: audit current backup/recovery assumptions, produce a production-ready verification runbook covering PITR availability, backup cadence, restore procedure, recovery validation, and rollback expectations. Operational hardening only — no feature work, no schema changes, no code.
+
+**Delivered**: `docs/architecture/backup-recovery.md` — a standing runbook (not tied to one deployment event, unlike `migration-rollout.md`; meant to be re-run periodically per its own §7).
+
+**What's verifiable from the codebase** (no live access needed, and no code changes required to establish these — all already true from prior RC1 work):
+- The schema is fully reproducible from source control (`supabase/schema.sql`/`migrations.sql`) independent of any backup — only *data* is actually at risk in a total-loss scenario, not structure.
+- `schema_migrations` (task 4) gives a durable version marker, directly useful for a fast pre/post-restore sanity check.
+- `audit_log`/`domain_events` are both append-only with **no retention/pruning implemented yet** (confirmed — `event-engine.md` lists that as unimplemented future work) — meaning both are currently reliable, unbounded secondary timelines to cross-check a restore's landing point against.
+- Migrations are idempotent by established convention, so re-running `migrations.sql` post-restore is always safe and is the correct way to bring a restored database (which only reflects state *up to* its target timestamp) back to fully current.
+- **One genuine, app-specific restore side effect found**: this app's custom-auth JWT revocation compares token issue time against `users.password_changed_at` — a restore that rolls a user's row back to before a password reset/lockout event un-revokes any session token issued in the erased window and undoes the lockout. Not generic Postgres knowledge; specific to how `_lib/verifyToken.ts` works, and worth remembering when validating any restore spanning a security event.
+- Confirmed this is unrelated to (and shouldn't be confused with) the existing Postgres-explorer "Backup" feature (`Postgres.tsx`/`agent/server.mjs`'s `/pg/backup*`) — that's a `pg_dump` export tool for *externally connected* user databases, not ORBIT's own Supabase project.
+
+**What genuinely requires live Supabase dashboard/account access** (cannot be asserted from this codebase, and is not guessed at in the doc):
+- **The single highest-priority open finding**: whether the production Supabase project's plan tier even includes PITR at all — Supabase's Free tier has none. This needs checking before anything else in the runbook is meaningful, and is flagged prominently as a possible hard blocker, not buried.
+- The actual configured retention window, backup cadence (continuous PITR vs discrete daily snapshots — these imply very different realistic RPOs), and the exact restore mechanism/UI for this specific project's plan (self-serve dashboard vs support-ticket-initiated has varied by Supabase plan tier over time, so the doc asks to confirm current behavior rather than asserting one).
+- Whether a PITR restore is in-place (same connection URL/keys) or produces a new project needing a `.env`/Netlify env cutover — explicitly called out as something that needs confirming *in advance*, not discovered mid-incident.
+
+**Recommendation made, not yet executed**: a real restore drill against a disposable/staging-tier project before GA — "documenting a restore procedure sight-unseen risks the runbook being wrong exactly when it matters" (quoted from the doc itself). This agent cannot perform this — no live Supabase access, consistent with every other RC1 task touching live infrastructure.
+
+**Files changed**:
+- `docs/architecture/backup-recovery.md` (new) — the full runbook: audit (§1), PITR availability checklist (§2), backup cadence checklist (§3), restore procedure (§4), recovery validation steps (§5), rollback expectations including RPO/RTO framing and "PITR is all-or-nothing, not surgical, unlike the app/schema rollback tiers already documented" (§6), recommended re-verification cadence (§7).
+- `docs/architecture/migration-rollout.md` — one-line cross-reference added to its existing "backup/PITR available" precondition bullet, pointing at the new runbook instead of leaving it as an unexplained checkbox.
+
+**Verification**: docs-only change, no `src/`/`netlify/functions/` files touched — `tsc -b`/`vitest run`/`npm run build` run as confirmation-that-nothing-broke rather than tests of new logic; all three clean.
+
+**Risk**: None from this commit — it's documentation, and it doesn't assert anything about production's actual backup state that could create false confidence (every concrete fact requiring live access is explicitly marked unconfirmed, not guessed at).
+
+**Rollback**: `git revert` — no schema, code, or data touched.
+
+**Deferred**: actually confirming §2/§3's live-access items and filling in real numbers (plan tier, retention window, RPO/RTO) — the user's step, no live Supabase access from this agent. Executing the recommended restore drill (§4) before GA. Branch protection — paired with backup/PITR in the original Beta Readiness Review's task numbering, but not part of this turn's explicit instructions, so treated as out of scope here rather than assumed; worth a separate, explicit RC1/RC2 task if still needed. Revisiting §5's cross-check step if `audit_log`/`domain_events` ever gain a retention policy (already flagged as a dependency in the doc itself).
