@@ -4,6 +4,7 @@ import {
   type Creds, type Cfg, buildCfg, accessToken, getJson, unfurl, pick, truthy,
   mapLimit, resolveTeam, listProjects, loadMaps, itemNotes, mapItem, sprintItems, listSprints,
 } from "./_lib/zohoAuth";
+import { rateLimit } from "./_lib/rateLimit";
 
 /**
  * Zoho SPRINTS proxy. Credentials are read strictly from the caller's own row
@@ -39,6 +40,9 @@ const ok = (data: unknown) => ({ statusCode: 200, headers: { "Content-Type": "ap
 export const handler: Handler = async (event) => {
   const session = await verifySession(event.headers.authorization || event.headers.Authorization);
   if (!session) return { statusCode: 401, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: "Sign in required." }) };
+
+  const rl = rateLimit(`zoho-sprints:${session.userId}`, 60, 60_000);
+  if (!rl.allowed) return { statusCode: 429, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: `Too many requests — try again in ${rl.retryAfterSec}s.` }) };
 
   try {
     const c: Cfg = buildCfg(await loadCreds(event));

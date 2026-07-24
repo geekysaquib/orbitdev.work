@@ -1,6 +1,7 @@
 import type { Handler, HandlerEvent } from "@netlify/functions";
 import { verifySession } from "./_lib/verifyToken";
 import { loadConnection } from "./_lib/providerConnections";
+import { rateLimit } from "./_lib/rateLimit";
 
 /**
  * Sentry API proxy. No OAuth here — Sentry's own recommended path for
@@ -27,6 +28,9 @@ async function sentry(org: string, path: string, token: string): Promise<{ ok: b
 export const handler: Handler = async (event: HandlerEvent) => {
   const session = await verifySession(event.headers.authorization || event.headers.Authorization);
   if (!session) return json(401, { error: "Sign in to ORBIT first." });
+
+  const rl = rateLimit(`sentry-api:${session.userId}`, 60, 60_000);
+  if (!rl.allowed) return json(429, { error: `Too many requests — try again in ${rl.retryAfterSec}s.` });
 
   const conn = await loadConnection(event, "sentry");
   const org = String((conn?.config as { org_slug?: string })?.org_slug || "");

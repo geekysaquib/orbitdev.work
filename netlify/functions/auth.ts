@@ -6,6 +6,7 @@ import { issueOtp, verifyOtp } from "./_lib/otp";
 import { sendMail } from "./_lib/mailer";
 import { verifyEmail, resetEmail, loginAlertEmail } from "./_lib/email-templates";
 import { clientIp, lookupGeo, parseUserAgent } from "./_lib/geo";
+import { rateLimit } from "./_lib/rateLimit";
 
 /**
  * ORBIT's own auth — no Supabase Auth involved. Signup/login/verification/
@@ -86,6 +87,14 @@ export const handler: Handler = async (event) => {
   const action = event.queryStringParameters?.action || "";
   let body: Record<string, unknown>;
   try { body = JSON.parse(event.body || "{}"); } catch { return json(400, { error: "Invalid request body." }); }
+
+  // Per-email throttling already exists for every action below (OTP cooldown/
+  // daily cap in _lib/otp.ts, login lockout via failed_login_attempts) — that
+  // protects any one account, but nothing stops a single source sweeping
+  // across many different emails, since each has its own independent
+  // counter.
+  const rl = rateLimit(`auth:${clientIp(event.headers as Record<string, string | undefined>)}`, 30, 300_000);
+  if (!rl.allowed) return json(429, { error: `Too many requests — try again in ${rl.retryAfterSec}s.` });
 
   const email = String(body.email || "").trim().toLowerCase();
 

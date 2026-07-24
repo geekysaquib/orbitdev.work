@@ -1,6 +1,7 @@
 import type { Handler, HandlerEvent } from "@netlify/functions";
 import { verifySession } from "./_lib/verifyToken";
 import { loadConnection, type ProviderConnectionRow } from "./_lib/providerConnections";
+import { rateLimit } from "./_lib/rateLimit";
 
 /**
  * Microsoft Graph proxy for the Teams meeting integration. Mirrors
@@ -62,6 +63,9 @@ async function ensureFreshToken(event: HandlerEvent, conn: ProviderConnectionRow
 export const handler: Handler = async (event: HandlerEvent) => {
   const session = await verifySession(event.headers.authorization || event.headers.Authorization);
   if (!session) return json(401, { error: "Sign in to ORBIT first." });
+
+  const rl = rateLimit(`msteams-api:${session.userId}`, 60, 60_000);
+  if (!rl.allowed) return json(429, { error: `Too many requests — try again in ${rl.retryAfterSec}s.` });
 
   const conn = await loadConnection(event, "msteams");
   const mode = event.queryStringParameters?.mode || "status";

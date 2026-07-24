@@ -1,5 +1,6 @@
 import type { Handler } from "@netlify/functions";
 import { verifySession } from "./_lib/verifyToken";
+import { rateLimit } from "./_lib/rateLimit";
 
 /**
  * Does the "grant code -> access token" exchange for a user's own GitLab
@@ -17,6 +18,9 @@ export const handler: Handler = async (event) => {
   if (event.httpMethod !== "POST") return json(405, { error: "POST only" });
   const session = await verifySession(event.headers.authorization || event.headers.Authorization);
   if (!session) return json(401, { error: "Sign in to ORBIT first." });
+
+  const rl = rateLimit(`gitlab-exchange:${session.userId}`, 5, 300_000);
+  if (!rl.allowed) return json(429, { error: `Too many attempts — try again in ${rl.retryAfterSec}s.` });
 
   let body: { clientId?: string; clientSecret?: string; code?: string; redirectUri?: string; baseUrl?: string };
   try { body = JSON.parse(event.body || "{}"); } catch { return json(400, { error: "Bad request body" }); }

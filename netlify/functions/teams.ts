@@ -5,6 +5,7 @@ import { sendMail } from "./_lib/mailer";
 import { teamInviteEmail } from "./_lib/email-templates";
 import { verifySession } from "./_lib/verifyToken";
 import { serverEventEngine } from "./_lib/serverEvents";
+import { rateLimit } from "./_lib/rateLimit";
 
 /**
  * Fire-and-forget, same principle as every other event-publish call in this
@@ -155,6 +156,12 @@ export const handler: Handler = async (event) => {
 
         const callerRole = await membershipRole(teamId, session.userId);
         if (callerRole !== "owner" && callerRole !== "admin") return json(403, { error: "Only team owners/admins can invite." });
+
+        // The cooldown below (RESEND_COOLDOWN_SEC) only throttles re-inviting
+        // the SAME email — nothing capped how many DIFFERENT addresses one
+        // inviter could send to, i.e. the actual sendMail()-as-spam surface.
+        const inviteRl = rateLimit(`teams-invite:${session.userId}`, 20, 3_600_000);
+        if (!inviteRl.allowed) return json(429, { error: `Too many invites sent — try again in ${Math.ceil(inviteRl.retryAfterSec / 60)} minute(s).` });
 
         const existingUser = await findUserByEmail(email);
         if (existingUser && (await membershipRole(teamId, existingUser.id))) {

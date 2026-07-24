@@ -3,6 +3,7 @@ import { verifySession } from "./_lib/verifyToken";
 import { credentialManager } from "./_lib/credentialManager";
 import { serverEventEngine } from "./_lib/serverEvents";
 import { createDefaultRegistry, isScmAdapter, type IntegrationContext } from "../../src/engines/integrations";
+import { rateLimit } from "./_lib/rateLimit";
 
 /**
  * Azure DevOps REST API proxy. Unlike GitHub/GitLab, the credential here is a
@@ -31,6 +32,9 @@ const adapter = registry.getCapable("azuredevops", isScmAdapter)!;
 export const handler: Handler = async (event: HandlerEvent) => {
   const session = await verifySession(event.headers.authorization || event.headers.Authorization);
   if (!session) return json(401, { error: "Sign in to ORBIT first." });
+
+  const rl = rateLimit(`azuredevops-api:${session.userId}`, 60, 60_000);
+  if (!rl.allowed) return json(429, { error: `Too many requests — try again in ${rl.retryAfterSec}s.` });
 
   const authHeader = event.headers.authorization || event.headers.Authorization || null;
   const ctx = await credentialManager.getContext("azuredevops", { kind: "request", authHeader });

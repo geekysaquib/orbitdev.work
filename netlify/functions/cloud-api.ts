@@ -3,6 +3,7 @@ import { CostExplorerClient, GetCostAndUsageCommand } from "@aws-sdk/client-cost
 import { STSClient, GetCallerIdentityCommand } from "@aws-sdk/client-sts";
 import { verifySession } from "./_lib/verifyToken";
 import { loadConnection } from "./_lib/providerConnections";
+import { rateLimit } from "./_lib/rateLimit";
 
 /**
  * One proxy for all three cloud connectors (Netlify, Vercel, AWS) — routing
@@ -34,6 +35,9 @@ async function vercelApi(path: string, token: string) {
 export const handler: Handler = async (event: HandlerEvent) => {
   const session = await verifySession(event.headers.authorization || event.headers.Authorization);
   if (!session) return json(401, { error: "Sign in to ORBIT first." });
+
+  const rl = rateLimit(`cloud-api:${session.userId}`, 60, 60_000);
+  if (!rl.allowed) return json(429, { error: `Too many requests — try again in ${rl.retryAfterSec}s.` });
 
   const provider = event.queryStringParameters?.provider || "";
   const mode = event.queryStringParameters?.mode || "status";
@@ -78,6 +82,12 @@ export const handler: Handler = async (event: HandlerEvent) => {
     }
     if (!cfg.access_key_id || !cfg.secret_access_key) return json(400, { error: "AWS isn't connected — connect it in Settings first." });
     if (mode === "cost") {
+      // AWS Cost Explorer bills ~$0.01 per API call (unlike every other mode
+      // here, which is free) — a tighter, separate limit than the general
+      // one above so a loop against this specific path can't run up a real
+      // bill even within the general limit's allowance.
+      const costRl = rateLimit(`cloud-api-cost:${session.userId}`, 5, 300_000);
+      if (!costRl.allowed) return json(429, { error: `Too many cost lookups — try again in ${costRl.retryAfterSec}s.` });
       const ce = new CostExplorerClient({ region: "us-east-1", credentials: { accessKeyId: cfg.access_key_id, secretAccessKey: cfg.secret_access_key } });
       const end = new Date();
       const start = new Date(end.getFullYear(), end.getMonth(), 1);

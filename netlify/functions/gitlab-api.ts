@@ -3,6 +3,7 @@ import { verifySession } from "./_lib/verifyToken";
 import { credentialManager, accountNameOf } from "./_lib/credentialManager";
 import { serverEventEngine } from "./_lib/serverEvents";
 import { createDefaultRegistry, isScmAdapter } from "../../src/engines/integrations";
+import { rateLimit } from "./_lib/rateLimit";
 
 /**
  * GitLab REST API proxy (v4). Mirrors github-api.ts's shape and trust model —
@@ -27,6 +28,9 @@ const adapter = registry.getCapable("gitlab", isScmAdapter)!;
 export const handler: Handler = async (event: HandlerEvent) => {
   const session = await verifySession(event.headers.authorization || event.headers.Authorization);
   if (!session) return json(401, { error: "Sign in to ORBIT first." });
+
+  const rl = rateLimit(`gitlab-api:${session.userId}`, 60, 60_000);
+  if (!rl.allowed) return json(429, { error: `Too many requests — try again in ${rl.retryAfterSec}s.` });
 
   const authHeader = event.headers.authorization || event.headers.Authorization || null;
   const ctx = await credentialManager.getContext("gitlab", { kind: "request", authHeader });
